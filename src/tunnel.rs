@@ -86,3 +86,181 @@ pub async fn run_real_tunnel_worker(
     }
 }
 
+
+
+
+
+
+
+// ============================================================================
+// ENGINE 1: PAYLOAD INJECTOR + TLS SNI + RUSSH + LOCAL SOCKS5 SERVER
+// ============================================================================
+
+async fn run_ssh_payload_engine(
+    log_tx: &mpsc::UnboundedSender<LogEntry>,
+    cfg: &TunnelConfig,
+    use_tls_sni: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // 1. Connect to Proxy / CDN IP (or directly to SSH host if proxy is empty)
+    let target_tcp = if cfg.proxy_addr.trim().is_empty() || cfg.proxy_addr.starts_with(':') {
+        format!("{}:{}", cfg.ssh_host, cfg.ssh_port)
+    } else {
+        cfg.proxy_addr.clone()
+    };
+
+    send_log(log_tx, "Injector", format!("Connecting TCP to {}...", target_tcp), LogLevel::Info).await;
+    let mut stream = TcpStream::connect(&target_tcp).await?;
+
+    // 2. Inject Custom HTTP Payload if provided
+    if !cfg.payload_template.trim().is_empty() {
+        let ssh_target = format!("{}:{}", cfg.ssh_host, cfg.ssh_port);
+        let formatted_payload = cfg
+            .payload_template
+            .replace("[host_port]", &ssh_target)
+            .replace("[host]", &cfg.bug_host)
+            .replace("[sni]", &cfg.sni_host)
+            .replace("[crlf]", "\r\n")
+            .replace("[protocol]", "HTTP/1.1");
+
+        send_log(
+            log_tx,
+            "Injector",
+            format!("Sending Payload (Bug Host: {})...", cfg.bug_host),
+            LogLevel::Info,
+        )
+        .await;
+
+        for (i, part) in formatted_payload.split("[split]").enumerate() {
+            if i > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            }
+            stream.write_all(part.as_bytes()).await?;
+            stream.flush().await?;
+        }
+
+        // Read HTTP proxy / CDN status response
+        let mut buf = [0u8; 1024];
+        let n = stream.read(&mut buf).await?;
+        let response = String::from_utf8_lossy(&buf[..n]);
+        let status_line = response.lines().next().unwrap_or("Empty response");
+
+        send_log(log_tx, "Injector", format!("Server replied: {}", status_line), LogLevel::Success).await;
+    }
+
+    // 3. Hand stream over to russh (Plain TCP or TLS-wrapped with custom SNI)
+    let ssh_config = Arc::new(client::Config::default());
+    send_log(log_tx, "SSH", "Starting SSH handshake...", LogLevel::Info).await;
+
+    let mut ssh_session = if use_tls_sni {
+        send_log(
+            log_tx,
+            "SSL/SNI",
+            format!("Wrapping stream in TLS with SNI: {}", cfg.sni_host),
+            LogLevel::Info,
+        )
+        .await;
+
+        let mut root_store = rustls::RootCertStore::empty();
+        // In production, load webpki-roots or a custom insecure verifier for self-signed VPS certs
+        let tls_cfg = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+
+        let connector = TlsConnector::from(Arc::new(tls_cfg));
+        let domain = ServerName::try_from(cfg.sni_host.clone())?;
+        let tls_stream = connector.connect(domain, stream).await?;
+
+        client::connect_stream(ssh_config, tls_stream, SshClientHandler).await?
+    } else {
+        client::connect_stream(ssh_config, stream, SshClientHandler).await?
+    };
+
+    // 4. Authenticate SSH User/Pass
+    let auth_ok = ssh_session
+        .authenticate_password(&cfg.ssh_user, &cfg.ssh_pass)
+        .await?;
+
+    if !auth_ok {
+        return Err("SSH Password Authentication failed!".into());
+    }
+    send_log(log_tx, "SSH", "SSH Authenticated successfully!", LogLevel::Success).await;
+
+    let shared_ssh = Arc::new(ssh_session);
+
+    // 5. Start Local SOCKS5 Listener
+    let socks_bind = format!("127.0.0.1:{}", cfg.local_socks_port);
+    let listener = TcpListener::bind(&socks_bind).await?;
+    send_log(
+        log_tx,
+        "SOCKS5",
+        format!("Listening on {} -> Tunneling via SSH", socks_bind),
+        LogLevel::Success,
+    )
+    .await;
+
+    loop {
+        let (client_socket, _) = listener.accept().await?;
+        let ssh_handle = Arc::clone(&shared_ssh);
+        let log_tx_clone = log_tx.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = handle_socks5_client(client_socket, ssh_handle).await {
+                let _ = send_log(&log_tx_clone, "SOCKS5", format!("Stream closed: {}", e), LogLevel::Warn).await;
+            }
+        });
+    }
+}
+
+/// Minimal RFC 1928 SOCKS5 server that pipes each request into a russh `direct-tcpip` channel
+async fn handle_socks5_client(
+    mut sock: TcpStream,
+    ssh: Arc<client::Handle<SshClientHandler>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut buf = [0u8; 512];
+
+    // 1. Greeting: Client sends [VER=0x05, NMETHODS, METHODS...]
+    sock.read_exact(&mut buf[..2]).await?;
+    let nmethods = buf[1] as usize;
+    sock.read_exact(&mut buf[..nmethods]).await?;
+    // Reply: [VER=0x05, METHOD=0x00 (No Auth)]
+    sock.write_all(&[0x05, 0x00]).await?;
+
+    // 2. Request Header: [VER=0x05, CMD=0x01 (CONNECT), RSV=0x00, ATYP]
+    sock.read_exact(&mut buf[..4]).await?;
+    if buf[1] != 0x01 {
+        return Err("Only SOCKS5 CONNECT is supported".into());
+    }
+
+    let target_host = match buf[3] {
+        0x01 => {
+            // IPv4
+            sock.read_exact(&mut buf[..4]).await?;
+            format!("{}.{}.{}.{}", buf[0], buf[1], buf[2], buf[3])
+        }
+        0x03 => {
+            // Domain Name
+            sock.read_exact(&mut buf[..1]).await?;
+            let len = buf[0] as usize;
+            sock.read_exact(&mut buf[..len]).await?;
+            String::from_utf8_lossy(&buf[..len]).to_string()
+        }
+        _ => return Err("Unsupported address type".into()),
+    };
+
+    sock.read_exact(&mut buf[..2]).await?;
+    let target_port = u16::from_be_bytes([buf[0], buf[1]]) as u32;
+
+    // 3. Open SSH `direct-tcpip` channel to destination
+    let channel = ssh
+        .channel_open_direct_tcpip(&target_host, target_port, "127.0.0.1", 10808)
+        .await?;
+
+    // 4. Reply SOCKS5 Success
+    sock.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
+
+    // 5. Bi-directional zero-copy relay between local app and SSH channel
+    let mut ssh_stream = channel.into_stream();
+    tokio::io::copy_bidirectional(&mut sock, &mut ssh_stream).await?;
+
+    Ok(())
+}
