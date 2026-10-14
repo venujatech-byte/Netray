@@ -264,3 +264,44 @@ async fn handle_socks5_client(
 
     Ok(())
 }
+
+
+
+
+
+// ============================================================================
+// ENGINE 2: XRAY / V2RAY CORE SUPERVISOR
+// ============================================================================
+
+async fn run_xray_engine(
+    log_tx: &mpsc::UnboundedSender<LogEntry>,
+    cfg: &TunnelConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let config_path = "/tmp/netmod_xray_config.json";
+    tokio::fs::write(config_path, &cfg.v2ray_config).await?;
+
+    send_log(log_tx, "Xray", "Spawning xray-core process...", LogLevel::Info).await;
+
+    let mut child = Command::new("xray")
+        .arg("run")
+        .arg("-c")
+        .arg(config_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true) // Critical: kills xray immediately when tokio::select! cancels
+        .spawn()?;
+
+    if let Some(stdout) = child.stdout.take() {
+        let mut reader = BufReader::new(stdout).lines();
+        let tx = log_tx.clone();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = reader.next_line().await {
+                send_log(&tx, "Xray", line, LogLevel::Info).await;
+            }
+        });
+    }
+
+    let status = child.wait().await?;
+    send_log(log_tx, "Xray", format!("Xray exited with: {}", status), LogLevel::Warn).await;
+    Ok(())
+}
