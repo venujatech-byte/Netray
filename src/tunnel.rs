@@ -40,3 +40,49 @@ impl client::Handler for SshClientHandler {
         Ok(true)
     }
 }
+
+
+
+
+
+// ============================================================================
+// MASTER WORKER ENTRY POINT
+// ============================================================================
+
+pub async fn run_real_tunnel_worker(
+    log_tx: mpsc::UnboundedSender<LogEntry>,
+    mut stop_rx: tokio::sync::oneshot::Receiver<()>,
+    cfg: TunnelConfig,
+) {
+    send_log(
+        &log_tx,
+        "Supervisor",
+        format!("Starting engine in [{}] mode...", cfg.mode),
+        LogLevel::Info,
+    )
+    .await;
+
+    let engine_task = async {
+        let result = match cfg.mode {
+            TunnelMode::SshPayload => run_ssh_payload_engine(&log_tx, &cfg, false).await,
+            TunnelMode::SshSslSni => run_ssh_payload_engine(&log_tx, &cfg, true).await,
+            TunnelMode::V2RayXray => run_xray_engine(&log_tx, &cfg).await,
+            TunnelMode::SlowDns => {
+                Err("SlowDNS binary wrapper not yet configured.".into())
+            }
+        };
+
+        if let Err(e) = result {
+            send_log(&log_tx, "Error", format!("Engine failed: {}", e), LogLevel::Error).await;
+        }
+    };
+
+    // Wait for either the engine to exit OR the user to click STOP TUNNEL
+    tokio::select! {
+        _ = engine_task => {}
+        _ = &mut stop_rx => {
+            send_log(&log_tx, "Supervisor", "Tunnel stopped. All sockets and child processes closed.", LogLevel::Warn).await;
+        }
+    }
+}
+
