@@ -1,3 +1,5 @@
+mod tunnel;
+use tunnel::{run_real_tunnel_worker, TunnelConfig};
 use chrono::Local;
 use iced::futures::SinkExt;
 use iced::widget::{
