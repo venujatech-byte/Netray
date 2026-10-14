@@ -273,16 +273,24 @@ impl NetModApp {
                     self.stop_signal = Some(stop_tx);
 
                     if let Some(log_tx) = self.log_sender.clone() {
-                        let mode = self.tunnel_mode;
-                        let proxy = format!("{}:{}", self.proxy_ip, self.proxy_port);
-                        let ssh_target = format!("{}:{}", self.ssh_host, self.ssh_port);
-                        let bug = self.bug_host.clone();
-                        let socks = self.local_socks_port.clone();
+    let cfg = TunnelConfig {
+        mode: self.tunnel_mode,
+        proxy_addr: format!("{}:{}", self.proxy_ip, self.proxy_port),
+        ssh_host: self.ssh_host.clone(),
+        ssh_port: self.ssh_port.parse().unwrap_or(22),
+        ssh_user: self.ssh_user.clone(),
+        ssh_pass: self.ssh_pass.clone(),
+        bug_host: self.bug_host.clone(),
+        sni_host: self.sni_host.clone(),
+        payload_template: self.payload_text.clone(),
+        local_socks_port: self.local_socks_port.parse().unwrap_or(10808),
+        v2ray_config: self.v2ray_uri_or_json.clone(),
+    };
 
-                        tokio::spawn(async move {
-                            run_tunnel_worker(log_tx, stop_rx, mode, proxy, ssh_target, bug, socks).await;
-                        });
-                    }
+    tokio::spawn(async move {
+        run_real_tunnel_worker(log_tx, stop_rx, cfg).await;
+    });
+}
                     Task::none()
                 }
             }
