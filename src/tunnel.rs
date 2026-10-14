@@ -10,3 +10,33 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_rustls::{rustls, TlsConnector};
+
+#[derive(Clone)]
+pub struct TunnelConfig {
+    pub mode: TunnelMode,
+    pub proxy_addr: String,
+    pub ssh_host: String,
+    pub ssh_port: u16,
+    pub ssh_user: String,
+    pub ssh_pass: String,
+    pub bug_host: String,
+    pub sni_host: String,
+    pub payload_template: String,
+    pub local_socks_port: u16,
+    pub v2ray_config: String,
+}
+
+// Minimal russh client handler (accepts server host keys like Netray)
+struct SshClientHandler;
+
+#[async_trait]
+impl client::Handler for SshClientHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        _server_public_key: &key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+}
