@@ -1,0 +1,674 @@
+use base64::prelude::*;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use url::Url;
+
+/// Locate the xray or v2ray binary on the local system
+pub fn find_xray_binary() -> Result<PathBuf, String> {
+    // 1. Check standard environment PATH via `which`
+    if let Ok(path) = which::which("xray").or_else(|_| which::which("v2ray")) {
+        return Ok(path);
+    }
+
+    // 2. Check well-known fixed installation paths
+    let candidates = [
+        "/usr/local/bin/xray",
+        "/usr/bin/xray",
+        "/bin/xray",
+        "/opt/xray/xray",
+        "/usr/local/bin/v2ray",
+        "/usr/bin/v2ray",
+        "/bin/v2ray",
+        "/opt/v2ray/v2ray",
+    ];
+
+    for candidate in &candidates {
+        let p = Path::new(candidate);
+        if p.is_file() {
+            return Ok(p.to_path_buf());
+        }
+    }
+
+    Err(
+        "Neither 'xray' nor 'v2ray' core binary was found on your system.\n\
+         Please install Xray (e.g., bash -c \"$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\") \
+         or place the binary in /usr/local/bin/xray."
+            .to_string(),
+    )
+}
+
+/// Fallback helper to search PATH without external crate
+mod which {
+    use std::path::PathBuf;
+
+    pub fn which(binary_name: &str) -> Result<PathBuf, ()> {
+        if let Some(paths) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&paths) {
+                let candidate = dir.join(binary_name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
+            }
+        }
+        Err(())
+    }
+}
+
+/// Converts raw user configuration (vless://, vmess://, trojan://, ss://, or JSON)
+/// into a full, valid Xray JSON configuration.
+pub fn parse_and_generate_xray_config(
+    raw_input: &str,
+    socks_port: u16,
+    http_port: u16,
+) -> Result<String, String> {
+    let trimmed = raw_input.trim();
+    if trimmed.is_empty() {
+        return Err("Configuration is empty. Paste a vless://, vmess://, trojan:// URI or Xray JSON.".to_string());
+    }
+
+    // Case 1: Raw JSON configuration
+    if trimmed.starts_with('{') {
+        return handle_json_config(trimmed, socks_port, http_port);
+    }
+
+    // Case 2: Protocol URIs
+    let outbound = if trimmed.starts_with("vless://") {
+        parse_vless_uri(trimmed)?
+    } else if trimmed.starts_with("vmess://") {
+        parse_vmess_uri(trimmed)?
+    } else if trimmed.starts_with("trojan://") {
+        parse_trojan_uri(trimmed)?
+    } else if trimmed.starts_with("ss://") {
+        parse_shadowsocks_uri(trimmed)?
+    } else {
+        return Err(format!(
+            "Unsupported configuration scheme: '{}'. Expected vless://, vmess://, trojan://, ss:// or JSON.",
+            trimmed.chars().take(20).collect::<String>()
+        ));
+    };
+
+    let full_config = assemble_xray_config(outbound, socks_port, http_port);
+    serde_json::to_string_pretty(&full_config).map_err(|e| format!("Failed to serialize Xray config: {}", e))
+}
+
+/// Assemble full Xray configuration containing inbounds (SOCKS5 & HTTP), outbounds, and logging
+fn assemble_xray_config(primary_outbound: Value, socks_port: u16, http_port: u16) -> Value {
+    json!({
+        "log": {
+            "loglevel": "info"
+        },
+        "inbounds": [
+            {
+                "tag": "socks-in",
+                "port": socks_port,
+                "listen": "127.0.0.1",
+                "protocol": "socks",
+                "sniffing": {
+                    "enabled": true,
+                    "destOverride": ["http", "tls"]
+                },
+                "settings": {
+                    "auth": "noauth",
+                    "udp": true
+                }
+            },
+            {
+                "tag": "http-in",
+                "port": http_port,
+                "listen": "127.0.0.1",
+                "protocol": "http",
+                "sniffing": {
+                    "enabled": true,
+                    "destOverride": ["http", "tls"]
+                }
+            }
+        ],
+        "outbounds": [
+            primary_outbound,
+            {
+                "tag": "direct",
+                "protocol": "freedom"
+            },
+            {
+                "tag": "blocked",
+                "protocol": "blackhole"
+            }
+        ]
+    })
+}
+
+/// Handle raw JSON configurations (preserving inbounds if present, or wrapping in full config)
+fn handle_json_config(raw_json: &str, socks_port: u16, http_port: u16) -> Result<String, String> {
+    let mut parsed: Value = serde_json::from_str(raw_json)
+        .map_err(|e| format!("Invalid JSON config: {}", e))?;
+
+    // If it already has inbounds and outbounds, ensure loglevel is present
+    if parsed.get("inbounds").is_some() && parsed.get("outbounds").is_some() {
+        if parsed.get("log").is_none() {
+            parsed["log"] = json!({ "loglevel": "info" });
+        }
+        return serde_json::to_string_pretty(&parsed)
+            .map_err(|e| format!("Serialization error: {}", e));
+    }
+
+    // If it has outbounds but no inbounds, add standard inbounds
+    if let Some(outbounds) = parsed.get("outbounds") {
+        let mut full = assemble_xray_config(json!({}), socks_port, http_port);
+        full["outbounds"] = outbounds.clone();
+        return serde_json::to_string_pretty(&full)
+            .map_err(|e| format!("Serialization error: {}", e));
+    }
+
+    // If it's a single outbound object (has "protocol")
+    if parsed.get("protocol").is_some() {
+        let full = assemble_xray_config(parsed, socks_port, http_port);
+        return serde_json::to_string_pretty(&full)
+            .map_err(|e| format!("Serialization error: {}", e));
+    }
+
+    Err("JSON config must include 'outbounds' array or represent an outbound object.".to_string())
+}
+
+/// Parse VLESS URI: vless://uuid@host:port?param1=val1...#remark
+fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
+    let url = Url::parse(uri_str).map_err(|e| format!("Invalid VLESS URI: {}", e))?;
+
+    let uuid = url.username();
+    if uuid.is_empty() {
+        return Err("VLESS URI missing UUID".to_string());
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| "VLESS URI missing server host".to_string())?;
+    let port = url.port().unwrap_or(443);
+
+    let query: HashMap<String, String> = url.query_pairs().into_owned().collect();
+
+    let encryption = query.get("encryption").map(|s| s.as_str()).unwrap_or("none");
+    let flow = query.get("flow").cloned().unwrap_or_default();
+    let network = query.get("type").or_else(|| query.get("net")).map(|s| s.as_str()).unwrap_or("tcp");
+    let security = query.get("security").map(|s| s.as_str()).unwrap_or("none");
+    let sni = query
+        .get("sni")
+        .or_else(|| query.get("peer"))
+        .cloned()
+        .unwrap_or_else(|| host.to_string());
+    let path = query.get("path").cloned().unwrap_or_else(|| "/".to_string());
+    let header_host = query.get("host").cloned().unwrap_or_else(|| sni.clone());
+    let service_name = query.get("serviceName").cloned().unwrap_or_default();
+    let fp = query.get("fp").cloned().unwrap_or_else(|| "chrome".to_string());
+    let pbk = query.get("pbk").cloned().unwrap_or_default();
+    let sid = query.get("sid").cloned().unwrap_or_default();
+
+    let mut user_obj = json!({
+        "id": uuid,
+        "encryption": encryption,
+    });
+    if !flow.is_empty() {
+        user_obj["flow"] = json!(flow);
+    }
+
+    let stream_settings = build_stream_settings(
+        network,
+        security,
+        &sni,
+        &header_host,
+        &path,
+        &service_name,
+        &fp,
+        &pbk,
+        &sid,
+    )?;
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "vless",
+        "settings": {
+            "vnext": [
+                {
+                    "address": host,
+                    "port": port,
+                    "users": [user_obj]
+                }
+            ]
+        },
+        "streamSettings": stream_settings
+    }))
+}
+
+/// Parse VMess URI: vmess://BASE64
+fn parse_vmess_uri(uri_str: &str) -> Result<Value, String> {
+    let b64 = uri_str.trim_start_matches("vmess://").trim();
+
+    // Decode standard or URL-safe base64, with or without padding
+    let decoded_bytes = BASE64_STANDARD
+        .decode(b64)
+        .or_else(|_| BASE64_STANDARD_NO_PAD.decode(b64))
+        .or_else(|_| BASE64_URL_SAFE.decode(b64))
+        .or_else(|_| BASE64_URL_SAFE_NO_PAD.decode(b64))
+        .map_err(|e| format!("Failed to base64-decode vmess payload: {}", e))?;
+
+    let json_val: Value = serde_json::from_slice(&decoded_bytes)
+        .map_err(|e| format!("Invalid JSON in vmess payload: {}", e))?;
+
+    let host = json_val
+        .get("add")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "VMess config missing 'add' (server host)".to_string())?;
+
+    let port: u16 = match json_val.get("port") {
+        Some(Value::Number(n)) => n.as_u64().unwrap_or(443) as u16,
+        Some(Value::String(s)) => s.parse::<u16>().unwrap_or(443),
+        _ => 443,
+    };
+
+    let uuid = json_val
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "VMess config missing 'id' (UUID)".to_string())?;
+
+    let aid: u32 = match json_val.get("aid") {
+        Some(Value::Number(n)) => n.as_u64().unwrap_or(0) as u32,
+        Some(Value::String(s)) => s.parse::<u32>().unwrap_or(0),
+        _ => 0,
+    };
+
+    let scy = json_val
+        .get("scy")
+        .and_then(|v| v.as_str())
+        .unwrap_or("auto");
+
+    let network = json_val
+        .get("net")
+        .and_then(|v| v.as_str())
+        .unwrap_or("tcp");
+
+    let tls = json_val
+        .get("tls")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let security = if tls == "tls" { "tls" } else { "none" };
+
+    let sni = json_val
+        .get("sni")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let host_header = json_val
+        .get("host")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let effective_sni = if !sni.is_empty() {
+        sni
+    } else if !host_header.is_empty() {
+        host_header
+    } else {
+        host
+    };
+
+    let path = json_val
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("/");
+
+    let stream_settings = build_stream_settings(
+        network,
+        security,
+        effective_sni,
+        host_header,
+        path,
+        "",
+        "chrome",
+        "",
+        "",
+    )?;
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "vmess",
+        "settings": {
+            "vnext": [
+                {
+                    "address": host,
+                    "port": port,
+                    "users": [
+                        {
+                            "id": uuid,
+                            "alterId": aid,
+                            "security": scy
+                        }
+                    ]
+                }
+            ]
+        },
+        "streamSettings": stream_settings
+    }))
+}
+
+/// Parse Trojan URI: trojan://password@host:port?param1=val1...#remark
+fn parse_trojan_uri(uri_str: &str) -> Result<Value, String> {
+    let url = Url::parse(uri_str).map_err(|e| format!("Invalid Trojan URI: {}", e))?;
+
+    let password = url.username();
+    if password.is_empty() {
+        return Err("Trojan URI missing password".to_string());
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| "Trojan URI missing server host".to_string())?;
+    let port = url.port().unwrap_or(443);
+
+    let query: HashMap<String, String> = url.query_pairs().into_owned().collect();
+
+    let network = query.get("type").or_else(|| query.get("net")).map(|s| s.as_str()).unwrap_or("tcp");
+    let security = query.get("security").map(|s| s.as_str()).unwrap_or("tls");
+    let sni = query
+        .get("sni")
+        .or_else(|| query.get("peer"))
+        .cloned()
+        .unwrap_or_else(|| host.to_string());
+    let path = query.get("path").cloned().unwrap_or_else(|| "/".to_string());
+    let header_host = query.get("host").cloned().unwrap_or_else(|| sni.clone());
+    let service_name = query.get("serviceName").cloned().unwrap_or_default();
+    let fp = query.get("fp").cloned().unwrap_or_else(|| "chrome".to_string());
+
+    let stream_settings = build_stream_settings(
+        network,
+        security,
+        &sni,
+        &header_host,
+        &path,
+        &service_name,
+        &fp,
+        "",
+        "",
+    )?;
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "trojan",
+        "settings": {
+            "servers": [
+                {
+                    "address": host,
+                    "port": port,
+                    "password": password
+                }
+            ]
+        },
+        "streamSettings": stream_settings
+    }))
+}
+
+/// Parse Shadowsocks URI: ss://base64@host:port or ss://base64
+fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
+    let stripped = uri_str.trim_start_matches("ss://");
+    let (body, _) = stripped.split_once('#').unwrap_or((stripped, ""));
+
+    let (method, password, host, port) = if let Some((user_info, host_port)) = body.split_once('@') {
+        let (h, p_str) = host_port.split_once(':').ok_or("SS URI missing port")?;
+        let p = p_str.parse::<u16>().map_err(|_| "Invalid SS port")?;
+
+        let decoded_user = if let Ok(bytes) = BASE64_STANDARD.decode(user_info)
+            .or_else(|_| BASE64_URL_SAFE.decode(user_info))
+            .or_else(|_| BASE64_STANDARD_NO_PAD.decode(user_info))
+        {
+            String::from_utf8_lossy(&bytes).to_string()
+        } else {
+            user_info.to_string()
+        };
+
+        let (m, pass) = decoded_user.split_once(':').ok_or("SS URI missing method:password")?;
+        (m.to_string(), pass.to_string(), h.to_string(), p)
+    } else {
+        // Entire body might be base64
+        let decoded = BASE64_STANDARD.decode(body)
+            .or_else(|_| BASE64_URL_SAFE.decode(body))
+            .map_err(|e| format!("Invalid base64 in SS URI: {}", e))?;
+        let decoded_str = String::from_utf8_lossy(&decoded).to_string();
+        let (method_pass, host_port) = decoded_str.split_once('@').ok_or("Invalid decoded SS format")?;
+        let (m, pass) = method_pass.split_once(':').ok_or("Missing method:password")?;
+        let (h, p_str) = host_port.split_once(':').ok_or("Missing host:port")?;
+        let p = p_str.parse::<u16>().map_err(|_| "Invalid port")?;
+        (m.to_string(), pass.to_string(), h.to_string(), p)
+    };
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "shadowsocks",
+        "settings": {
+            "servers": [
+                {
+                    "address": host,
+                    "port": port,
+                    "method": method,
+                    "password": password
+                }
+            ]
+        }
+    }))
+}
+
+/// Helper to build streamSettings JSON for transports (ws, tcp, grpc, h2) and security (tls, reality, none)
+fn build_stream_settings(
+    network: &str,
+    security: &str,
+    sni: &str,
+    host_header: &str,
+    path: &str,
+    service_name: &str,
+    fp: &str,
+    pbk: &str,
+    sid: &str,
+) -> Result<Value, String> {
+    let mut settings = json!({
+        "network": network,
+    });
+
+    match network {
+        "ws" => {
+            let mut ws_obj = json!({
+                "path": path,
+            });
+            if !host_header.is_empty() {
+                ws_obj["headers"] = json!({ "Host": host_header });
+            }
+            settings["wsSettings"] = ws_obj;
+        }
+        "grpc" => {
+            let mut grpc_obj = json!({
+                "multiMode": false
+            });
+            if !service_name.is_empty() {
+                grpc_obj["serviceName"] = json!(service_name);
+            }
+            settings["grpcSettings"] = grpc_obj;
+        }
+        "h2" | "http" => {
+            let mut h2_obj = json!({
+                "path": path,
+            });
+            if !host_header.is_empty() {
+                h2_obj["host"] = json!([host_header]);
+            }
+            settings["httpSettings"] = h2_obj;
+        }
+        "tcp" => {
+            if !host_header.is_empty() {
+                settings["tcpSettings"] = json!({
+                    "header": {
+                        "type": "http",
+                        "request": {
+                            "headers": {
+                                "Host": [host_header]
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        _ => {}
+    }
+
+    if security == "tls" {
+        settings["security"] = json!("tls");
+        let mut tls_settings = json!({
+            "allowInsecure": false,
+            "fingerprint": fp,
+        });
+        if !sni.is_empty() {
+            tls_settings["serverName"] = json!(sni);
+        }
+        settings["tlsSettings"] = tls_settings;
+    } else if security == "reality" {
+        settings["security"] = json!("reality");
+        let mut reality_settings = json!({
+            "fingerprint": fp,
+            "publicKey": pbk,
+            "shortId": sid,
+        });
+        if !sni.is_empty() {
+            reality_settings["serverName"] = json!(sni);
+        }
+        settings["realitySettings"] = reality_settings;
+    } else {
+        settings["security"] = json!("none");
+    }
+
+    Ok(settings)
+}
+
+/// Validate configuration using `xray run -test -c <file>`
+pub async fn test_xray_config(xray_bin: &Path, config_json: &str) -> Result<(), String> {
+    let temp_test_file = format!("/tmp/netray_xray_test_{}.json", std::process::id());
+    tokio::fs::write(&temp_test_file, config_json)
+        .await
+        .map_err(|e| format!("Failed to write test config: {}", e))?;
+
+    let output = tokio::process::Command::new(xray_bin)
+        .arg("run")
+        .arg("-test")
+        .arg("-c")
+        .arg(&temp_test_file)
+        .output()
+        .await;
+
+    let _ = tokio::fs::remove_file(&temp_test_file).await;
+
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                Ok(())
+            } else {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let combined = format!("{}\n{}", stdout, stderr);
+                let error_lines: Vec<&str> = combined
+                    .lines()
+                    .filter(|l| l.contains("failed") || l.contains("error") || l.contains("Error"))
+                    .collect();
+                if error_lines.is_empty() {
+                    Err(combined.trim().to_string())
+                } else {
+                    Err(error_lines.join("\n"))
+                }
+            }
+        }
+        Err(e) => Err(format!("Failed to execute Xray test: {}", e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_binary() {
+        let bin = find_xray_binary();
+        assert!(bin.is_ok(), "Should locate xray or v2ray on system: {:?}", bin);
+        assert!(bin.unwrap().exists());
+    }
+
+    #[tokio::test]
+    async fn test_vless_generation() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#Sample-Node";
+        let config = parse_and_generate_xray_config(uri, 10808, 10809).expect("Should parse VLESS");
+        
+        let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
+        assert_eq!(json_val["inbounds"][0]["port"], 10808);
+        assert_eq!(json_val["inbounds"][1]["port"], 10809);
+        assert_eq!(json_val["outbounds"][0]["protocol"], "vless");
+
+        if let Ok(bin) = find_xray_binary() {
+            let res = test_xray_config(&bin, &config).await;
+            assert!(res.is_ok(), "Xray test validation failed: {:?}", res);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vmess_generation() {
+        let vmess_raw = json!({
+            "v": "2",
+            "ps": "test-vmess",
+            "add": "example.com",
+            "port": 443,
+            "id": "b831381d-6324-4d53-ad4f-8cda48b30811",
+            "aid": 0,
+            "scy": "auto",
+            "net": "ws",
+            "type": "none",
+            "host": "example.com",
+            "path": "/ws",
+            "tls": "tls",
+            "sni": "example.com"
+        });
+        let b64 = BASE64_STANDARD.encode(serde_json::to_string(&vmess_raw).unwrap());
+        let uri = format!("vmess://{}", b64);
+
+        let config = parse_and_generate_xray_config(&uri, 10808, 10809).expect("Should parse VMess");
+        let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
+        assert_eq!(json_val["outbounds"][0]["protocol"], "vmess");
+
+        if let Ok(bin) = find_xray_binary() {
+            let res = test_xray_config(&bin, &config).await;
+            assert!(res.is_ok(), "Xray test validation failed for vmess: {:?}", res);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_trojan_generation() {
+        let uri = "trojan://secretpassword@example.com:443?security=tls&sni=example.com&type=tcp#Trojan-Node";
+        let config = parse_and_generate_xray_config(uri, 10808, 10809).expect("Should parse Trojan");
+
+        let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
+        assert_eq!(json_val["outbounds"][0]["protocol"], "trojan");
+
+        if let Ok(bin) = find_xray_binary() {
+            let res = test_xray_config(&bin, &config).await;
+            assert!(res.is_ok(), "Xray test validation failed for trojan: {:?}", res);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_raw_json_handling() {
+        let raw = r#"{
+            "outbounds": [
+                {
+                    "tag": "proxy",
+                    "protocol": "freedom"
+                }
+            ]
+        }"#;
+        let config = parse_and_generate_xray_config(raw, 10808, 10809).expect("Should handle raw JSON");
+        let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
+        assert_eq!(json_val["inbounds"][0]["port"], 10808);
+
+        if let Ok(bin) = find_xray_binary() {
+            let res = test_xray_config(&bin, &config).await;
+            assert!(res.is_ok(), "Xray test validation failed for raw json: {:?}", res);
+        }
+    }
+}
+
