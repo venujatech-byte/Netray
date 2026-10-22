@@ -1,4 +1,5 @@
 mod tunnel;
+pub mod sysproxy;
 pub mod v2ray;
 use tunnel::{run_real_tunnel_worker, TunnelConfig};
 use chrono::Local;
@@ -94,6 +95,10 @@ pub struct NetrayApp {
     // V2Ray State
     pub v2ray_uri_or_json: String,
 
+    // TUN & System Routing Mode
+    pub enable_tun: bool,
+    pub enable_sysproxy: bool,
+
     // Real-time Logs & Background Worker Control
     pub logs: Vec<LogEntry>,
     pub log_sender: Option<mpsc::UnboundedSender<LogEntry>>,
@@ -131,6 +136,10 @@ pub enum Message {
     LocalSocksPortChanged(String),
     ValidateV2RayConfig,
     LoadSampleV2Ray,
+    RequestClipboardImport,
+    ClipboardImported(Option<String>),
+    ToggleTunMode(bool),
+    ToggleSysProxy(bool),
 
     // Real-time Logger Events
     LoggerReady(mpsc::UnboundedSender<LogEntry>),
@@ -161,8 +170,10 @@ impl NetrayApp {
             proxy_port: "80".to_string(),
             local_socks_port: "10808".to_string(),
 
-            v2ray_uri_or_json: "vless://uuid@server:443?security=tls&sni=bug.com#LinuxNode"
+            v2ray_uri_or_json: "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#Sample-Node"
                 .to_string(),
+            enable_tun: true,
+            enable_sysproxy: true,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
@@ -248,7 +259,7 @@ impl NetrayApp {
             Message::ValidateV2RayConfig => {
                 let socks_p: u16 = self.local_socks_port.parse().unwrap_or(10808);
                 let http_p = socks_p.saturating_add(1);
-                match crate::v2ray::parse_and_generate_xray_config(&self.v2ray_uri_or_json, socks_p, http_p) {
+                match crate::v2ray::parse_and_generate_xray_config(&self.v2ray_uri_or_json, socks_p, http_p, self.enable_tun) {
                     Ok(json_cfg) => {
                         match crate::v2ray::find_xray_binary() {
                             Ok(bin) => {
@@ -281,6 +292,63 @@ impl NetrayApp {
                         Task::none()
                     }
                 }
+            }
+
+            Message::RequestClipboardImport => {
+                iced::clipboard::read().map(Message::ClipboardImported)
+            }
+
+            Message::ClipboardImported(content) => {
+                if let Some(text) = content {
+                    let trimmed = text.trim();
+                    if trimmed.starts_with("vless://")
+                        || trimmed.starts_with("vmess://")
+                        || trimmed.starts_with("trojan://")
+                        || trimmed.starts_with("ss://")
+                        || trimmed.starts_with('{')
+                    {
+                        self.v2ray_uri_or_json = trimmed.to_string();
+                        self.tunnel_mode = TunnelMode::V2RayXray;
+                        self.active_tab = ActiveTab::V2RayConfig;
+                        self.push_log(
+                            "Clipboard",
+                            format!(
+                                "Imported V2Ray config ({} chars) from clipboard. Switched mode to V2Ray/Xray.",
+                                trimmed.len()
+                            ),
+                            LogLevel::Success,
+                        );
+                    } else {
+                        self.push_log(
+                            "Clipboard",
+                            "Clipboard does not contain a valid V2Ray link (vless://, vmess://, trojan://, ss://, or JSON).",
+                            LogLevel::Warn,
+                        );
+                    }
+                } else {
+                    self.push_log("Clipboard", "Clipboard is empty or inaccessible.", LogLevel::Warn);
+                }
+                Task::none()
+            }
+
+            Message::ToggleTunMode(v) => {
+                self.enable_tun = v;
+                self.push_log(
+                    "Config",
+                    if v { "TUN Mode enabled (virtual network interface)." } else { "TUN Mode disabled." },
+                    LogLevel::Info,
+                );
+                Task::none()
+            }
+
+            Message::ToggleSysProxy(v) => {
+                self.enable_sysproxy = v;
+                self.push_log(
+                    "Config",
+                    if v { "GNOME System Proxy enabled." } else { "GNOME System Proxy disabled." },
+                    LogLevel::Info,
+                );
+                Task::none()
             }
 
             Message::LoggerReady(sender) => {
@@ -339,6 +407,8 @@ impl NetrayApp {
         payload_template: self.payload_text.clone(),
         local_socks_port: self.local_socks_port.parse().unwrap_or(10808),
         v2ray_config: self.v2ray_uri_or_json.clone(),
+        enable_tun: self.enable_tun,
+        enable_sysproxy: self.enable_sysproxy,
     };
 
     tokio::spawn(async move {
@@ -407,7 +477,7 @@ impl NetrayApp {
             text(if self.is_running { "● CONNECTED" } else { "● DISCONNECTED" })
                 .color(status_color)
                 .size(13),
-            Space::with_height(15),
+            Space::with_height(10),
             pick_list(
                 [
                     TunnelMode::SshPayload,
@@ -419,7 +489,22 @@ impl NetrayApp {
                 Message::TunnelModeChanged
             )
             .width(Length::Fill),
-            Space::with_height(15),
+            Space::with_height(5),
+            button(
+                container(text("📋 Paste Clipboard").size(13))
+                    .width(Length::Fill)
+                    .align_x(Alignment::Center)
+            )
+            .on_press(Message::RequestClipboardImport)
+            .width(Length::Fill),
+            Space::with_height(8),
+            checkbox("TUN Mode", self.enable_tun)
+                .on_toggle(Message::ToggleTunMode)
+                .size(13),
+            checkbox("System Proxy", self.enable_sysproxy)
+                .on_toggle(Message::ToggleSysProxy)
+                .size(13),
+            Space::with_height(10),
             button(text("Payload / SNI").width(Length::Fill))
                 .on_press(Message::TabSelected(ActiveTab::PayloadSni))
                 .width(Length::Fill),
@@ -442,7 +527,7 @@ impl NetrayApp {
             .on_press(Message::ToggleTunnel)
             .width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(8)
         .padding(16)
         .width(220)
         .into()
@@ -539,12 +624,20 @@ impl NetrayApp {
             .unwrap_or(10808)
             .saturating_add(1);
 
+        let node_name = crate::v2ray::extract_node_name(&self.v2ray_uri_or_json);
+
         column![
             text("V2Ray / Xray Configuration").size(20),
-            text("Directly connects through Xray/V2Ray core. Paste any vless://, vmess://, trojan://, ss:// URI or raw JSON.")
+            text("Directly connects through Xray/V2Ray core with TUN Mode and System Proxy support.")
                 .size(13)
                 .color(Color::from_rgb(0.7, 0.7, 0.7)),
-            Space::with_height(10),
+            Space::with_height(5),
+            row![
+                text(format!("Active Node: {}", node_name))
+                    .size(14)
+                    .color(Color::from_rgb(0.35, 0.85, 0.95)),
+            ],
+            Space::with_height(5),
             text("Configuration URI / Raw Xray JSON:"),
             text_input("vless://... or vmess://... or Xray JSON", &self.v2ray_uri_or_json)
                 .on_input(Message::V2RayConfigChanged)
@@ -568,10 +661,22 @@ impl NetrayApp {
             ]
             .spacing(20)
             .align_y(Alignment::Center),
+            Space::with_height(10),
+            text("Routing Modes:").size(15),
+            row![
+                checkbox("TUN Mode (Virtual Network Interface / VPN)", self.enable_tun)
+                    .on_toggle(Message::ToggleTunMode)
+                    .size(14),
+                checkbox("GNOME System Proxy (Direct App & Browser Routing)", self.enable_sysproxy)
+                    .on_toggle(Message::ToggleSysProxy)
+                    .size(14),
+            ]
+            .spacing(25),
             Space::with_height(15),
             row![
+                button("📋 Import from Clipboard").on_press(Message::RequestClipboardImport),
                 button("✓ Validate Configuration").on_press(Message::ValidateV2RayConfig),
-                button("Load Sample VLESS Node").on_press(Message::LoadSampleV2Ray),
+                button("Load Sample Node").on_press(Message::LoadSampleV2Ray),
             ]
             .spacing(15),
         ]
