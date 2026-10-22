@@ -61,6 +61,7 @@ pub fn parse_and_generate_xray_config(
     raw_input: &str,
     socks_port: u16,
     http_port: u16,
+    enable_tun: bool,
 ) -> Result<String, String> {
     let trimmed = raw_input.trim();
     if trimmed.is_empty() {
@@ -69,7 +70,7 @@ pub fn parse_and_generate_xray_config(
 
     // Case 1: Raw JSON configuration
     if trimmed.starts_with('{') {
-        return handle_json_config(trimmed, socks_port, http_port);
+        return handle_json_config(trimmed, socks_port, http_port, enable_tun);
     }
 
     // Case 2: Protocol URIs
@@ -88,42 +89,99 @@ pub fn parse_and_generate_xray_config(
         ));
     };
 
-    let full_config = assemble_xray_config(outbound, socks_port, http_port);
+    let full_config = assemble_xray_config(outbound, socks_port, http_port, enable_tun);
     serde_json::to_string_pretty(&full_config).map_err(|e| format!("Failed to serialize Xray config: {}", e))
 }
 
-/// Assemble full Xray configuration containing inbounds (SOCKS5 & HTTP), outbounds, and logging
-fn assemble_xray_config(primary_outbound: Value, socks_port: u16, http_port: u16) -> Value {
+/// Extract human-readable node name or remark from link
+pub fn extract_node_name(raw_input: &str) -> String {
+    let trimmed = raw_input.trim();
+    if let Some((_, frag)) = trimmed.split_once('#') {
+        if let Ok(decoded) = percent_encoding::percent_decode_str(frag).decode_utf8() {
+            let res = decoded.trim();
+            if !res.is_empty() {
+                return res.to_string();
+            }
+        }
+    }
+
+    if trimmed.starts_with("vmess://") {
+        let b64 = trimmed.trim_start_matches("vmess://").trim();
+        if let Ok(bytes) = BASE64_STANDARD
+            .decode(b64)
+            .or_else(|_| BASE64_URL_SAFE.decode(b64))
+        {
+            if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
+                if let Some(ps) = v.get("ps").and_then(|p| p.as_str()) {
+                    if !ps.is_empty() {
+                        return ps.to_string();
+                    }
+                }
+                if let Some(add) = v.get("add").and_then(|p| p.as_str()) {
+                    return add.to_string();
+                }
+            }
+        }
+    }
+
+    if let Ok(url) = Url::parse(trimmed) {
+        if let Some(host) = url.host_str() {
+            return format!("{}:{}", host, url.port().unwrap_or(443));
+        }
+    }
+
+    "Custom Node".to_string()
+}
+
+/// Assemble full Xray configuration containing inbounds (SOCKS5, HTTP, optional TUN), outbounds, and logging
+fn assemble_xray_config(primary_outbound: Value, socks_port: u16, http_port: u16, enable_tun: bool) -> Value {
+    let mut inbounds = vec![
+        json!({
+            "tag": "socks-in",
+            "port": socks_port,
+            "listen": "127.0.0.1",
+            "protocol": "socks",
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http", "tls", "quic"]
+            },
+            "settings": {
+                "auth": "noauth",
+                "udp": true
+            }
+        }),
+        json!({
+            "tag": "http-in",
+            "port": http_port,
+            "listen": "127.0.0.1",
+            "protocol": "http",
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http", "tls", "quic"]
+            }
+        }),
+    ];
+
+    if enable_tun {
+        inbounds.push(json!({
+            "tag": "tun-in",
+            "protocol": "tun",
+            "settings": {
+                "name": "tun0",
+                "mtu": 1500
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http", "tls", "quic"]
+            }
+        }));
+    }
+
     json!({
         "log": {
             "loglevel": "info"
         },
-        "inbounds": [
-            {
-                "tag": "socks-in",
-                "port": socks_port,
-                "listen": "127.0.0.1",
-                "protocol": "socks",
-                "sniffing": {
-                    "enabled": true,
-                    "destOverride": ["http", "tls"]
-                },
-                "settings": {
-                    "auth": "noauth",
-                    "udp": true
-                }
-            },
-            {
-                "tag": "http-in",
-                "port": http_port,
-                "listen": "127.0.0.1",
-                "protocol": "http",
-                "sniffing": {
-                    "enabled": true,
-                    "destOverride": ["http", "tls"]
-                }
-            }
-        ],
+        "inbounds": inbounds,
         "outbounds": [
             primary_outbound,
             {
@@ -139,7 +197,7 @@ fn assemble_xray_config(primary_outbound: Value, socks_port: u16, http_port: u16
 }
 
 /// Handle raw JSON configurations (preserving inbounds if present, or wrapping in full config)
-fn handle_json_config(raw_json: &str, socks_port: u16, http_port: u16) -> Result<String, String> {
+fn handle_json_config(raw_json: &str, socks_port: u16, http_port: u16, enable_tun: bool) -> Result<String, String> {
     let mut parsed: Value = serde_json::from_str(raw_json)
         .map_err(|e| format!("Invalid JSON config: {}", e))?;
 
@@ -154,7 +212,7 @@ fn handle_json_config(raw_json: &str, socks_port: u16, http_port: u16) -> Result
 
     // If it has outbounds but no inbounds, add standard inbounds
     if let Some(outbounds) = parsed.get("outbounds") {
-        let mut full = assemble_xray_config(json!({}), socks_port, http_port);
+        let mut full = assemble_xray_config(json!({}), socks_port, http_port, enable_tun);
         full["outbounds"] = outbounds.clone();
         return serde_json::to_string_pretty(&full)
             .map_err(|e| format!("Serialization error: {}", e));
@@ -162,7 +220,7 @@ fn handle_json_config(raw_json: &str, socks_port: u16, http_port: u16) -> Result
 
     // If it's a single outbound object (has "protocol")
     if parsed.get("protocol").is_some() {
-        let full = assemble_xray_config(parsed, socks_port, http_port);
+        let full = assemble_xray_config(parsed, socks_port, http_port, enable_tun);
         return serde_json::to_string_pretty(&full)
             .map_err(|e| format!("Serialization error: {}", e));
     }
@@ -540,9 +598,20 @@ fn build_stream_settings(
     Ok(settings)
 }
 
+static TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Validate configuration using `xray run -test -c <file>`
 pub async fn test_xray_config(xray_bin: &Path, config_json: &str) -> Result<(), String> {
-    let temp_test_file = format!("/tmp/netray_xray_test_{}.json", std::process::id());
+    let count = TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp_test_file = format!(
+        "/tmp/netray_xray_test_{}_{}_{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        count
+    );
     tokio::fs::write(&temp_test_file, config_json)
         .await
         .map_err(|e| format!("Failed to write test config: {}", e))?;
@@ -594,12 +663,14 @@ mod tests {
     #[tokio::test]
     async fn test_vless_generation() {
         let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#Sample-Node";
-        let config = parse_and_generate_xray_config(uri, 10808, 10809).expect("Should parse VLESS");
+        let config = parse_and_generate_xray_config(uri, 10808, 10809, false).expect("Should parse VLESS");
         
         let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
         assert_eq!(json_val["inbounds"][0]["port"], 10808);
         assert_eq!(json_val["inbounds"][1]["port"], 10809);
         assert_eq!(json_val["outbounds"][0]["protocol"], "vless");
+
+        assert_eq!(extract_node_name(uri), "Sample-Node");
 
         if let Ok(bin) = find_xray_binary() {
             let res = test_xray_config(&bin, &config).await;
@@ -627,9 +698,10 @@ mod tests {
         let b64 = BASE64_STANDARD.encode(serde_json::to_string(&vmess_raw).unwrap());
         let uri = format!("vmess://{}", b64);
 
-        let config = parse_and_generate_xray_config(&uri, 10808, 10809).expect("Should parse VMess");
+        let config = parse_and_generate_xray_config(&uri, 10808, 10809, false).expect("Should parse VMess");
         let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
         assert_eq!(json_val["outbounds"][0]["protocol"], "vmess");
+        assert_eq!(extract_node_name(&uri), "test-vmess");
 
         if let Ok(bin) = find_xray_binary() {
             let res = test_xray_config(&bin, &config).await;
@@ -640,10 +712,11 @@ mod tests {
     #[tokio::test]
     async fn test_trojan_generation() {
         let uri = "trojan://secretpassword@example.com:443?security=tls&sni=example.com&type=tcp#Trojan-Node";
-        let config = parse_and_generate_xray_config(uri, 10808, 10809).expect("Should parse Trojan");
+        let config = parse_and_generate_xray_config(uri, 10808, 10809, false).expect("Should parse Trojan");
 
         let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
         assert_eq!(json_val["outbounds"][0]["protocol"], "trojan");
+        assert_eq!(extract_node_name(uri), "Trojan-Node");
 
         if let Ok(bin) = find_xray_binary() {
             let res = test_xray_config(&bin, &config).await;
@@ -661,7 +734,7 @@ mod tests {
                 }
             ]
         }"#;
-        let config = parse_and_generate_xray_config(raw, 10808, 10809).expect("Should handle raw JSON");
+        let config = parse_and_generate_xray_config(raw, 10808, 10809, false).expect("Should handle raw JSON");
         let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
         assert_eq!(json_val["inbounds"][0]["port"], 10808);
 
@@ -669,6 +742,18 @@ mod tests {
             let res = test_xray_config(&bin, &config).await;
             assert!(res.is_ok(), "Xray test validation failed for raw json: {:?}", res);
         }
+    }
+
+    #[test]
+    fn test_tun_inbound_generation() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#Sample-Node";
+        let config = parse_and_generate_xray_config(uri, 10808, 10809, true).expect("Should parse with TUN");
+        let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
+        
+        let inbounds = json_val["inbounds"].as_array().expect("inbounds must be array");
+        assert_eq!(inbounds.len(), 3);
+        assert_eq!(inbounds[2]["protocol"], "tun");
+        assert_eq!(inbounds[2]["settings"]["name"], "tun0");
     }
 }
 
