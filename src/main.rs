@@ -241,14 +241,18 @@ impl NetrayApp {
             }
 
             Message::NewLog(entry) => {
-                self.logs.push(entry);
-                // Keep log buffer capped at 1000 lines for low memory usage
-                if self.logs.len() > 1000 {
-                    self.logs.remove(0);
-                }
-                // Auto-scroll to bottom of the log viewer
-                scrollable::snap_to(self.log_scroll_id.clone(), scrollable::RelativeOffset::END)
-            }
+    // Automatically flip UI back to DISCONNECTED if the engine crashes or exits
+    if matches!(entry.level, LogLevel::Error) || entry.message.contains("exited") {
+        self.is_running = false;
+        self.stop_signal = None;
+    }
+
+    self.logs.push(entry);
+    if self.logs.len() > 1000 {
+        self.logs.remove(0);
+    }
+    scrollable::snap_to(self.log_scroll_id.clone(), scrollable::RelativeOffset::END)
+}
 
             Message::ClearLogs => {
                 self.logs.clear();
