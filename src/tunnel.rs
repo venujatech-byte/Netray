@@ -24,6 +24,8 @@ pub struct TunnelConfig {
     pub payload_template: String,
     pub local_socks_port: u16,
     pub v2ray_config: String,
+    pub enable_tun: bool,
+    pub enable_sysproxy: bool,
 }
 
 // Minimal russh client handler (accepts server host keys like Netray)
@@ -83,6 +85,11 @@ pub async fn run_real_tunnel_worker(
         _ = &mut stop_rx => {
             send_log(&log_tx, "Supervisor", "Tunnel stopped by user. All sockets and child processes closed.", LogLevel::Warn).await;
         }
+    }
+
+    if cfg.enable_sysproxy || cfg.enable_tun {
+        crate::sysproxy::disable_system_proxy().await;
+        send_log(&log_tx, "SystemProxy", "System-wide proxy & TUN routing disabled. Network restored.", LogLevel::Info).await;
     }
 
     send_log(&log_tx, "Supervisor", "Tunnel is offline.", LogLevel::Info).await;
@@ -312,6 +319,7 @@ async fn run_xray_engine(
         &cfg.v2ray_config,
         cfg.local_socks_port,
         http_port,
+        cfg.enable_tun,
     ) {
         Ok(json_str) => json_str,
         Err(e) => {
@@ -340,6 +348,31 @@ async fn run_xray_engine(
     // 4. Write temporary configuration
     let config_path = format!("/tmp/netray_xray_{}.json", std::process::id());
     tokio::fs::write(&config_path, &config_json).await?;
+
+    // 5. Enable System Proxy if requested
+    if cfg.enable_sysproxy {
+        send_log(log_tx, "SystemProxy", "Configuring GNOME system-wide proxy...", LogLevel::Info).await;
+        if let Err(e) = crate::sysproxy::enable_system_proxy(cfg.local_socks_port, http_port).await {
+            send_log(log_tx, "SystemProxy", format!("Warning: failed to set system proxy: {}", e), LogLevel::Warn).await;
+        } else {
+            send_log(
+                log_tx,
+                "SystemProxy",
+                format!("System-wide proxy active -> SOCKS5 127.0.0.1:{}, HTTP 127.0.0.1:{}", cfg.local_socks_port, http_port),
+                LogLevel::Success,
+            ).await;
+        }
+    }
+
+    if cfg.enable_tun {
+        send_log(
+            log_tx,
+            "TUN",
+            "TUN mode enabled (tun0 interface configured in core engine).",
+            LogLevel::Success,
+        )
+        .await;
+    }
 
     send_log(log_tx, "Xray", "Spawning core process...", LogLevel::Info).await;
 
