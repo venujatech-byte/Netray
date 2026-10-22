@@ -81,11 +81,12 @@ pub async fn run_real_tunnel_worker(
     tokio::select! {
         _ = engine_task => {}
         _ = &mut stop_rx => {
-            send_log(&log_tx, "Supervisor", "Tunnel stopped. All sockets and child processes closed.", LogLevel::Warn).await;
+            send_log(&log_tx, "Supervisor", "Tunnel stopped by user. All sockets and child processes closed.", LogLevel::Warn).await;
         }
     }
-}
 
+    send_log(&log_tx, "Supervisor", "Tunnel is offline.", LogLevel::Info).await;
+}
 
 
 
@@ -160,7 +161,7 @@ async fn run_ssh_payload_engine(
         )
         .await;
 
-        let mut root_store = rustls::RootCertStore::empty();
+        let root_store = rustls::RootCertStore::empty();
         // In production, load webpki-roots or a custom insecure verifier for self-signed VPS certs
         let tls_cfg = rustls::ClientConfig::builder()
             .with_root_certificates(root_store)
@@ -273,22 +274,82 @@ async fn handle_socks5_client(
 // ENGINE 2: XRAY / V2RAY CORE SUPERVISOR
 // ============================================================================
 
+fn classify_xray_log(line: &str) -> LogLevel {
+    if line.contains("[Warning]") {
+        LogLevel::Warn
+    } else if line.contains("[Error]") || line.contains("failed") || line.contains("Failed") {
+        LogLevel::Error
+    } else if line.contains("Configuration OK") || line.contains("started") {
+        LogLevel::Success
+    } else {
+        LogLevel::Info
+    }
+}
+
 async fn run_xray_engine(
     log_tx: &mpsc::UnboundedSender<LogEntry>,
     cfg: &TunnelConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config_path = "/tmp/netray_xray_config.json";
-    tokio::fs::write(config_path, &cfg.v2ray_config).await?;
+    // 1. Locate xray / v2ray binary
+    let xray_bin = match crate::v2ray::find_xray_binary() {
+        Ok(bin) => bin,
+        Err(e) => {
+            send_log(log_tx, "Xray", &e, LogLevel::Error).await;
+            return Err(e.into());
+        }
+    };
+    send_log(
+        log_tx,
+        "Xray",
+        format!("Found core binary at: {}", xray_bin.display()),
+        LogLevel::Info,
+    )
+    .await;
 
-    send_log(log_tx, "Xray", "Spawning xray-core process...", LogLevel::Info).await;
+    // 2. Parse URI / JSON and generate valid Xray configuration
+    let http_port = cfg.local_socks_port.saturating_add(1);
+    let config_json = match crate::v2ray::parse_and_generate_xray_config(
+        &cfg.v2ray_config,
+        cfg.local_socks_port,
+        http_port,
+    ) {
+        Ok(json_str) => json_str,
+        Err(e) => {
+            send_log(log_tx, "Xray", format!("Config parse error: {}", e), LogLevel::Error).await;
+            return Err(e.into());
+        }
+    };
 
-    let mut child = Command::new("xray")
+    // 3. Test & validate config with the core binary
+    send_log(log_tx, "Xray", "Validating configuration with core...", LogLevel::Info).await;
+    if let Err(e) = crate::v2ray::test_xray_config(&xray_bin, &config_json).await {
+        send_log(log_tx, "Xray", format!("Config validation failed:\n{}", e), LogLevel::Error).await;
+        return Err(e.into());
+    }
+    send_log(
+        log_tx,
+        "Xray",
+        format!(
+            "Configuration OK. Local SOCKS5: 127.0.0.1:{}, HTTP: 127.0.0.1:{}",
+            cfg.local_socks_port, http_port
+        ),
+        LogLevel::Success,
+    )
+    .await;
+
+    // 4. Write temporary configuration
+    let config_path = format!("/tmp/netray_xray_{}.json", std::process::id());
+    tokio::fs::write(&config_path, &config_json).await?;
+
+    send_log(log_tx, "Xray", "Spawning core process...", LogLevel::Info).await;
+
+    let mut child = Command::new(&xray_bin)
         .arg("run")
         .arg("-c")
-        .arg(config_path)
+        .arg(&config_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true) // Critical: kills xray immediately when tokio::select! cancels
+        .kill_on_drop(true)
         .spawn()?;
 
     if let Some(stdout) = child.stdout.take() {
@@ -296,12 +357,25 @@ async fn run_xray_engine(
         let tx = log_tx.clone();
         tokio::spawn(async move {
             while let Ok(Some(line)) = reader.next_line().await {
-                send_log(&tx, "Xray", line, LogLevel::Info).await;
+                let lvl = classify_xray_log(&line);
+                send_log(&tx, "Xray", line, lvl).await;
+            }
+        });
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        let mut reader = BufReader::new(stderr).lines();
+        let tx = log_tx.clone();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = reader.next_line().await {
+                let lvl = classify_xray_log(&line);
+                send_log(&tx, "Xray", line, lvl).await;
             }
         });
     }
 
     let status = child.wait().await?;
-    send_log(log_tx, "Xray", format!("Xray exited with: {}", status), LogLevel::Warn).await;
+    let _ = tokio::fs::remove_file(&config_path).await;
+    send_log(log_tx, "Xray", format!("Core process exited with: {}", status), LogLevel::Warn).await;
     Ok(())
 }
