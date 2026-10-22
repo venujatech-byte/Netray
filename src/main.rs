@@ -1,4 +1,5 @@
 mod tunnel;
+pub mod v2ray;
 use tunnel::{run_real_tunnel_worker, TunnelConfig};
 use chrono::Local;
 use iced::futures::SinkExt;
@@ -6,8 +7,7 @@ use iced::widget::{
     button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
 };
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 
 pub fn main() -> iced::Result {
     iced::application(
@@ -128,6 +128,9 @@ pub enum Message {
     ProxyIpChanged(String),
     ProxyPortChanged(String),
     V2RayConfigChanged(String),
+    LocalSocksPortChanged(String),
+    ValidateV2RayConfig,
+    LoadSampleV2Ray,
 
     // Real-time Logger Events
     LoggerReady(mpsc::UnboundedSender<LogEntry>),
@@ -234,6 +237,51 @@ impl NetrayApp {
             Message::ProxyIpChanged(v) => { self.proxy_ip = v; Task::none() }
             Message::ProxyPortChanged(v) => { self.proxy_port = v; Task::none() }
             Message::V2RayConfigChanged(v) => { self.v2ray_uri_or_json = v; Task::none() }
+            Message::LocalSocksPortChanged(v) => { self.local_socks_port = v; Task::none() }
+
+            Message::LoadSampleV2Ray => {
+                self.v2ray_uri_or_json = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#Sample-VLESS-Node".to_string();
+                self.push_log("Config", "Loaded sample VLESS configuration.", LogLevel::Info);
+                Task::none()
+            }
+
+            Message::ValidateV2RayConfig => {
+                let socks_p: u16 = self.local_socks_port.parse().unwrap_or(10808);
+                let http_p = socks_p.saturating_add(1);
+                match crate::v2ray::parse_and_generate_xray_config(&self.v2ray_uri_or_json, socks_p, http_p) {
+                    Ok(json_cfg) => {
+                        match crate::v2ray::find_xray_binary() {
+                            Ok(bin) => {
+                                self.push_log("Config", format!("Parsed config OK. Testing with core ({})...", bin.display()), LogLevel::Info);
+                                Task::perform(async move {
+                                    crate::v2ray::test_xray_config(&bin, &json_cfg).await
+                                }, |res| match res {
+                                    Ok(()) => Message::NewLog(LogEntry {
+                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                        source: "Config".into(),
+                                        message: "✓ Configuration is 100% valid and verified with Xray core!".into(),
+                                        level: LogLevel::Success,
+                                    }),
+                                    Err(e) => Message::NewLog(LogEntry {
+                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                        source: "Config".into(),
+                                        message: format!("✗ Config validation error: {}", e),
+                                        level: LogLevel::Error,
+                                    }),
+                                })
+                            }
+                            Err(e) => {
+                                self.push_log("Config", format!("Parsed OK, but core binary not found: {}", e), LogLevel::Warn);
+                                Task::none()
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.push_log("Config", format!("Config syntax error: {}", e), LogLevel::Error);
+                        Task::none()
+                    }
+                }
+            }
 
             Message::LoggerReady(sender) => {
                 self.log_sender = Some(sender);
@@ -241,18 +289,20 @@ impl NetrayApp {
             }
 
             Message::NewLog(entry) => {
-    // Automatically flip UI back to DISCONNECTED if the engine crashes or exits
-    if matches!(entry.level, LogLevel::Error) || entry.message.contains("exited") {
-        self.is_running = false;
-        self.stop_signal = None;
-    }
+                // Automatically flip UI back to DISCONNECTED if supervisor reports offline or fatal engine error
+                if (entry.source == "Supervisor" && entry.message.contains("offline"))
+                    || (entry.source == "Error" && entry.message.contains("Engine failed"))
+                {
+                    self.is_running = false;
+                    self.stop_signal = None;
+                }
 
-    self.logs.push(entry);
-    if self.logs.len() > 1000 {
-        self.logs.remove(0);
-    }
-    scrollable::snap_to(self.log_scroll_id.clone(), scrollable::RelativeOffset::END)
-}
+                self.logs.push(entry);
+                if self.logs.len() > 1000 {
+                    self.logs.remove(0);
+                }
+                scrollable::snap_to(self.log_scroll_id.clone(), scrollable::RelativeOffset::END)
+            }
 
             Message::ClearLogs => {
                 self.logs.clear();
@@ -322,7 +372,7 @@ impl NetrayApp {
     // 5. ICED VIEW LAYOUT
     // ========================================================================
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         let sidebar = self.view_sidebar();
 
         let main_content = match self.active_tab {
@@ -343,7 +393,7 @@ impl NetrayApp {
         .into()
     }
 
-    fn view_sidebar(&self) -> Element<Message> {
+    fn view_sidebar(&self) -> Element<'_, Message> {
         let status_color = if self.is_running {
             Color::from_rgb(0.2, 0.85, 0.4)
         } else {
@@ -398,7 +448,7 @@ impl NetrayApp {
         .into()
     }
 
-    fn view_payload_tab(&self) -> Element<Message> {
+    fn view_payload_tab(&self) -> Element<'_, Message> {
         column![
             text("HTTP Payload & SNI Injector").size(20),
             text("Configure custom HTTP headers ([crlf], [split], [host_port]) and TLS SNI bug hosts.").size(13),
@@ -442,7 +492,7 @@ impl NetrayApp {
         .into()
     }
 
-    fn view_ssh_tab(&self) -> Element<Message> {
+    fn view_ssh_tab(&self) -> Element<'_, Message> {
         column![
             text("SSH & Remote Proxy Configuration").size(20),
             row![
@@ -482,23 +532,58 @@ impl NetrayApp {
         .into()
     }
 
-    fn view_v2ray_tab(&self) -> Element<Message> {
+    fn view_v2ray_tab(&self) -> Element<'_, Message> {
+        let http_port = self
+            .local_socks_port
+            .parse::<u16>()
+            .unwrap_or(10808)
+            .saturating_add(1);
+
         column![
             text("V2Ray / Xray Configuration").size(20),
-            text("Paste a vmess://, vless://, trojan:// URI or raw Xray JSON config:"),
-            text_input("vless://...", &self.v2ray_uri_or_json)
+            text("Directly connects through Xray/V2Ray core. Paste any vless://, vmess://, trojan://, ss:// URI or raw JSON.")
+                .size(13)
+                .color(Color::from_rgb(0.7, 0.7, 0.7)),
+            Space::with_height(10),
+            text("Configuration URI / Raw Xray JSON:"),
+            text_input("vless://... or vmess://... or Xray JSON", &self.v2ray_uri_or_json)
                 .on_input(Message::V2RayConfigChanged)
                 .padding(10),
+            Space::with_height(10),
+            row![
+                column![
+                    text("Local SOCKS5 Inbound Port:"),
+                    text_input("10808", &self.local_socks_port)
+                        .on_input(Message::LocalSocksPortChanged)
+                        .padding(8),
+                ]
+                .width(Length::FillPortion(1)),
+                column![
+                    text("Local HTTP Inbound Port:"),
+                    text(format!("127.0.0.1:{}", http_port))
+                        .size(14)
+                        .color(Color::from_rgb(0.3, 0.85, 0.95)),
+                ]
+                .width(Length::FillPortion(1)),
+            ]
+            .spacing(20)
+            .align_y(Alignment::Center),
+            Space::with_height(15),
+            row![
+                button("✓ Validate Configuration").on_press(Message::ValidateV2RayConfig),
+                button("Load Sample VLESS Node").on_press(Message::LoadSampleV2Ray),
+            ]
+            .spacing(15),
         ]
         .spacing(12)
         .into()
     }
 
-    fn view_home_tab(&self) -> Element<Message> {
+    fn view_home_tab(&self) -> Element<'_, Message> {
         column![text("Profiles").size(20)].into()
     }
 
-    fn view_logs_tab(&self) -> Element<Message> {
+    fn view_logs_tab(&self) -> Element<'_, Message> {
         let log_rows: Vec<Element<Message>> = self
             .logs
             .iter()
@@ -550,7 +635,7 @@ impl NetrayApp {
 // 6. ASYNC BACKGROUND TUNNEL WORKER (FEEDS LIVE LOGS TO UI)
 // ============================================================================
 
-async fn send_log(
+pub async fn send_log(
     tx: &mpsc::UnboundedSender<LogEntry>,
     source: &str,
     msg: impl Into<String>,
@@ -562,47 +647,4 @@ async fn send_log(
         message: msg.into(),
         level,
     });
-}
-
-async fn run_tunnel_worker(
-    log_tx: mpsc::UnboundedSender<LogEntry>,
-    mut stop_rx: tokio::sync::oneshot::Receiver<()>,
-    mode: TunnelMode,
-    proxy_addr: String,
-    ssh_target: String,
-    bug_host: String,
-    socks_port: String,
-) {
-    send_log(&log_tx, "Supervisor", format!("Starting engine in [{}] mode...", mode), LogLevel::Info).await;
-
-    // Step-by-step lifecycle simulation (replace with your TcpStream / russh / xray Command calls)
-    let work = async {
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        send_log(&log_tx, "Injector", format!("Connecting to remote proxy {}...", proxy_addr), LogLevel::Info).await;
-
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        send_log(&log_tx, "Injector", format!("Injecting HTTP Payload (Host: {})...", bug_host), LogLevel::Info).await;
-
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        send_log(&log_tx, "Injector", "HTTP/1.1 101 Switching Protocols received!", LogLevel::Success).await;
-
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        send_log(&log_tx, "SSH", format!("Starting SSH handshake to {} over injected stream...", ssh_target), LogLevel::Info).await;
-
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        send_log(&log_tx, "SOCKS5", format!("Local SOCKS5 listening on 127.0.0.1:{}", socks_port), LogLevel::Success).await;
-
-        // Keep alive loop until stopped
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-            send_log(&log_tx, "KeepAlive", "SSH tunnel heartbeat OK (ping: 42ms)", LogLevel::Info).await;
-        }
-    };
-
-    tokio::select! {
-        _ = work => {}
-        _ = &mut stop_rx => {
-            send_log(&log_tx, "Supervisor", "Aborted active sockets and cleaned up ports.", LogLevel::Warn).await;
-        }
-    }
 }
