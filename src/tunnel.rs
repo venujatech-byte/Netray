@@ -53,7 +53,7 @@ impl client::Handler for SshClientHandler {
 // ============================================================================
 
 pub async fn run_real_tunnel_worker(
-    log_tx: mpsc::UnboundedSender<LogEntry>,
+    log_tx: mpsc::Sender<LogEntry>,
     mut stop_rx: tokio::sync::oneshot::Receiver<()>,
     cfg: TunnelConfig,
 ) {
@@ -115,7 +115,7 @@ pub async fn run_real_tunnel_worker(
 // ============================================================================
 
 async fn run_ssh_payload_engine(
-    log_tx: &mpsc::UnboundedSender<LogEntry>,
+    log_tx: &mpsc::Sender<LogEntry>,
     cfg: &TunnelConfig,
     use_tls_sni: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -216,16 +216,22 @@ async fn run_ssh_payload_engine(
     )
     .await;
 
+    // Own client tasks so stopping the tunnel also releases their sockets and SSH handles.
+    let mut clients = tokio::task::JoinSet::new();
     loop {
-        let (client_socket, _) = listener.accept().await?;
-        let ssh_handle = Arc::clone(&shared_ssh);
-        let log_tx_clone = log_tx.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = handle_socks5_client(client_socket, ssh_handle).await {
-                let _ = send_log(&log_tx_clone, "SOCKS5", format!("Stream closed: {}", e), LogLevel::Warn).await;
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (client_socket, _) = accepted?;
+                let ssh_handle = Arc::clone(&shared_ssh);
+                let log_tx_clone = log_tx.clone();
+                clients.spawn(async move {
+                    if let Err(e) = handle_socks5_client(client_socket, ssh_handle).await {
+                        send_log(&log_tx_clone, "SOCKS5", format!("Stream closed: {}", e), LogLevel::Warn).await;
+                    }
+                });
             }
-        });
+            Some(_) = clients.join_next(), if !clients.is_empty() => {}
+        }
     }
 }
 
@@ -322,7 +328,7 @@ fn classify_xray_log(line: &str) -> LogLevel {
 
 fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     stream: R,
-    tx: mpsc::UnboundedSender<LogEntry>,
+    tx: mpsc::Sender<LogEntry>,
 ) {
     tokio::spawn(async move {
         let mut reader = BufReader::new(stream).lines();
@@ -334,7 +340,7 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
 }
 
 async fn run_xray_engine(
-    log_tx: &mpsc::UnboundedSender<LogEntry>,
+    log_tx: &mpsc::Sender<LogEntry>,
     cfg: &TunnelConfig,
     stop_rx: &mut tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

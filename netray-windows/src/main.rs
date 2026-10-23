@@ -96,7 +96,7 @@ pub struct LogEntry {
 }
 
 pub async fn send_log(
-    tx: &mpsc::UnboundedSender<LogEntry>,
+    tx: &mpsc::Sender<LogEntry>,
     source: impl Into<String>,
     msg: impl Into<String>,
     level: LogLevel,
@@ -106,7 +106,7 @@ pub async fn send_log(
         source: source.into(),
         message: msg.into(),
         level,
-    });
+    }).await;
 }
 
 pub struct NetrayApp {
@@ -141,7 +141,7 @@ pub struct NetrayApp {
     pub enable_sysproxy: bool,
 
     pub logs: Vec<LogEntry>,
-    pub log_sender: Option<mpsc::UnboundedSender<LogEntry>>,
+    pub log_sender: Option<mpsc::Sender<LogEntry>>,
     pub stop_signal: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -195,7 +195,7 @@ pub enum Message {
     ToggleTunMode(bool),
     ToggleSysProxy(bool),
 
-    LoggerReady(mpsc::UnboundedSender<LogEntry>),
+    LoggerReady(mpsc::Sender<LogEntry>),
     NewLog(LogEntry),
     UptimeTick,
     ClearLogs,
@@ -577,7 +577,7 @@ impl NetrayApp {
     fn subscription(&self) -> Subscription<Message> {
         let logs = Subscription::run(|| {
             iced::stream::channel(100, |mut output| async move {
-                let (tx, mut rx) = mpsc::unbounded_channel::<LogEntry>();
+                let (tx, mut rx) = mpsc::channel::<LogEntry>(256);
                 let _ = output.send(Message::LoggerReady(tx)).await;
                 while let Some(log_entry) = rx.recv().await {
                     let _ = output.send(Message::NewLog(log_entry)).await;
@@ -1165,4 +1165,16 @@ mod performance_tests {
         app.is_running = false;
         assert_eq!(subscriptions(&app), 1);
     }
+    #[tokio::test]
+    async fn logging_waits_for_capacity_without_losing_entries() {
+        let (tx, mut rx) = mpsc::channel(1);
+        send_log(&tx, "Test", "first", LogLevel::Info).await;
+        let pending = send_log(&tx, "Test", "second", LogLevel::Info);
+        tokio::pin!(pending);
+        assert!(tokio::time::timeout(Duration::from_millis(10), &mut pending).await.is_err());
+        assert_eq!(rx.recv().await.unwrap().message, "first");
+        pending.await;
+        assert_eq!(rx.recv().await.unwrap().message, "second");
+    }
+
 }
