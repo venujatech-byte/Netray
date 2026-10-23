@@ -1,0 +1,19 @@
+[package]
+name = "netray-windows"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.13", features = ["tokio", "advanced", "svg"] }
+tokio = { version = "1", features = ["full"] }
+russh = "0.45"
+russh-keys = "0.45"
+async-trait = "0.1"
+tokio-rustls = "0.26"
+rustls-pki-types = "1.10"
+chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2.5"
+base64 = "0.22"
+percent-encoding = "2.3"
