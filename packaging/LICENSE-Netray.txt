@@ -1,0 +1,4 @@
+The Netray source repository does not currently declare a software license.
+This packaging notice does not grant permission to use, modify, or redistribute
+Netray. The bundled Xray-core executable is separately licensed under MPL-2.0;
+see /opt/netray/LICENSE and THIRD-PARTY-NOTICES.txt.

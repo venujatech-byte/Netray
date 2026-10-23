@@ -36,11 +36,13 @@ Ensure you have Rust (2021 edition). Development builds can use an installed `xr
 # Check and run
 cargo run
 
-# Build a portable package with Xray-core (requires curl, unzip, and sha256sum)
-bash scripts/package-linux.sh
+# Build portable and RPM packages with bundled Xray-core (also requires rpm-build)
+bash scripts/package-linux.sh 0.1.1
 ```
 
-The package is written to `dist/` and includes the upstream Xray license and source notice. The packaging script currently supports Linux x86-64 and ARM64.
+The packages are written to `dist/`. Install the RPM with `sudo dnf install ./dist/netray-0.1.1-1.x86_64.rpm`; it installs Netray and Xray together and preserves Xray's upstream license and source notice. RPM architecture follows the build host; portable archives support Linux x86-64 and ARM64.
+
+Every push to `main` or `master` builds Windows and Linux packages and publishes a GitHub Release tagged `v0.1.<run number>`. Pull requests build both platforms without publishing a release.
 
 ## Building & Running (Windows)
 
