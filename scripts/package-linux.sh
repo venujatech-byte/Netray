@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+app_version=${1:-0.1.0}
+if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Version must use MAJOR.MINOR.PATCH format." >&2
+    exit 1
+fi
+
 version=v26.10.21
 case "$(uname -m)" in
     x86_64) asset_arch=linux-64 ;;
@@ -38,6 +44,26 @@ Corresponding source: https://github.com/XTLS/Xray-core/tree/$version
 Dependency list: https://github.com/XTLS/Xray-core/blob/$version/go.mod
 EOF
 
-archive="dist/netray-linux-$asset_arch.tar.gz"
+archive="dist/netray-linux-$asset_arch-$app_version.tar.gz"
 tar -czf "$archive" -C "$package" .
-echo "Portable release package: $archive"
+
+if ! command -v rpmbuild >/dev/null; then
+    echo "rpmbuild is required to create the RPM." >&2
+    exit 1
+fi
+topdir="$work/rpmbuild"
+mkdir -p "$topdir/SOURCES" "$work/rpmroot/opt/netray" "$work/rpmroot/usr/bin"
+cp -a "$package/." "$work/rpmroot/opt/netray/"
+mkdir -p "$work/rpmroot/usr/share/licenses/netray"
+cp packaging/LICENSE-Netray.txt "$work/rpmroot/usr/share/licenses/netray/"
+ln -s /opt/netray/netray "$work/rpmroot/usr/bin/netray"
+tar -czf "$topdir/SOURCES/netray-payload.tar.gz" -C "$work/rpmroot" .
+rpmbuild -bb packaging/netray.spec \
+    --define "_topdir $topdir" \
+    --define "_sourcedir $topdir/SOURCES" \
+    --define "netray_version $app_version" \
+    --define "netray_release 1"
+find "$topdir/RPMS" -name '*.rpm' -exec cp {} dist/ \;
+
+echo "Portable package: $archive"
+echo "RPM package: dist/netray-$app_version-1.$(uname -m).rpm"
