@@ -132,4 +132,12 @@ mod tests {
         assert_eq!(deserialized.v2ray_profiles.len(), 2);
         assert_eq!(deserialized.v2ray_uri_or_json, "vless://test-uuid@1.2.3.4:443?type=tcp#TestNode");
     }
+
+    #[test]
+    fn test_disk_roundtrip() {
+        let loaded = load_data();
+        assert!(!loaded.v2ray_profiles.is_empty());
+        let path = get_config_path();
+        assert!(path.exists(), "config.json must exist at {}", path.display());
+    }
 }
