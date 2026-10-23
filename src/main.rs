@@ -5,7 +5,7 @@ mod tunnel;
 pub mod v2ray;
 
 use chrono::Local;
-use iced::futures::SinkExt;
+use iced::futures::{SinkExt, StreamExt};
 use iced::widget::{
     button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
 };
@@ -55,9 +55,17 @@ fn form_card_style(_theme: &Theme) -> container::Style {
 }
 
 pub fn main() -> iced::Result {
+    iced::daemon("Netray", NetrayApp::update, NetrayApp::view)
+        .subscription(NetrayApp::subscription)
+        .theme(|_, _| Theme::Dark)
+        .run_with(NetrayApp::new)
+}
+
+fn window_settings() -> iced::window::Settings {
     let mut window = iced::window::Settings {
         size: (460.0, 600.0).into(),
         icon: create_window_icon(),
+        decorations: false,
         exit_on_close_request: false,
         ..Default::default()
     };
@@ -65,11 +73,7 @@ pub fn main() -> iced::Result {
     {
         window.platform_specific.application_id = "netray".into();
     }
-    iced::application("Netray", NetrayApp::update, NetrayApp::view)
-        .subscription(NetrayApp::subscription)
-        .theme(|_| Theme::Dark)
-        .window(window)
-        .run_with(NetrayApp::new)
+    window
 }
 
 fn load_logo_pixels() -> Result<(Vec<u8>, u32, u32), Box<dyn std::error::Error>> {
@@ -84,7 +88,11 @@ fn load_logo_pixels() -> Result<(Vec<u8>, u32, u32), Box<dyn std::error::Error>>
             .ok_or("tray icon image is too large")?
     ];
     let info = reader.next_frame(&mut pixels)?;
-    Ok((pixels[..info.buffer_size()].to_vec(), info.width, info.height))
+    Ok((
+        pixels[..info.buffer_size()].to_vec(),
+        info.width,
+        info.height,
+    ))
 }
 
 fn create_window_icon() -> Option<iced::window::Icon> {
@@ -294,15 +302,19 @@ pub enum Message {
     ClearLogs,
     CloseRequested(iced::window::Id),
     WindowOpened(iced::window::Id),
-    WindowTick,
-    Minimized(Option<bool>),
+    ShowWindow,
+    DragWindow,
+    MaximizeWindow,
+    RequestExit,
     ConfirmExit,
     CancelExit,
 }
 
 impl NetrayApp {
     fn new() -> (Self, Task<Message>) {
-        Self::from_saved(storage::load_data())
+        let (mut app, _) = Self::from_saved(storage::load_data());
+        let task = app.show_window();
+        (app, task)
     }
 
     fn from_saved(saved: storage::AppData) -> (Self, Task<Message>) {
@@ -367,6 +379,17 @@ impl NetrayApp {
         (app, Task::none())
     }
 
+    fn show_window(&mut self) -> Task<Message> {
+        self.hidden_to_tray = false;
+        if let Some(id) = self.window_id {
+            iced::window::minimize(id, false).chain(iced::window::gain_focus(id))
+        } else {
+            let (id, task) = iced::window::open(window_settings());
+            self.window_id = Some(id);
+            task.map(Message::WindowOpened)
+        }
+    }
+
     fn save_current_state(&self) -> Result<std::path::PathBuf, String> {
         let mode_str = format!("{:?}", self.tunnel_mode);
         let app_ref = storage::AppDataRef {
@@ -411,6 +434,23 @@ impl NetrayApp {
     // ========================================================================
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let previous = (self.is_running, self.worker_active);
+        let opened = matches!(message, Message::WindowOpened(_));
+        let task = self.update_message(message);
+        if opened || previous != (self.is_running, self.worker_active) {
+            if let Some(item) = &self.tray_connect_item {
+                item.set_text(if self.is_running {
+                    "Disconnect"
+                } else {
+                    "Connect"
+                });
+                item.set_enabled(self.is_running || !self.worker_active);
+            }
+        }
+        task
+    }
+
+    fn update_message(&mut self, message: Message) -> Task<Message> {
         if self.config_locked()
             && matches!(
                 &message,
@@ -884,10 +924,7 @@ impl NetrayApp {
                 }
                 if stopped && self.exit_after_stop {
                     self.exit_after_stop = false;
-                    self.close_confirmation
-                        .take()
-                        .map(iced::window::close)
-                        .unwrap_or_else(Task::none)
+                    iced::exit()
                 } else {
                     Task::none()
                 }
@@ -909,91 +946,41 @@ impl NetrayApp {
                             self.tray_icon = Some(icon);
                             self.tray_connect_item = Some(connect);
                         }
-                        Err(error) => self.push_log("Tray", format!("System tray unavailable: {error}"), LogLevel::Warn),
+                        Err(error) => self.push_log(
+                            "Tray",
+                            format!("System tray unavailable: {error}"),
+                            LogLevel::Warn,
+                        ),
                     }
                 }
                 Task::none()
             }
-            Message::WindowTick => {
-                if let Some(item) = &self.tray_connect_item {
-                    item.set_text(if self.is_running { "Disconnect" } else { "Connect" });
-                    item.set_enabled(self.is_running || !self.worker_active);
-                }
-                if let Ok(event) = TrayIconEvent::receiver().try_recv() {
-                    if matches!(
-                        event,
-                        TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            ..
-                        } | TrayIconEvent::DoubleClick { .. }
-                    ) {
-                        self.hidden_to_tray = false;
-                        if let Some(id) = self.window_id {
-                            return iced::window::change_mode(id, iced::window::Mode::Windowed)
-                                .chain(iced::window::minimize(id, false))
-                                .chain(iced::window::gain_focus(id));
-                        }
-                    }
-                }
-                while let Ok(event) = MenuEvent::receiver().try_recv() {
-                    match event.id().as_ref() {
-                        "show" => {
-                            self.hidden_to_tray = false;
-                            if let Some(id) = self.window_id {
-                                return iced::window::change_mode(id, iced::window::Mode::Windowed)
-                                    .chain(iced::window::minimize(id, false))
-                                    .chain(iced::window::gain_focus(id));
-                            }
-                        }
-                        "hide" => {
-                            if let Some(id) = self.window_id {
-                                self.hidden_to_tray = true;
-                                return iced::window::change_mode(id, iced::window::Mode::Hidden);
-                            }
-                        }
-                        "connect" if self.is_running || !self.worker_active => {
-                            return self.update(Message::ToggleTunnel);
-                        }
-                        "exit" => {
-                            if let Some(id) = self.window_id {
-                                self.hidden_to_tray = false;
-                                self.close_confirmation = Some(id);
-                                return iced::window::change_mode(id, iced::window::Mode::Windowed)
-                                    .chain(iced::window::minimize(id, false))
-                                    .chain(iced::window::gain_focus(id));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if self.hidden_to_tray {
-                    Task::none()
-                } else if let Some(id) = self.window_id {
-                    // shortcut: Wayland does not report minimized state; add a native shell hook if Wayland tray minimization is needed.
-                    iced::window::get_minimized(id).map(Message::Minimized)
-                } else {
-                    Task::none()
-                }
+            Message::ShowWindow => self.show_window(),
+            Message::DragWindow => self
+                .window_id
+                .map(iced::window::drag)
+                .unwrap_or_else(Task::none),
+            Message::MaximizeWindow => self
+                .window_id
+                .map(iced::window::toggle_maximize)
+                .unwrap_or_else(Task::none),
+            Message::RequestExit => {
+                let task = self.show_window();
+                self.close_confirmation = self.window_id;
+                task
             }
-            Message::Minimized(Some(true)) => {
-                if self.tray_icon.is_some() {
-                    self.hidden_to_tray = true;
-                    self.window_id
-                        .map(|id| iced::window::change_mode(id, iced::window::Mode::Hidden))
-                        .unwrap_or_else(Task::none)
-                } else {
-                    Task::none()
-                }
-            }
-            Message::Minimized(_) => Task::none(),
             Message::MinimizeToTray => {
                 if self.tray_icon.is_some() {
                     self.hidden_to_tray = true;
+                    // Destroy the surface: Wayland does not implement set_visible(false).
                     self.window_id
-                        .map(|id| iced::window::change_mode(id, iced::window::Mode::Hidden))
+                        .take()
+                        .map(iced::window::close)
                         .unwrap_or_else(Task::none)
                 } else {
-                    Task::none()
+                    self.window_id
+                        .map(|id| iced::window::minimize(id, true))
+                        .unwrap_or_else(Task::none)
                 }
             }
             Message::ConfirmExit => {
@@ -1004,10 +991,7 @@ impl NetrayApp {
                     }
                     Task::none()
                 } else {
-                    self.close_confirmation
-                        .take()
-                        .map(iced::window::close)
-                        .unwrap_or_else(Task::none)
+                    iced::exit()
                 }
             }
             Message::CancelExit => {
@@ -1073,10 +1057,40 @@ impl NetrayApp {
         let mut subscriptions = vec![
             logs,
             iced::window::close_requests().map(Message::CloseRequested),
-            iced::window::open_events().map(Message::WindowOpened),
-            iced::time::every(Duration::from_secs(1)).map(|_| Message::WindowTick),
+            Subscription::run(|| {
+                iced::stream::channel(16, |mut output| async move {
+                    let (tx, mut rx) = iced::futures::channel::mpsc::unbounded();
+                    let clicks = tx.clone();
+                    TrayIconEvent::set_event_handler(Some(move |event| {
+                        if matches!(
+                            event,
+                            TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                ..
+                            } | TrayIconEvent::DoubleClick { .. }
+                        ) {
+                            let _ = clicks.unbounded_send(Message::ShowWindow);
+                        }
+                    }));
+                    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+                        let message = match event.id().as_ref() {
+                            "show" => Message::ShowWindow,
+                            "hide" => Message::MinimizeToTray,
+                            "connect" => Message::ToggleTunnel,
+                            "exit" => Message::RequestExit,
+                            _ => return,
+                        };
+                        let _ = tx.unbounded_send(message);
+                    }));
+                    while let Some(message) = rx.next().await {
+                        if output.send(message).await.is_err() {
+                            break;
+                        }
+                    }
+                })
+            }),
         ];
-        if self.is_running && self.view_mode == ViewMode::Profiles {
+        if !self.hidden_to_tray && self.is_running && self.view_mode == ViewMode::Profiles {
             subscriptions
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick));
         }
@@ -1087,13 +1101,35 @@ impl NetrayApp {
     // 4. VIEW DISPATCHER
     // ========================================================================
 
-    fn view(&self) -> Element<'_, Message> {
+    fn view(&self, _: iced::window::Id) -> Element<'_, Message> {
         let content = match self.view_mode {
             ViewMode::Profiles => self.view_profiles_screen(),
             ViewMode::EditNode => self.view_edit_screen(),
             ViewMode::Logs => self.view_logs_screen(),
             ViewMode::SshSettings => self.view_ssh_screen(),
         };
+        let titlebar = row![
+            iced::widget::mouse_area(
+                container(text("Netray").size(14))
+                    .padding(10)
+                    .width(Length::Fill)
+            )
+            .on_press(Message::DragWindow),
+            button("−")
+                .style(button::text)
+                .padding(10)
+                .on_press(Message::MinimizeToTray),
+            button("□")
+                .style(button::text)
+                .padding(10)
+                .on_press(Message::MaximizeWindow),
+            button("×")
+                .style(button::text)
+                .padding(10)
+                .on_press(Message::RequestExit),
+        ]
+        .align_y(Alignment::Center);
+        let content = column![titlebar, content].height(Length::Fill);
         if self.close_confirmation.is_some() {
             let dialog = container(
                 column![
@@ -1129,7 +1165,7 @@ impl NetrayApp {
             .height(Length::Fill)
             .into()
         } else {
-            content
+            content.into()
         }
     }
 
@@ -1172,14 +1208,6 @@ impl NetrayApp {
                     ..Default::default()
                 })
                 .on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
-            button("Hide")
-                .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    text_color: TEXT_MUTED,
-                    ..Default::default()
-                })
-                .on_press(Message::MinimizeToTray),
             button(icons::lucide_icon(icons::MORE_VERTICAL, 20, Color::WHITE))
                 .padding(6)
                 .style(|_, _| button::Style {
@@ -1308,7 +1336,9 @@ impl NetrayApp {
                                 text_color: Color::WHITE,
                                 ..Default::default()
                             })
-                            .on_press_maybe((!config_locked).then(|| Message::SelectProfile(p_id_1))),
+                            .on_press_maybe(
+                                (!config_locked).then(|| Message::SelectProfile(p_id_1))
+                            ),
                             row![
                                 text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
                                 text(ping_result).size(11).color(ping_color),
@@ -1347,7 +1377,9 @@ impl NetrayApp {
                                         text_color: TEXT_MUTED,
                                         ..Default::default()
                                     })
-                                    .on_press_maybe((!config_locked).then(|| Message::EditProfile(p_id_2))),
+                                    .on_press_maybe(
+                                        (!config_locked).then(|| Message::EditProfile(p_id_2))
+                                    ),
                                 button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED))
                                     .padding(6)
                                     .style(|_, _| button::Style {
@@ -1355,7 +1387,9 @@ impl NetrayApp {
                                         text_color: TEXT_MUTED,
                                         ..Default::default()
                                     })
-                                    .on_press_maybe((!config_locked).then(|| Message::DeleteProfile(p_id_3))),
+                                    .on_press_maybe(
+                                        (!config_locked).then(|| Message::DeleteProfile(p_id_3))
+                                    ),
                             ]
                             .spacing(4)
                             .align_y(Alignment::Center),
@@ -1377,7 +1411,8 @@ impl NetrayApp {
                 Space::with_height(40),
                 text("No profiles added yet.").size(15).color(TEXT_MUTED),
                 Space::with_height(10),
-                button("📋 Import from Clipboard").on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
+                button("📋 Import from Clipboard")
+                    .on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
             ]
             .align_x(Alignment::Center)
             .width(Length::Fill)
@@ -1918,9 +1953,9 @@ impl NetrayApp {
                 .width(Length::Fill)
                 .align_x(Alignment::Center),
         ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 }
 
@@ -1933,18 +1968,57 @@ mod performance_tests {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
         let subscriptions =
             |app: &NetrayApp| iced::advanced::subscription::into_recipes(app.subscription()).len();
-        assert_eq!(subscriptions(&app), 4);
+        assert_eq!(subscriptions(&app), 3);
         app.is_running = true;
-        assert_eq!(subscriptions(&app), 5);
+        assert_eq!(subscriptions(&app), 4);
         for view in [ViewMode::Logs, ViewMode::EditNode, ViewMode::SshSettings] {
             app.view_mode = view;
-            assert_eq!(subscriptions(&app), 4);
+            assert_eq!(subscriptions(&app), 3);
         }
         app.view_mode = ViewMode::Profiles;
-        assert_eq!(subscriptions(&app), 5);
-        app.is_running = false;
         assert_eq!(subscriptions(&app), 4);
+        app.hidden_to_tray = true;
+        assert_eq!(subscriptions(&app), 3);
+        app.hidden_to_tray = false;
+        app.is_running = false;
+        assert_eq!(subscriptions(&app), 3);
     }
+    #[test]
+    fn repeated_show_reuses_window_and_preserves_tunnel() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.hidden_to_tray = true;
+        app.is_running = true;
+        app.worker_active = true;
+        app.connected_at = Some(Instant::now());
+        let connected_at = app.connected_at;
+        let _ = app.update(Message::ShowWindow);
+        let window = app.window_id;
+        assert!(window.is_some());
+        let _ = app.update(Message::ShowWindow);
+        assert_eq!(app.window_id, window);
+        assert!(!app.hidden_to_tray);
+        assert!(app.worker_active && app.is_running);
+        assert_eq!(app.connected_at, connected_at);
+    }
+
+    #[test]
+    fn tray_exit_restores_confirmation_and_waits_for_worker() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.hidden_to_tray = true;
+        app.worker_active = true;
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        app.stop_signal = Some(tx);
+        let _ = app.update(Message::RequestExit);
+        assert!(app.window_id.is_some());
+        assert_eq!(app.close_confirmation, app.window_id);
+        assert!(!app.exit_after_stop);
+        assert!(rx.try_recv().is_err());
+        let _ = app.update(Message::ConfirmExit);
+        assert!(app.exit_after_stop);
+        assert_eq!(rx.try_recv(), Ok(()));
+        assert!(app.worker_active);
+    }
+
     #[tokio::test]
     async fn logging_waits_for_capacity_without_losing_entries() {
         let (tx, mut rx) = mpsc::channel(1);

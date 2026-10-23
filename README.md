@@ -66,3 +66,9 @@ To enable TUN interface creation without requiring `pkexec` password prompts on 
 sudo setcap cap_net_admin,cap_net_bind_service=+ep /usr/local/bin/xray
 ```
 
+
+## Linux tray behavior
+
+The titlebar **−** button hides the window and keeps the tunnel running. Use the tray's **Show Netray** menu item to restore it, **Connect / Disconnect** to control the tunnel, or **Exit** to confirm shutdown. The titlebar **×** button also asks before stopping and exiting.
+
+On Wayland, hiding closes the window surface while retaining the app state and tray, so the running window disappears from the dock. A pinned launcher stays in the dock. GNOME needs a StatusNotifier/AppIndicator extension to display the tray. If tray creation fails, the minimize button uses ordinary minimization so the window remains accessible.
