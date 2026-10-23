@@ -8,6 +8,7 @@ use tunnel::{run_real_tunnel_worker, TunnelConfig};
 use chrono::Local;
 use iced::futures::SinkExt;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use iced::widget::{
     button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
 };
@@ -21,6 +22,11 @@ const TEXT_MUTED: Color = Color::from_rgb(0.55, 0.60, 0.68);
 const INACTIVE_STRIP: Color = Color::from_rgb(0.30, 0.33, 0.38);
 const SUCCESS_GREEN: Color = Color::from_rgb(0.22, 0.78, 0.49);
 const FAILURE_RED: Color = Color::from_rgb(0.95, 0.35, 0.40);
+
+fn format_uptime(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    format!("{:02}:{:02}:{:02}", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+}
 
 fn form_card_style(_theme: &Theme) -> container::Style {
     container::Style {
@@ -106,6 +112,7 @@ pub async fn send_log(
 pub struct NetrayApp {
     pub view_mode: ViewMode,
     pub is_running: bool,
+    pub connected_at: Option<Instant>,
     pub tunnel_mode: TunnelMode,
 
     pub payload_text: String,
@@ -190,6 +197,7 @@ pub enum Message {
 
     LoggerReady(mpsc::UnboundedSender<LogEntry>),
     NewLog(LogEntry),
+    UptimeTick,
     ClearLogs,
 }
 
@@ -209,6 +217,7 @@ impl NetrayApp {
         let app = Self {
             view_mode: ViewMode::Profiles,
             is_running: false,
+            connected_at: None,
             tunnel_mode,
 
             payload_text: saved.payload_text,
@@ -484,10 +493,11 @@ impl NetrayApp {
                 Task::none()
             }
             Message::NewLog(entry) => {
-                if (entry.source == "Supervisor" && entry.message.contains("offline"))
+                if (entry.source == "Supervisor" && (entry.message.contains("offline") || entry.message.contains("Tunnel stopped")))
                     || (entry.source == "Error" && entry.message.contains("Engine failed"))
                 {
                     self.is_running = false;
+                    self.connected_at = None;
                     self.stop_signal = None;
                 }
                 self.logs.push(entry);
@@ -500,16 +510,19 @@ impl NetrayApp {
                 self.logs.clear();
                 Task::none()
             }
+            Message::UptimeTick => Task::none(),
             Message::ToggleTunnel => {
                 if self.is_running {
                     if let Some(stop_tx) = self.stop_signal.take() {
                         let _ = stop_tx.send(());
                     }
                     self.is_running = false;
+                    self.connected_at = None;
                     self.push_log("Supervisor", "Tunnel stopped by user.", LogLevel::Warn);
                     Task::none()
                 } else {
                     self.is_running = true;
+                    self.connected_at = Some(Instant::now());
                     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
                     self.stop_signal = Some(stop_tx);
 
@@ -555,7 +568,7 @@ impl NetrayApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(|| {
+        let logs = Subscription::run(|| {
             iced::stream::channel(100, |mut output| async move {
                 let (tx, mut rx) = mpsc::unbounded_channel::<LogEntry>();
                 let _ = output.send(Message::LoggerReady(tx)).await;
@@ -563,7 +576,11 @@ impl NetrayApp {
                     let _ = output.send(Message::NewLog(log_entry)).await;
                 }
             })
-        })
+        });
+        Subscription::batch([
+            logs,
+            iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick),
+        ])
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -579,18 +596,22 @@ impl NetrayApp {
         let top_bar = row![
             button(icons::lucide_icon(icons::MENU, 22, Color::WHITE))
                 .padding(6)
+                .style(|_, _| button::Style { background: None, ..Default::default() })
                 .on_press(Message::SetViewMode(ViewMode::SshSettings)),
             Space::with_width(12),
             text("Netray").size(22).color(Color::WHITE),
             Space::with_width(Length::Fill),
             button(icons::lucide_icon(icons::FILE_PLUS, 20, Color::WHITE))
                 .padding(6)
+                .style(|_, _| button::Style { background: None, ..Default::default() })
                 .on_press(Message::AddNewProfile),
             button(icons::lucide_icon(icons::LINK, 20, Color::WHITE))
                 .padding(6)
+                .style(|_, _| button::Style { background: None, ..Default::default() })
                 .on_press(Message::RequestClipboardImport),
             button(icons::lucide_icon(icons::MORE_VERTICAL, 20, Color::WHITE))
                 .padding(6)
+                .style(|_, _| button::Style { background: None, ..Default::default() })
                 .on_press(Message::SetViewMode(ViewMode::Logs)),
         ]
         .spacing(6)
@@ -638,9 +659,9 @@ impl NetrayApp {
                 let p_id_2 = p.id.clone();
                 let p_id_3 = p.id.clone();
                 let p_cfg_1 = p.config.clone();
-                let ping_label = if self.ping_in_progress.as_deref() == Some(&p.id) { "Testing…" } else { "Ping" };
+                let pinging = self.ping_in_progress.as_deref() == Some(&p.id);
                 let ping_press = self.ping_in_progress.is_none().then(|| Message::PingProfile(p.id.clone()));
-                let ping_result = self.ping_results.get(&p.id).cloned().unwrap_or_default();
+                let ping_result = if pinging { "Testing…".to_string() } else { self.ping_results.get(&p.id).cloned().unwrap_or_default() };
                 let ping_color = if ping_result == "Failed" { FAILURE_RED } else { SUCCESS_GREEN };
 
                 container(row![
@@ -665,7 +686,7 @@ impl NetrayApp {
                             text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
                             text(ping_result).size(11).color(ping_color),
                             Space::with_width(Length::Fill),
-                            button(ping_label).padding(6).style(|_, _| button::Style { background: Some(ACCENT_BLUE.into()), text_color: Color::WHITE, border: iced::Border { radius: 6.0.into(), ..Default::default() }, ..Default::default() }).on_press_maybe(ping_press),
+                            button(icons::lucide_icon(icons::ACTIVITY, 18, Color::WHITE)).padding(10).style(move |_, _| button::Style { background: Some(if pinging { ACCENT_BLUE_LIGHT } else { ACCENT_BLUE }.into()), text_color: Color::WHITE, border: iced::Border { radius: 24.0.into(), ..Default::default() }, ..Default::default() }).on_press_maybe(ping_press),
                             button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::ShareProfile(p_cfg_1)),
                             button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::EditProfile(p_id_2)),
                             button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::DeleteProfile(p_id_3)),
@@ -701,9 +722,18 @@ impl NetrayApp {
         };
 
         let fab_row = row![
+            button(row![
+                text("●").color(if self.is_running { SUCCESS_GREEN } else { TEXT_MUTED }),
+                text(if self.is_running {
+                    format!("CONNECTED · {}", format_uptime(self.connected_at.map(|at| at.elapsed()).unwrap_or_default()))
+                } else { "DISCONNECTED".to_string() }).size(12).color(TEXT_MUTED),
+            ].spacing(6).align_y(Alignment::Center))
+                .padding(8)
+                .style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() })
+                .on_press(Message::SetViewMode(ViewMode::Logs)),
             Space::with_width(Length::Fill),
             button(fab_icon)
-                .padding(18)
+                .padding(16)
                 .style(|_, _| button::Style {
                     background: Some(ACCENT_BLUE.into()),
                     border: iced::Border { radius: 32.0.into(), ..Default::default() },
