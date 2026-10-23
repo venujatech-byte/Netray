@@ -81,7 +81,13 @@ pub fn load_data() -> AppData {
     let path = get_config_path();
     if path.exists() {
         if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(data) = serde_json::from_str::<AppData>(&content) {
+            if let Ok(mut data) = serde_json::from_str::<AppData>(&content) {
+                if data.v2ray_profiles.is_empty() {
+                    let def = AppData::default();
+                    data.v2ray_profiles = def.v2ray_profiles;
+                    data.active_profile_id = def.active_profile_id;
+                    data.v2ray_uri_or_json = def.v2ray_uri_or_json;
+                }
                 return data;
             }
         }
