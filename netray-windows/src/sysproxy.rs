@@ -1,30 +1,38 @@
 use tokio::process::Command;
 
+fn proxy_command(program: &str) -> Command {
+    #[allow(unused_mut)] // Mutated only by the Windows creation flags.
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    command
+}
+
 /// Enable Windows system-wide proxy routing via Registry (reg.exe)
 pub async fn enable_system_proxy(socks_port: u16, http_port: u16) -> Result<(), String> {
     let reg_path = r#"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings"#;
     let proxy_server = format!("http=127.0.0.1:{};https=127.0.0.1:{};socks=127.0.0.1:{}", http_port, http_port, socks_port);
 
     // 1. Enable proxy
-    let _ = Command::new("reg")
+    let _ = proxy_command("reg")
         .args(["add", reg_path, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"])
         .output()
         .await;
 
     // 2. Set server string
-    let _ = Command::new("reg")
+    let _ = proxy_command("reg")
         .args(["add", reg_path, "/v", "ProxyServer", "/t", "REG_SZ", "/d", &proxy_server, "/f"])
         .output()
         .await;
 
     // 3. Bypass local intranet
-    let _ = Command::new("reg")
+    let _ = proxy_command("reg")
         .args(["add", reg_path, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "<local>;localhost;127.0.0.1", "/f"])
         .output()
         .await;
 
     // 4. Force WinINet / Internet Settings refresh via PowerShell or rundll32
-    let _ = Command::new("powershell")
+    let _ = proxy_command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", "
             $sig = @'
             [DllImport(\"wininet.dll\", SetLastError = true, CharSet = CharSet.Auto)]
@@ -46,12 +54,12 @@ pub async fn enable_system_proxy(socks_port: u16, http_port: u16) -> Result<(), 
 pub async fn disable_system_proxy() {
     let reg_path = r#"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings"#;
 
-    let _ = Command::new("reg")
+    let _ = proxy_command("reg")
         .args(["add", reg_path, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"])
         .output()
         .await;
 
-    let _ = Command::new("powershell")
+    let _ = proxy_command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", "
             $sig = @'
             [DllImport(\"wininet.dll\", SetLastError = true, CharSet = CharSet.Auto)]

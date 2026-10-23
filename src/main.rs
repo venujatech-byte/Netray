@@ -229,6 +229,7 @@ pub struct NetrayApp {
 
     // Real-time Logs & Background Worker Control
     pub logs: Vec<LogEntry>,
+    auto_scroll_logs: bool,
     pub log_sender: Option<mpsc::Sender<LogEntry>>,
     pub stop_signal: Option<tokio::sync::oneshot::Sender<()>>,
     close_confirmation: Option<iced::window::Id>,
@@ -306,6 +307,7 @@ pub enum Message {
     NewLog(LogEntry),
     UptimeTick,
     ClearLogs,
+    AutoScrollLogs(bool),
     CloseRequested(iced::window::Id),
     WindowOpened(iced::window::Id),
     ShowWindow,
@@ -371,6 +373,7 @@ impl NetrayApp {
                 message: "Ready to connect.".into(),
                 level: LogLevel::Info,
             }],
+            auto_scroll_logs: true,
             log_sender: None,
             stop_signal: None,
             close_confirmation: None,
@@ -440,6 +443,13 @@ impl NetrayApp {
     // ========================================================================
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let scroll = matches!(
+            message,
+            Message::NewLog(_)
+                | Message::PingFinished(..)
+                | Message::SetViewMode(ViewMode::Logs)
+                | Message::AutoScrollLogs(true)
+        );
         let previous = (self.is_running, self.worker_active);
         let opened = matches!(message, Message::WindowOpened(_));
         let task = self.update_message(message);
@@ -453,7 +463,14 @@ impl NetrayApp {
                 item.set_enabled(self.is_running || !self.worker_active);
             }
         }
-        task
+        if scroll && self.auto_scroll_logs && self.view_mode == ViewMode::Logs {
+            task.chain(scrollable::snap_to(
+                scrollable::Id::new("logs"),
+                scrollable::RelativeOffset::END,
+            ))
+        } else {
+            task
+        }
     }
 
     fn update_message(&mut self, message: Message) -> Task<Message> {
@@ -915,15 +932,16 @@ impl NetrayApp {
                 Task::none()
             }
             Message::NewLog(entry) => {
-                if (entry.source == "Supervisor" && entry.message.contains("offline"))
-                    || (entry.source == "Error" && entry.message.contains("Engine failed"))
-                {
+                let stopped = entry.source == "Supervisor" && entry.message.contains("offline");
+                if stopped || (entry.source == "Error" && entry.message.contains("Engine failed")) {
                     self.is_running = false;
                     self.connected_at = None;
+                }
+                // Only the final offline event means proxy and route cleanup has finished.
+                if stopped {
                     self.stop_signal = None;
                     self.worker_active = false;
                 }
-                let stopped = entry.source == "Supervisor" && entry.message.contains("offline");
                 self.logs.push(entry);
                 if self.logs.len() > 150 {
                     self.logs.drain(0..30);
@@ -934,6 +952,10 @@ impl NetrayApp {
                 } else {
                     Task::none()
                 }
+            }
+            Message::AutoScrollLogs(enabled) => {
+                self.auto_scroll_logs = enabled;
+                Task::none()
             }
             Message::ClearLogs => {
                 self.logs.clear();
@@ -1856,23 +1878,31 @@ impl NetrayApp {
             })
             .collect();
 
-        let terminal = container(scrollable(column(log_rows).spacing(6)).height(Length::Fill))
-            .padding(12)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
-                border: iced::Border {
-                    radius: 6.0.into(),
-                    width: 1.0,
-                    color: Color::from_rgb(0.18, 0.20, 0.25),
-                },
-                ..Default::default()
-            });
+        let terminal = container(
+            scrollable(column(log_rows).spacing(6))
+                .id(scrollable::Id::new("logs"))
+                .height(Length::Fill),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.18, 0.20, 0.25),
+            },
+            ..Default::default()
+        });
 
         column![
             top_bar,
             status_bar,
+            container(
+                checkbox("Auto-scroll", self.auto_scroll_logs).on_toggle(Message::AutoScrollLogs)
+            )
+            .padding([4, 12]),
             container(terminal)
                 .padding(iced::Padding {
                     top: 8.0,
@@ -2002,6 +2032,46 @@ impl NetrayApp {
 #[cfg(test)]
 mod performance_tests {
     use super::*;
+
+    #[test]
+    fn errors_do_not_release_worker_before_cleanup() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.worker_active = true;
+        app.is_running = true;
+        let _ = app.update(Message::NewLog(LogEntry {
+            timestamp: String::new(),
+            source: "Error".into(),
+            message: "Engine failed: test".into(),
+            level: LogLevel::Error,
+        }));
+        assert!(app.worker_active);
+        assert!(!app.is_running);
+        let _ = app.update(Message::NewLog(LogEntry {
+            timestamp: String::new(),
+            source: "Supervisor".into(),
+            message: "Tunnel is offline.".into(),
+            level: LogLevel::Info,
+        }));
+        assert!(!app.worker_active);
+    }
+
+    #[test]
+    fn disabling_auto_scroll_keeps_incoming_logs() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let _ = app.update(Message::SetViewMode(ViewMode::Logs));
+        let _ = app.update(Message::AutoScrollLogs(false));
+        let count = app.logs.len();
+        let _ = app.update(Message::NewLog(LogEntry {
+            timestamp: String::new(),
+            source: "Test".into(),
+            message: "still collected".into(),
+            level: LogLevel::Info,
+        }));
+        assert!(!app.auto_scroll_logs);
+        assert_eq!(app.logs.len(), count + 1);
+        let _ = app.update(Message::AutoScrollLogs(true));
+        assert!(app.auto_scroll_logs);
+    }
 
     #[test]
     fn uptime_only_subscribes_when_visible_and_running() {

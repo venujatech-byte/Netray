@@ -83,9 +83,6 @@ pub async fn run_real_tunnel_worker(
         send_log(&log_tx, "SystemProxy", "System proxy disabled. Network restored.", LogLevel::Info).await;
     }
 
-    // Windows safety cleanup
-    let _ = Command::new("taskkill").args(["/F", "/IM", "xray.exe"]).output().await;
-
     send_log(&log_tx, "Supervisor", "Tunnel is offline.", LogLevel::Info).await;
 }
 

@@ -79,7 +79,11 @@ fn load_logo_pixels() -> Result<(Vec<u8>, u32, u32), Box<dyn std::error::Error>>
             .ok_or("tray icon image is too large")?
     ];
     let info = reader.next_frame(&mut pixels)?;
-    Ok((pixels[..info.buffer_size()].to_vec(), info.width, info.height))
+    Ok((
+        pixels[..info.buffer_size()].to_vec(),
+        info.width,
+        info.height,
+    ))
 }
 
 fn create_window_icon() -> Option<iced::window::Icon> {
@@ -201,6 +205,7 @@ pub struct NetrayApp {
     pub enable_sysproxy: bool,
 
     pub logs: Vec<LogEntry>,
+    auto_scroll_logs: bool,
     pub log_sender: Option<mpsc::Sender<LogEntry>>,
     pub stop_signal: Option<tokio::sync::oneshot::Sender<()>>,
     close_confirmation: Option<iced::window::Id>,
@@ -267,6 +272,7 @@ pub enum Message {
     NewLog(LogEntry),
     UptimeTick,
     ClearLogs,
+    AutoScrollLogs(bool),
     CloseRequested(iced::window::Id),
     WindowOpened(iced::window::Id),
     WindowTick,
@@ -328,6 +334,7 @@ impl NetrayApp {
                 message: "Ready to connect on Windows.".into(),
                 level: LogLevel::Info,
             }],
+            auto_scroll_logs: true,
             log_sender: None,
             stop_signal: None,
             close_confirmation: None,
@@ -382,6 +389,25 @@ impl NetrayApp {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let scroll = matches!(
+            message,
+            Message::NewLog(_)
+                | Message::PingFinished(..)
+                | Message::SetViewMode(ViewMode::Logs)
+                | Message::AutoScrollLogs(true)
+        );
+        let task = self.update_message(message);
+        if scroll && self.auto_scroll_logs && self.view_mode == ViewMode::Logs {
+            task.chain(scrollable::snap_to(
+                scrollable::Id::new("logs"),
+                scrollable::RelativeOffset::END,
+            ))
+        } else {
+            task
+        }
+    }
+
+    fn update_message(&mut self, message: Message) -> Task<Message> {
         if self.config_locked()
             && matches!(
                 &message,
@@ -753,19 +779,16 @@ impl NetrayApp {
                 Task::none()
             }
             Message::NewLog(entry) => {
-                if (entry.source == "Supervisor"
-                    && (entry.message.contains("offline")
-                        || entry.message.contains("Tunnel stopped")))
-                    || (entry.source == "Error" && entry.message.contains("Engine failed"))
-                {
+                let stopped = entry.source == "Supervisor" && entry.message.contains("offline");
+                if stopped || (entry.source == "Error" && entry.message.contains("Engine failed")) {
                     self.is_running = false;
                     self.connected_at = None;
+                }
+                // Only the final offline event means proxy and route cleanup has finished.
+                if stopped {
                     self.stop_signal = None;
                     self.worker_active = false;
                 }
-                let stopped = entry.source == "Supervisor"
-                    && (entry.message.contains("offline")
-                        || entry.message.contains("Tunnel stopped"));
                 self.logs.push(entry);
                 if self.logs.len() > 150 {
                     self.logs.drain(0..30);
@@ -779,6 +802,10 @@ impl NetrayApp {
                 } else {
                     Task::none()
                 }
+            }
+            Message::AutoScrollLogs(enabled) => {
+                self.auto_scroll_logs = enabled;
+                Task::none()
             }
             Message::ClearLogs => {
                 self.logs.clear();
@@ -797,14 +824,22 @@ impl NetrayApp {
                             self.tray_icon = Some(icon);
                             self.tray_connect_item = Some(connect);
                         }
-                        Err(error) => self.push_log("Tray", format!("System tray unavailable: {error}"), LogLevel::Warn),
+                        Err(error) => self.push_log(
+                            "Tray",
+                            format!("System tray unavailable: {error}"),
+                            LogLevel::Warn,
+                        ),
                     }
                 }
                 Task::none()
             }
             Message::WindowTick => {
                 if let Some(item) = &self.tray_connect_item {
-                    item.set_text(if self.is_running { "Disconnect" } else { "Connect" });
+                    item.set_text(if self.is_running {
+                        "Disconnect"
+                    } else {
+                        "Connect"
+                    });
                     item.set_enabled(self.is_running || !self.worker_active);
                 }
                 if let Ok(event) = TrayIconEvent::receiver().try_recv() {
@@ -1209,7 +1244,9 @@ impl NetrayApp {
                                 text_color: Color::WHITE,
                                 ..Default::default()
                             })
-                            .on_press_maybe((!config_locked).then(|| Message::SelectProfile(p_id_1))),
+                            .on_press_maybe(
+                                (!config_locked).then(|| Message::SelectProfile(p_id_1))
+                            ),
                             row![
                                 text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
                                 text(ping_result).size(11).color(ping_color),
@@ -1248,7 +1285,9 @@ impl NetrayApp {
                                         text_color: TEXT_MUTED,
                                         ..Default::default()
                                     })
-                                    .on_press_maybe((!config_locked).then(|| Message::EditProfile(p_id_2))),
+                                    .on_press_maybe(
+                                        (!config_locked).then(|| Message::EditProfile(p_id_2))
+                                    ),
                                 button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED))
                                     .padding(6)
                                     .style(|_, _| button::Style {
@@ -1256,7 +1295,9 @@ impl NetrayApp {
                                         text_color: TEXT_MUTED,
                                         ..Default::default()
                                     })
-                                    .on_press_maybe((!config_locked).then(|| Message::DeleteProfile(p_id_3))),
+                                    .on_press_maybe(
+                                        (!config_locked).then(|| Message::DeleteProfile(p_id_3))
+                                    ),
                             ]
                             .spacing(4)
                             .align_y(Alignment::Center),
@@ -1278,7 +1319,8 @@ impl NetrayApp {
                 Space::with_height(40),
                 text("No profiles added yet.").size(15).color(TEXT_MUTED),
                 Space::with_height(10),
-                button("Import from Clipboard").on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
+                button("Import from Clipboard")
+                    .on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
             ]
             .align_x(Alignment::Center)
             .width(Length::Fill)
@@ -1662,23 +1704,31 @@ impl NetrayApp {
             })
             .collect();
 
-        let terminal = container(scrollable(column(log_rows).spacing(6)).height(Length::Fill))
-            .padding(12)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
-                border: iced::Border {
-                    radius: 6.0.into(),
-                    width: 1.0,
-                    color: Color::from_rgb(0.18, 0.20, 0.25),
-                },
-                ..Default::default()
-            });
+        let terminal = container(
+            scrollable(column(log_rows).spacing(6))
+                .id(scrollable::Id::new("logs"))
+                .height(Length::Fill),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.18, 0.20, 0.25),
+            },
+            ..Default::default()
+        });
 
         column![
             top_bar,
             status_bar,
+            container(
+                checkbox("Auto-scroll", self.auto_scroll_logs).on_toggle(Message::AutoScrollLogs)
+            )
+            .padding([4, 12]),
             container(terminal)
                 .padding(iced::Padding {
                     top: 8.0,
@@ -1807,16 +1857,56 @@ impl NetrayApp {
                 .width(Length::Fill)
                 .align_x(Alignment::Center),
         ]
-            .spacing(6)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        .spacing(6)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 }
 
 #[cfg(test)]
 mod performance_tests {
     use super::*;
+
+    #[test]
+    fn errors_do_not_release_worker_before_cleanup() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.worker_active = true;
+        app.is_running = true;
+        let _ = app.update(Message::NewLog(LogEntry {
+            timestamp: String::new(),
+            source: "Error".into(),
+            message: "Engine failed: test".into(),
+            level: LogLevel::Error,
+        }));
+        assert!(app.worker_active);
+        assert!(!app.is_running);
+        let _ = app.update(Message::NewLog(LogEntry {
+            timestamp: String::new(),
+            source: "Supervisor".into(),
+            message: "Tunnel is offline.".into(),
+            level: LogLevel::Info,
+        }));
+        assert!(!app.worker_active);
+    }
+
+    #[test]
+    fn disabling_auto_scroll_keeps_incoming_logs() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let _ = app.update(Message::SetViewMode(ViewMode::Logs));
+        let _ = app.update(Message::AutoScrollLogs(false));
+        let count = app.logs.len();
+        let _ = app.update(Message::NewLog(LogEntry {
+            timestamp: String::new(),
+            source: "Test".into(),
+            message: "still collected".into(),
+            level: LogLevel::Info,
+        }));
+        assert!(!app.auto_scroll_logs);
+        assert_eq!(app.logs.len(), count + 1);
+        let _ = app.update(Message::AutoScrollLogs(true));
+        assert!(app.auto_scroll_logs);
+    }
 
     #[test]
     fn uptime_only_subscribes_when_visible_and_running() {
