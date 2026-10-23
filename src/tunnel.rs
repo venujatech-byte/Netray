@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use russh::client;
 use russh_keys::key;
 use rustls_pki_types::ServerName;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -281,6 +282,23 @@ async fn handle_socks5_client(
 // ENGINE 2: XRAY / V2RAY CORE SUPERVISOR
 // ============================================================================
 
+fn is_running_as_root() -> bool {
+    unsafe {
+        extern "C" {
+            fn geteuid() -> u32;
+        }
+        geteuid() == 0
+    }
+}
+
+fn binary_has_cap_net_admin(bin: &Path) -> bool {
+    if let Ok(output) = std::process::Command::new("getcap").arg(bin).output() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        return text.contains("cap_net_admin");
+    }
+    false
+}
+
 fn classify_xray_log(line: &str) -> LogLevel {
     if line.contains("[Warning]") {
         LogLevel::Warn
@@ -364,26 +382,86 @@ async fn run_xray_engine(
         }
     }
 
+    let is_root = is_running_as_root();
+    let has_caps = binary_has_cap_net_admin(&xray_bin);
+    let use_pkexec = cfg.enable_tun && !is_root && !has_caps && Path::new("/usr/bin/pkexec").exists();
+
     if cfg.enable_tun {
-        send_log(
-            log_tx,
-            "TUN",
-            "TUN mode enabled (tun0 interface configured in core engine).",
-            LogLevel::Success,
-        )
-        .await;
+        if is_root || has_caps {
+            send_log(
+                log_tx,
+                "TUN",
+                "TUN mode active (root/CAP_NET_ADMIN verified; creating tun0 virtual interface)...",
+                LogLevel::Success,
+            )
+            .await;
+        } else if use_pkexec {
+            send_log(
+                log_tx,
+                "TUN",
+                "TUN mode requires root privileges to create virtual interface 'tun0'. Requesting authorization via pkexec...",
+                LogLevel::Info,
+            )
+            .await;
+        } else {
+            send_log(
+                log_tx,
+                "TUN",
+                "Warning: TUN mode requires root or CAP_NET_ADMIN privileges to create interface. Run: sudo setcap cap_net_admin,cap_net_bind_service=+ep /usr/local/bin/xray",
+                LogLevel::Warn,
+            )
+            .await;
+        }
     }
 
     send_log(log_tx, "Xray", "Spawning core process...", LogLevel::Info).await;
 
-    let mut child = Command::new(&xray_bin)
-        .arg("run")
-        .arg("-c")
-        .arg(&config_path)
+    let mut cmd = if use_pkexec {
+        let mut c = Command::new("pkexec");
+        c.arg(&xray_bin)
+            .arg("run")
+            .arg("-c")
+            .arg(&config_path);
+        c
+    } else {
+        let mut c = Command::new(&xray_bin);
+        c.arg("run")
+            .arg("-c")
+            .arg(&config_path);
+        c
+    };
+
+    let mut child = match cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .spawn()?;
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&config_path).await;
+            if use_pkexec {
+                send_log(
+                    log_tx,
+                    "TUN",
+                    format!("Failed to spawn pkexec: {}. Falling back to unprivileged core.", e),
+                    LogLevel::Warn,
+                )
+                .await;
+                let mut fallback = Command::new(&xray_bin);
+                fallback
+                    .arg("run")
+                    .arg("-c")
+                    .arg(&config_path)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()?
+            } else {
+                return Err(e.into());
+            }
+        }
+    };
 
     if let Some(stdout) = child.stdout.take() {
         let mut reader = BufReader::new(stdout).lines();
@@ -409,6 +487,25 @@ async fn run_xray_engine(
 
     let status = child.wait().await?;
     let _ = tokio::fs::remove_file(&config_path).await;
-    send_log(log_tx, "Xray", format!("Core process exited with: {}", status), LogLevel::Warn).await;
+    let _ = tokio::process::Command::new("pkill")
+        .args(["-f", &config_path])
+        .output()
+        .await;
+
+    if !status.success() {
+        if use_pkexec && status.code() == Some(126) {
+            send_log(
+                log_tx,
+                "TUN",
+                "TUN authorization was dismissed. Tip: Enable GNOME System Proxy for rootless routing, or grant capability: sudo setcap cap_net_admin,cap_net_bind_service=+ep /usr/local/bin/xray",
+                LogLevel::Warn,
+            )
+            .await;
+        } else {
+            send_log(log_tx, "Xray", format!("Core process exited with: {}", status), LogLevel::Warn).await;
+        }
+    } else {
+        send_log(log_tx, "Xray", format!("Core process exited cleanly: {}", status), LogLevel::Info).await;
+    }
     Ok(())
 }
