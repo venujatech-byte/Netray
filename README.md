@@ -30,15 +30,17 @@ Netray is available with first-class native support for both **Linux** and **Win
 
 ## Building & Running (Linux)
 
-Ensure you have Rust (2021 edition) and `xray` installed.
+Ensure you have Rust (2021 edition). Development builds can use an installed `xray` on PATH; portable release packages include Xray-core.
 
 ```bash
 # Check and run
 cargo run
 
-# Build optimized release binary
-cargo build --release
+# Build a portable package with Xray-core (requires curl, unzip, and sha256sum)
+bash scripts/package-linux.sh
 ```
+
+The package is written to `dist/` and includes the upstream Xray license and source notice. The packaging script currently supports Linux x86-64 and ARM64.
 
 ## Building & Running (Windows)
 

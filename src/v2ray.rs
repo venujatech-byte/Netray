@@ -6,6 +6,14 @@ use url::Url;
 
 /// Locate the xray or v2ray binary on the local system
 pub fn find_xray_binary() -> Result<PathBuf, String> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(path) = exe.parent().map(|dir| dir.join("xray")) {
+            if path.is_file() {
+                return Ok(path);
+            }
+        }
+    }
+
     // 1. Check standard environment PATH via `which`
     if let Ok(path) = which::which("xray").or_else(|_| which::which("v2ray")) {
         return Ok(path);
@@ -31,9 +39,7 @@ pub fn find_xray_binary() -> Result<PathBuf, String> {
     }
 
     Err(
-        "Neither 'xray' nor 'v2ray' core binary was found on your system.\n\
-         Please install Xray (e.g., bash -c \"$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\") \
-         or place the binary in /usr/local/bin/xray."
+        "Neither 'xray' nor 'v2ray' core binary was found. Place xray beside Netray or install it on PATH."
             .to_string(),
     )
 }
