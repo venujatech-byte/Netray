@@ -1,22 +1,15 @@
-#[path = "../src/sysproxy.rs"]
-mod sysproxy;
+use netray_windows::sysproxy;
 
-#[test]
-fn test_windows_sysproxy_command_format() {
-    let port = 10808;
-    // Test that enable and disable commands construct proper windows registry commands without crashing
-    let enable_res = sysproxy::enable_windows_proxy(port);
-    let disable_res = sysproxy::disable_windows_proxy();
-
-    // In a test environment (e.g. Linux or CI without admin registry access),
-    // these functions gracefully return Ok or Err, but should never panic.
-    match enable_res {
-        Ok(_) => println!("Registry enable succeeded or skipped gracefully"),
-        Err(e) => println!("Registry enable simulated error: {e}"),
+#[tokio::test]
+async fn test_windows_sysproxy_command_format() {
+    let socks_port = 10808;
+    let http_port = 10809;
+    // enable_system_proxy returns Result, disable_system_proxy returns ()
+    match sysproxy::enable_system_proxy(socks_port, http_port).await {
+        Ok(_) => println!("Registry enable succeeded"),
+        Err(e) => println!("Registry enable expected error on Linux: {e}"),
     }
-
-    match disable_res {
-        Ok(_) => println!("Registry disable succeeded or skipped gracefully"),
-        Err(e) => println!("Registry disable simulated error: {e}"),
-    }
+    // disable returns () — just call it and verify no panic
+    sysproxy::disable_system_proxy().await;
+    println!("Registry disable completed without panic");
 }
