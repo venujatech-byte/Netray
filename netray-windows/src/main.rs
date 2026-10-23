@@ -203,7 +203,10 @@ pub enum Message {
 
 impl NetrayApp {
     fn new() -> (Self, Task<Message>) {
-        let saved = storage::load_data();
+        Self::from_saved(storage::load_data())
+    }
+
+    fn from_saved(saved: storage::AppData) -> (Self, Task<Message>) {
         let tunnel_mode = match saved.tunnel_mode.as_str() {
             "SshPayload" => TunnelMode::SshPayload,
             "SshSslSni" => TunnelMode::SshSslSni,
@@ -335,9 +338,13 @@ impl NetrayApp {
                 }
                 Task::none()
             }
-            Message::ShareProfile(cfg) => {
-                self.push_log("Share", "Copied configuration link to clipboard.", LogLevel::Success);
-                iced::clipboard::write(cfg)
+            Message::ShareProfile(id) => {
+                if let Some(config) = self.v2ray_profiles.iter().find(|p| p.id == id).map(|p| p.config.clone()) {
+                    self.push_log("Share", "Copied configuration link to clipboard.", LogLevel::Success);
+                    iced::clipboard::write(config)
+                } else {
+                    Task::none()
+                }
             }
             Message::EditProfile(id) => {
                 if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id) {
@@ -577,10 +584,14 @@ impl NetrayApp {
                 }
             })
         });
-        Subscription::batch([
-            logs,
-            iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick),
-        ])
+        if self.is_running && self.view_mode == ViewMode::Profiles {
+            Subscription::batch([
+                logs,
+                iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick),
+            ])
+        } else {
+            logs
+        }
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -658,10 +669,10 @@ impl NetrayApp {
                 let p_id_1 = p.id.clone();
                 let p_id_2 = p.id.clone();
                 let p_id_3 = p.id.clone();
-                let p_cfg_1 = p.config.clone();
+                let share_id = p.id.clone();
                 let pinging = self.ping_in_progress.as_deref() == Some(&p.id);
                 let ping_press = self.ping_in_progress.is_none().then(|| Message::PingProfile(p.id.clone()));
-                let ping_result = if pinging { "Testing…".to_string() } else { self.ping_results.get(&p.id).cloned().unwrap_or_default() };
+                let ping_result = if pinging { "Testing…" } else { self.ping_results.get(&p.id).map(String::as_str).unwrap_or_default() };
                 let ping_color = if ping_result == "Failed" { FAILURE_RED } else { SUCCESS_GREEN };
 
                 container(row![
@@ -675,7 +686,7 @@ impl NetrayApp {
                     Space::with_width(12),
                     column![
                         button(column![
-                            text(p.name.clone()).size(15).color(Color::WHITE),
+                            text(p.name.as_str()).size(15).color(Color::WHITE),
                             text(node_addr).size(12).color(TEXT_MUTED),
                         ].spacing(4).width(Length::Fill))
                         .padding(0)
@@ -687,7 +698,7 @@ impl NetrayApp {
                             text(ping_result).size(11).color(ping_color),
                             Space::with_width(Length::Fill),
                             button(icons::lucide_icon(icons::ACTIVITY, 18, Color::WHITE)).padding(10).style(move |_, _| button::Style { background: Some(if pinging { ACCENT_BLUE_LIGHT } else { ACCENT_BLUE }.into()), text_color: Color::WHITE, border: iced::Border { radius: 24.0.into(), ..Default::default() }, ..Default::default() }).on_press_maybe(ping_press),
-                            button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::ShareProfile(p_cfg_1)),
+                            button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::ShareProfile(share_id)),
                             button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::EditProfile(p_id_2)),
                             button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::DeleteProfile(p_id_3)),
                         ].spacing(4).align_y(Alignment::Center),
@@ -1131,5 +1142,27 @@ impl NetrayApp {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+    }
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+
+    #[test]
+    fn uptime_only_subscribes_when_visible_and_running() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let subscriptions = |app: &NetrayApp| iced::advanced::subscription::into_recipes(app.subscription()).len();
+        assert_eq!(subscriptions(&app), 1);
+        app.is_running = true;
+        assert_eq!(subscriptions(&app), 2);
+        for view in [ViewMode::Logs, ViewMode::EditNode, ViewMode::SshSettings] {
+            app.view_mode = view;
+            assert_eq!(subscriptions(&app), 1);
+        }
+        app.view_mode = ViewMode::Profiles;
+        assert_eq!(subscriptions(&app), 2);
+        app.is_running = false;
+        assert_eq!(subscriptions(&app), 1);
     }
 }
