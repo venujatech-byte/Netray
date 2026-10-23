@@ -72,3 +72,9 @@ sudo setcap cap_net_admin,cap_net_bind_service=+ep /usr/local/bin/xray
 The titlebar **−** button hides the window and keeps the tunnel running. Use the tray's **Show Netray** menu item to restore it, **Connect / Disconnect** to control the tunnel, or **Exit** to confirm shutdown. The titlebar **×** button also asks before stopping and exiting.
 
 On Wayland, hiding closes the window surface while retaining the app state and tray, so the running window disappears from the dock. A pinned launcher stays in the dock. GNOME needs a StatusNotifier/AppIndicator extension to display the tray. If tray creation fails, the minimize button uses ordinary minimization so the window remains accessible.
+
+The Linux build prefers X11/XWayland when `DISPLAY` is available. This works around an Iced 0.13 software-renderer helper window that otherwise appears as a second, generic dock icon on Wayland. Native Wayland remains a fallback when no X server is available; the helper-window issue still applies there.
+
+The logs page has an **Auto-scroll** checkbox. Uncheck it to read older entries without being moved to the bottom.
+
+**Ping** measures an HTTP response through the profile's primary proxy outbound using a short-lived, isolated Xray process. It requests `http://www.gstatic.com/generate_204` and waits for HTTP 204; the displayed time includes the proxy connection and remote response, excluding core startup. It is not ICMP latency. A blocked probe endpoint produces a failure even if other sites work. Configuration is passed through stdin, and the probe process is stopped after each measurement.

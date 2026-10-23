@@ -43,6 +43,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Run Linux tests
+        if: runner.os == 'Linux'
+        run: cargo test --locked
+
       - name: Run Windows tests
         if: runner.os == 'Windows'
         run: cargo test --manifest-path netray-windows/Cargo.toml --verbose
