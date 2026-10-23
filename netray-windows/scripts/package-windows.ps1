@@ -1,4 +1,7 @@
+param([string]$Version = "0.1.0")
+
 $ErrorActionPreference = "Stop"
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use MAJOR.MINOR.PATCH format." }
 
 $version = "v26.10.21"
 $asset = "Xray-windows-64.zip"
@@ -32,7 +35,7 @@ Corresponding source: https://github.com/XTLS/Xray-core/tree/$version
 Upstream dependency list: https://github.com/XTLS/Xray-core/blob/$version/go.mod
 "@
 
-    $archive = Join-Path (Split-Path $package -Parent) "netray-windows.zip"
+    $archive = Join-Path (Split-Path $package -Parent) "netray-windows-$Version.zip"
     Compress-Archive -Path (Join-Path $package "*") -DestinationPath $archive -Force
     Write-Host "Portable release package: $archive"
 } finally {
