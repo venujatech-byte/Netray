@@ -151,10 +151,23 @@ pub async fn pin_proxy_dns(config: &mut Value) -> Result<(), String> {
     bootstrap_dns::pin_proxy_address(config).await
 }
 
+pub async fn ping_local_http_proxy(port: u16) -> Result<u128, String> {
+    latency::ping_local_http_proxy(port).await
+}
+
+pub async fn wait_for_http_proxy(port: u16) -> Result<u128, String> {
+    latency::wait_for_http_proxy(port).await
+}
+
 pub async fn ping_profile(raw: &str) -> Result<u128, String> {
     let normalized = parse_and_generate_xray_config(raw, 10808, 10809, false)?;
-    let config =
+    let mut config: Value =
         serde_json::from_str(&normalized).map_err(|e| format!("Invalid Xray config: {e}"))?;
+    config["dns"] = json!({
+        "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"],
+        "hosts": {}
+    });
+    pin_proxy_dns(&mut config).await?;
     latency::measure(&find_xray_binary()?, config).await
 }
 

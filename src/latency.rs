@@ -87,6 +87,36 @@ pub async fn measure(binary: &Path, mut config: Value) -> Result<u128, String> {
     result
 }
 
+pub async fn ping_local_http_proxy(port: u16) -> Result<u128, String> {
+    let stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .map_err(|error| format!("Local Xray HTTP proxy is unavailable: {error}"))?;
+    timeout(Duration::from_secs(10), response_latency(stream))
+        .await
+        .map_err(|_| "Remote proxy check timed out after 10 seconds.".to_owned())?
+}
+
+pub async fn wait_for_http_proxy(port: u16) -> Result<u128, String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)).await {
+            Ok(stream) => {
+                return timeout(Duration::from_secs(10), response_latency(stream))
+                    .await
+                    .map_err(|_| "Xray started, but the remote HTTP check timed out.".to_owned())?
+            }
+            Err(_error) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Xray HTTP proxy did not start on port {port}: {error}"
+                ))
+            }
+        }
+    }
+}
+
 async fn response_latency(mut stream: TcpStream) -> Result<u128, String> {
     let started = Instant::now();
     stream.write_all(b"GET http://www.gstatic.com/generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
@@ -179,6 +209,24 @@ mod tests {
             let stream = TcpStream::connect(address).await.unwrap();
             assert!(response_latency(stream).await.unwrap() >= 50);
         }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn startup_probe_waits_for_proxy_then_checks_remote_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 512];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        assert!(wait_for_http_proxy(port).await.unwrap() >= 50);
         server.await.unwrap();
     }
 

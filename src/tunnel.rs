@@ -517,7 +517,39 @@ cleanup
         spawn_xray_log_pipe(stderr, log_tx.clone());
     }
 
-    let status_opt = tokio::select! {
+    send_log(
+        log_tx,
+        "Xray",
+        format!("Checking https://www.gstatic.com/generate_204 through HTTP proxy 127.0.0.1:{http_port}; connection requires HTTP 204."),
+        LogLevel::Info,
+    )
+    .await;
+    let ping_ms = tokio::select! {
+        result = crate::v2ray::wait_for_http_proxy(http_port) => match result {
+            Ok(ms) => Some(ms),
+            Err(error) => {
+                send_log(log_tx, "Error", format!("Connection check failed: {error}"), LogLevel::Error).await;
+                None
+            }
+        },
+        status = child.wait() => {
+            match status {
+                Ok(status) => send_log(log_tx, "Error", format!("Xray exited before connection verification: {status}"), LogLevel::Error).await,
+                Err(error) => send_log(log_tx, "Error", format!("Could not wait for Xray during connection verification: {error}"), LogLevel::Error).await,
+            }
+            None
+        },
+        _ = &mut *stop_rx => {
+            send_log(log_tx, "Supervisor", "Connection check cancelled; stopping Xray.", LogLevel::Warn).await;
+            drop(stdin.take()); let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
+            None
+        }
+    };
+    if let Some(ms) = ping_ms {
+        send_log(log_tx, "Supervisor", format!("Tunnel ready · HTTP 204 through proxy in {ms} ms."), LogLevel::Success).await;
+    }
+
+    let status_opt = if ping_ms.is_some() { tokio::select! {
         res = child.wait() => {
             Some(res?)
         }
@@ -530,6 +562,9 @@ cleanup
             let _ = child.kill().await;
             None
         }
+    }} else {
+        if stdin.is_some() { drop(stdin.take()); let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await; }
+        None
     };
 
     if let Some(status) = status_opt {

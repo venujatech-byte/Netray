@@ -177,6 +177,7 @@ pub struct NetrayApp {
     pub view_mode: ViewMode,
     pub is_running: bool,
     pub connected_at: Option<Instant>,
+    pub ping_ms: Option<u128>,
     pub tunnel_mode: TunnelMode,
 
     pub payload_text: String,
@@ -301,6 +302,7 @@ impl NetrayApp {
             view_mode: ViewMode::Profiles,
             is_running: false,
             connected_at: None,
+            ping_ms: None,
             tunnel_mode,
 
             payload_text: saved.payload_text,
@@ -454,7 +456,20 @@ impl NetrayApp {
                 Task::none()
             }
             Message::PingProfile(id) => {
-                if self.ping_in_progress.is_some() {
+                let active = self
+                    .v2ray_profiles
+                    .iter()
+                    .find(|profile| profile.id == id)
+                    .is_some_and(|profile| {
+                        self.active_profile_id.as_deref() == Some(&id)
+                            || self.v2ray_uri_or_json == profile.config
+                    });
+                if self.ping_in_progress.is_some()
+                    || (self.worker_active
+                        && !(self.is_running
+                            && self.tunnel_mode == TunnelMode::V2RayXray
+                            && active))
+                {
                     Task::none()
                 } else if let Some(config) = self
                     .v2ray_profiles
@@ -464,8 +479,21 @@ impl NetrayApp {
                 {
                     self.ping_results.remove(&id);
                     self.ping_in_progress = Some(id.clone());
+                    let local_proxy =
+                        (self.is_running && self.tunnel_mode == TunnelMode::V2RayXray).then(|| {
+                            self.local_socks_port
+                                .parse::<u16>()
+                                .unwrap_or(10808)
+                                .saturating_add(1)
+                        });
                     Task::perform(
-                        async move { v2ray::ping_profile(&config).await },
+                        async move {
+                            if let Some(port) = local_proxy {
+                                v2ray::ping_local_http_proxy(port).await
+                            } else {
+                                v2ray::ping_profile(&config).await
+                            }
+                        },
                         move |result| Message::PingFinished(id.clone(), result),
                     )
                 } else {
@@ -475,6 +503,7 @@ impl NetrayApp {
             Message::PingFinished(id, result) => {
                 if self.ping_in_progress.as_deref() == Some(&id) {
                     self.ping_in_progress = None;
+                    let ping_latency = result.as_ref().ok().copied();
                     let (display, log, level) = match result {
                         Ok(ms) => (
                             format!("HTTP · {ms} ms"),
@@ -501,6 +530,17 @@ impl NetrayApp {
                             LogLevel::Warn,
                         ),
                     };
+                    let active = self
+                        .v2ray_profiles
+                        .iter()
+                        .find(|profile| profile.id == id)
+                        .is_some_and(|profile| {
+                            self.active_profile_id.as_deref() == Some(&id)
+                                || self.v2ray_uri_or_json == profile.config
+                        });
+                    if active && self.is_running {
+                        self.ping_ms = ping_latency;
+                    }
                     self.ping_results.insert(id, display);
                     self.push_log("Ping", log, level);
                 }
@@ -779,10 +819,27 @@ impl NetrayApp {
                 Task::none()
             }
             Message::NewLog(entry) => {
+                let ready_ping = (entry.source == "Supervisor")
+                    .then(|| {
+                        entry
+                            .message
+                            .strip_prefix("Tunnel ready · HTTP 204 through proxy in ")
+                    })
+                    .flatten()
+                    .and_then(|value| value.strip_suffix(" ms."))
+                    .and_then(|value| value.parse::<u128>().ok());
+                let ssh_ready =
+                    entry.source == "SSH" && entry.message == "SSH Authenticated successfully!";
+                if (ready_ping.is_some() || ssh_ready) && self.worker_active {
+                    self.is_running = true;
+                    self.connected_at = Some(Instant::now());
+                    self.ping_ms = ready_ping;
+                }
                 let stopped = entry.source == "Supervisor" && entry.message.contains("offline");
                 if stopped || (entry.source == "Error" && entry.message.contains("Engine failed")) {
                     self.is_running = false;
                     self.connected_at = None;
+                    self.ping_ms = None;
                 }
                 // Only the final offline event means proxy and route cleanup has finished.
                 if stopped {
@@ -938,7 +995,15 @@ impl NetrayApp {
                 Task::none()
             }
             Message::ToggleTunnel => {
-                if !self.is_running && self.worker_active {
+                if self.worker_active && !self.is_running {
+                    if let Some(stop) = self.stop_signal.take() {
+                        let _ = stop.send(());
+                    }
+                    self.push_log(
+                        "Supervisor",
+                        "Connection cancelled while verifying the tunnel.",
+                        LogLevel::Warn,
+                    );
                     return Task::none();
                 }
                 if self.is_running {
@@ -947,12 +1012,14 @@ impl NetrayApp {
                     }
                     self.is_running = false;
                     self.connected_at = None;
+                    self.ping_ms = None;
                     self.push_log("Supervisor", "Tunnel stopped by user.", LogLevel::Warn);
                     Task::none()
                 } else {
-                    self.is_running = true;
+                    self.is_running = false;
                     self.worker_active = true;
-                    self.connected_at = Some(Instant::now());
+                    self.connected_at = None;
+                    self.ping_ms = None;
                     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
                     self.stop_signal = Some(stop_tx);
 
@@ -1146,6 +1213,8 @@ impl NetrayApp {
             Space::with_width(Length::Fill),
             text(if self.is_running {
                 "Tunnel active"
+            } else if self.worker_active {
+                "Connecting…"
             } else {
                 "Offline"
             })
@@ -1191,9 +1260,11 @@ impl NetrayApp {
                 let p_id_3 = p.id.clone();
                 let share_id = p.id.clone();
                 let pinging = self.ping_in_progress.as_deref() == Some(&p.id);
-                let ping_press = self
-                    .ping_in_progress
-                    .is_none()
+                let ping_press = (self.ping_in_progress.is_none()
+                    && (!self.worker_active
+                        || (self.is_running
+                            && is_active
+                            && self.tunnel_mode == TunnelMode::V2RayXray)))
                     .then(|| Message::PingProfile(p.id.clone()));
                 let ping_result = if pinging {
                     "Testing…"
@@ -1336,7 +1407,7 @@ impl NetrayApp {
             .into()
         };
 
-        let fab_icon = if self.is_running {
+        let fab_icon = if self.is_running || self.worker_active {
             icons::lucide_icon(icons::SQUARE, 26, Color::WHITE)
         } else {
             icons::lucide_icon(icons::PLAY, 26, Color::WHITE)
@@ -1351,12 +1422,15 @@ impl NetrayApp {
                         TEXT_MUTED
                     }),
                     text(if self.is_running {
-                        format!(
-                            "CONNECTED · {}",
-                            format_uptime(
-                                self.connected_at.map(|at| at.elapsed()).unwrap_or_default()
-                            )
+                        let uptime = format_uptime(
+                            self.connected_at.map(|at| at.elapsed()).unwrap_or_default(),
+                        );
+                        self.ping_ms.map_or_else(
+                            || format!("CONNECTED · {uptime}"),
+                            |ms| format!("CONNECTED · {uptime} · {ms} ms"),
                         )
+                    } else if self.worker_active {
+                        "CONNECTING · CHECKING SERVER".to_string()
                     } else {
                         "DISCONNECTED".to_string()
                     })
@@ -1867,6 +1941,37 @@ impl NetrayApp {
 #[cfg(test)]
 mod performance_tests {
     use super::*;
+
+    #[test]
+    fn xray_connecting_state_waits_for_the_successful_remote_ping() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.worker_active = true;
+        let _ = app.update(Message::NewLog(LogEntry {
+            timestamp: String::new(),
+            source: "Xray".into(),
+            message: "Core process started".into(),
+            level: LogLevel::Info,
+        }));
+        assert!(!app.is_running);
+        assert!(app.connected_at.is_none());
+        let _ = app.update(Message::NewLog(LogEntry {
+            timestamp: String::new(),
+            source: "Error".into(),
+            message: "Connection check failed: HTTP 502".into(),
+            level: LogLevel::Error,
+        }));
+        assert!(!app.is_running);
+        assert!(app.connected_at.is_none());
+        let _ = app.update(Message::NewLog(LogEntry {
+            timestamp: String::new(),
+            source: "Supervisor".into(),
+            message: "Tunnel ready · HTTP 204 through proxy in 73 ms.".into(),
+            level: LogLevel::Success,
+        }));
+        assert!(app.is_running);
+        assert!(app.connected_at.is_some());
+        assert_eq!(app.ping_ms, Some(73));
+    }
 
     #[test]
     fn errors_do_not_release_worker_before_cleanup() {

@@ -313,7 +313,39 @@ async fn run_xray_engine(
         spawn_xray_log_pipe(stderr, log_tx.clone());
     }
 
-    tokio::select! {
+    send_log(
+        log_tx,
+        "Xray",
+        format!("Checking https://www.gstatic.com/generate_204 through HTTP proxy 127.0.0.1:{http_port}; connection requires HTTP 204."),
+        LogLevel::Info,
+    )
+    .await;
+    let ping_ms = tokio::select! {
+        result = crate::v2ray::wait_for_http_proxy(http_port) => match result {
+            Ok(ms) => Some(ms),
+            Err(error) => {
+                send_log(log_tx, "Error", format!("Connection check failed: {error}"), LogLevel::Error).await;
+                None
+            }
+        },
+        status = child.wait() => {
+            match status {
+                Ok(status) => send_log(log_tx, "Error", format!("Xray exited before connection verification: {status}"), LogLevel::Error).await,
+                Err(error) => send_log(log_tx, "Error", format!("Could not wait for Xray during connection verification: {error}"), LogLevel::Error).await,
+            }
+            None
+        },
+        _ = &mut *stop_rx => {
+            send_log(log_tx, "Supervisor", "Connection check cancelled; stopping Xray.", LogLevel::Warn).await;
+            let _ = child.kill().await;
+            None
+        }
+    };
+    if let Some(ms) = ping_ms {
+        send_log(log_tx, "Supervisor", format!("Tunnel ready · HTTP 204 through proxy in {ms} ms."), LogLevel::Success).await;
+    }
+
+    if ping_ms.is_some() { tokio::select! {
         res = child.wait() => {
             let status = res?;
             send_log(log_tx, "Xray", format!("Core process exited: {}", status), LogLevel::Warn).await;
@@ -322,7 +354,7 @@ async fn run_xray_engine(
             send_log(log_tx, "Supervisor", "Stopping Xray core and tearing down WinTun interface...", LogLevel::Info).await;
             let _ = child.kill().await;
         }
-    };
+    }; } else { let _ = child.kill().await; }
 
     let _ = tokio::fs::remove_file(&config_path).await;
     Ok(())
