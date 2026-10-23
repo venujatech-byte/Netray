@@ -7,7 +7,6 @@ use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 use url::Url;
 
-
 /// Locate xray.exe or v2ray.exe on Windows
 pub fn find_xray_binary() -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -130,9 +129,15 @@ pub fn extract_node_address(raw: &str) -> String {
     }
     if trimmed.starts_with("vmess://") {
         let b64 = trimmed.trim_start_matches("vmess://").trim();
-        if let Ok(bytes) = BASE64_STANDARD.decode(b64).or_else(|_| BASE64_URL_SAFE.decode(b64)) {
+        if let Ok(bytes) = BASE64_STANDARD
+            .decode(b64)
+            .or_else(|_| BASE64_URL_SAFE.decode(b64))
+        {
             if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
-                if let (Some(add), Some(port)) = (v.get("add").and_then(|p| p.as_str()), v.get("port").and_then(|p| p.as_u64())) {
+                if let (Some(add), Some(port)) = (
+                    v.get("add").and_then(|p| p.as_str()),
+                    v.get("port").and_then(|p| p.as_u64()),
+                ) {
                     return format!("{}:{}", add, port);
                 }
             }
@@ -143,19 +148,42 @@ pub fn extract_node_address(raw: &str) -> String {
 
 pub async fn ping_profile(raw: &str) -> Result<u128, String> {
     let normalized = parse_and_generate_xray_config(raw, 10808, 10809, false)?;
-    let config: Value = serde_json::from_str(&normalized).map_err(|e| format!("Invalid Xray config: {e}"))?;
-    let outbounds = config.get("outbounds").and_then(Value::as_array)
+    let config: Value =
+        serde_json::from_str(&normalized).map_err(|e| format!("Invalid Xray config: {e}"))?;
+    let outbounds = config
+        .get("outbounds")
+        .and_then(Value::as_array)
         .ok_or_else(|| "No outbound server found in config.".to_string())?;
-    let server = outbounds.iter().find_map(|outbound| {
+    let server = outbounds
+        .iter()
+        .find_map(|outbound| {
             let settings = outbound.get("settings")?;
-            settings.get("vnext").and_then(Value::as_array).and_then(|items| items.first())
-                .or_else(|| settings.get("servers").and_then(Value::as_array).and_then(|items| items.first()))
-        }).ok_or_else(|| "No remote server endpoint found in config.".to_string())?;
-    let host = server.get("address").and_then(Value::as_str)
+            settings
+                .get("vnext")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .or_else(|| {
+                    settings
+                        .get("servers")
+                        .and_then(Value::as_array)
+                        .and_then(|items| items.first())
+                })
+        })
+        .ok_or_else(|| "No remote server endpoint found in config.".to_string())?;
+    let host = server
+        .get("address")
+        .and_then(Value::as_str)
         .filter(|host| !host.is_empty())
         .ok_or_else(|| "Remote server address is missing.".to_string())?;
-    let port = server.get("port").and_then(Value::as_u64)
-        .or_else(|| server.get("port").and_then(Value::as_str).and_then(|p| p.parse().ok()))
+    let port = server
+        .get("port")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            server
+                .get("port")
+                .and_then(Value::as_str)
+                .and_then(|p| p.parse().ok())
+        })
         .filter(|p| (1..=65535).contains(p))
         .ok_or_else(|| "Remote server port is invalid.".to_string())? as u16;
 
@@ -199,13 +227,30 @@ impl NodeEditState {
                 remarks,
                 address: url.host_str().unwrap_or("").to_string(),
                 port: url.port().unwrap_or(443).to_string(),
-                encrypt_method: query.get("encryption").cloned().unwrap_or_else(|| "none".into()),
+                encrypt_method: query
+                    .get("encryption")
+                    .cloned()
+                    .unwrap_or_else(|| "none".into()),
                 flow: query.get("flow").cloned().unwrap_or_else(|| "none".into()),
                 user_id: url.username().to_string(),
-                transport_protocol: query.get("type").or_else(|| query.get("net")).cloned().unwrap_or_else(|| "tcp".into()),
-                header_type: query.get("headerType").cloned().unwrap_or_else(|| "none".into()),
-                tls_type: query.get("security").cloned().unwrap_or_else(|| "tls".into()),
-                sni: query.get("sni").or_else(|| query.get("peer")).cloned().unwrap_or_default(),
+                transport_protocol: query
+                    .get("type")
+                    .or_else(|| query.get("net"))
+                    .cloned()
+                    .unwrap_or_else(|| "tcp".into()),
+                header_type: query
+                    .get("headerType")
+                    .cloned()
+                    .unwrap_or_else(|| "none".into()),
+                tls_type: query
+                    .get("security")
+                    .cloned()
+                    .unwrap_or_else(|| "tls".into()),
+                sni: query
+                    .get("sni")
+                    .or_else(|| query.get("peer"))
+                    .cloned()
+                    .unwrap_or_default(),
                 fingerprint: query.get("fp").cloned().unwrap_or_else(|| "chrome".into()),
                 alpn: query.get("alpn").cloned().unwrap_or_else(|| "none".into()),
             };
@@ -213,7 +258,11 @@ impl NodeEditState {
 
         Self {
             id: id.to_string(),
-            remarks: if name.is_empty() { "New VLess Node".into() } else { name.to_string() },
+            remarks: if name.is_empty() {
+                "New VLess Node".into()
+            } else {
+                name.to_string()
+            },
             address: "example.com".into(),
             port: "443".into(),
             encrypt_method: "none".into(),
@@ -234,9 +283,21 @@ impl NodeEditState {
             self.user_id.trim(),
             self.address.trim(),
             self.port.trim(),
-            if self.encrypt_method.is_empty() { "none" } else { self.encrypt_method.trim() },
-            if self.tls_type.is_empty() { "none" } else { self.tls_type.trim() },
-            if self.transport_protocol.is_empty() { "tcp" } else { self.transport_protocol.trim() }
+            if self.encrypt_method.is_empty() {
+                "none"
+            } else {
+                self.encrypt_method.trim()
+            },
+            if self.tls_type.is_empty() {
+                "none"
+            } else {
+                self.tls_type.trim()
+            },
+            if self.transport_protocol.is_empty() {
+                "tcp"
+            } else {
+                self.transport_protocol.trim()
+            }
         );
         if !self.flow.is_empty() && self.flow != "none" {
             u.push_str(&format!("&flow={}", self.flow.trim()));
@@ -277,8 +338,8 @@ pub fn parse_and_generate_xray_config(
     }
 
     if trimmed.starts_with('{') {
-        let mut val: Value = serde_json::from_str(trimmed)
-            .map_err(|e| format!("Invalid JSON config: {}", e))?;
+        let mut val: Value =
+            serde_json::from_str(trimmed).map_err(|e| format!("Invalid JSON config: {}", e))?;
         inject_inbounds(&mut val, socks_port, http_port, enable_tun);
         return serde_json::to_string_pretty(&val)
             .map_err(|e| format!("Serialization error: {}", e));
@@ -293,7 +354,10 @@ pub fn parse_and_generate_xray_config(
     } else if trimmed.starts_with("ss://") {
         parse_shadowsocks_uri(trimmed)?
     } else {
-        return Err("Unsupported format. Please provide a VLESS, VMess, Trojan, Shadowsocks link, or JSON.".into());
+        return Err(
+            "Unsupported format. Please provide a VLESS, VMess, Trojan, Shadowsocks link, or JSON."
+                .into(),
+        );
     };
 
     let mut inbounds = vec![
@@ -370,7 +434,8 @@ pub fn parse_and_generate_xray_config(
         }
     });
 
-    serde_json::to_string_pretty(&root_cfg).map_err(|e| format!("Failed to format configuration: {}", e))
+    serde_json::to_string_pretty(&root_cfg)
+        .map_err(|e| format!("Failed to format configuration: {}", e))
 }
 
 fn inject_inbounds(val: &mut Value, socks_port: u16, http_port: u16, enable_tun: bool) {
@@ -438,7 +503,10 @@ fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
     }
 
     let query: HashMap<String, String> = url.query_pairs().into_owned().collect();
-    let encryption = query.get("encryption").cloned().unwrap_or_else(|| "none".into());
+    let encryption = query
+        .get("encryption")
+        .cloned()
+        .unwrap_or_else(|| "none".into());
     let flow = query.get("flow").cloned().unwrap_or_default();
     let stream_settings = extract_stream_settings(&query, host)?;
 
@@ -469,19 +537,36 @@ fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
 
 fn parse_vmess_uri(uri_str: &str) -> Result<Value, String> {
     let raw = uri_str.trim_start_matches("vmess://").trim();
-    let bytes = BASE64_STANDARD.decode(raw)
+    let bytes = BASE64_STANDARD
+        .decode(raw)
         .or_else(|_| BASE64_URL_SAFE.decode(raw))
         .map_err(|e| format!("Invalid base64 in VMess URI: {}", e))?;
-    let json_val: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("Invalid JSON in VMess URI: {}", e))?;
+    let json_val: Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON in VMess URI: {}", e))?;
 
-    let host = json_val.get("add").and_then(|v| v.as_str()).ok_or("VMess missing add")?;
-    let port = json_val.get("port")
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+    let host = json_val
+        .get("add")
+        .and_then(|v| v.as_str())
+        .ok_or("VMess missing add")?;
+    let port = json_val
+        .get("port")
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .ok_or("VMess missing port")? as u16;
-    let uuid = json_val.get("id").and_then(|v| v.as_str()).ok_or("VMess missing id")?;
-    let net = json_val.get("net").and_then(|v| v.as_str()).unwrap_or("tcp");
-    let tls = json_val.get("tls").and_then(|v| v.as_str()).unwrap_or("none");
+    let uuid = json_val
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("VMess missing id")?;
+    let net = json_val
+        .get("net")
+        .and_then(|v| v.as_str())
+        .unwrap_or("tcp");
+    let tls = json_val
+        .get("tls")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none");
     let sni = json_val.get("sni").and_then(|v| v.as_str()).unwrap_or("");
     let host_header = json_val.get("host").and_then(|v| v.as_str()).unwrap_or("");
     let path = json_val.get("path").and_then(|v| v.as_str()).unwrap_or("/");
@@ -557,11 +642,13 @@ fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
     let stripped = uri_str.trim_start_matches("ss://");
     let (body, _) = stripped.split_once('#').unwrap_or((stripped, ""));
 
-    let (method, password, host, port) = if let Some((user_info, host_port)) = body.split_once('@') {
+    let (method, password, host, port) = if let Some((user_info, host_port)) = body.split_once('@')
+    {
         let (h, p_str) = host_port.split_once(':').ok_or("SS URI missing port")?;
         let p = p_str.parse::<u16>().map_err(|_| "Invalid SS port")?;
 
-        let decoded_user = if let Ok(bytes) = BASE64_STANDARD.decode(user_info)
+        let decoded_user = if let Ok(bytes) = BASE64_STANDARD
+            .decode(user_info)
             .or_else(|_| BASE64_URL_SAFE.decode(user_info))
         {
             String::from_utf8_lossy(&bytes).to_string()
@@ -569,15 +656,22 @@ fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
             user_info.to_string()
         };
 
-        let (m, pass) = decoded_user.split_once(':').ok_or("SS URI missing method:password")?;
+        let (m, pass) = decoded_user
+            .split_once(':')
+            .ok_or("SS URI missing method:password")?;
         (m.to_string(), pass.to_string(), h.to_string(), p)
     } else {
-        let decoded = BASE64_STANDARD.decode(body)
+        let decoded = BASE64_STANDARD
+            .decode(body)
             .or_else(|_| BASE64_URL_SAFE.decode(body))
             .map_err(|e| format!("Invalid base64 in SS URI: {}", e))?;
         let decoded_str = String::from_utf8_lossy(&decoded).to_string();
-        let (method_pass, host_port) = decoded_str.split_once('@').ok_or("Invalid decoded SS format")?;
-        let (m, pass) = method_pass.split_once(':').ok_or("Missing method:password")?;
+        let (method_pass, host_port) = decoded_str
+            .split_once('@')
+            .ok_or("Invalid decoded SS format")?;
+        let (m, pass) = method_pass
+            .split_once(':')
+            .ok_or("Missing method:password")?;
         let (h, p_str) = host_port.split_once(':').ok_or("Missing host:port")?;
         let p = p_str.parse::<u16>().map_err(|_| "Invalid port")?;
         (m.to_string(), pass.to_string(), h.to_string(), p)
@@ -600,9 +694,17 @@ fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
 }
 
 fn extract_stream_settings(query: &HashMap<String, String>, host: &str) -> Result<Value, String> {
-    let network = query.get("type").or_else(|| query.get("net")).map(|s| s.as_str()).unwrap_or("tcp");
+    let network = query
+        .get("type")
+        .or_else(|| query.get("net"))
+        .map(|s| s.as_str())
+        .unwrap_or("tcp");
     let security = query.get("security").map(|s| s.as_str()).unwrap_or("none");
-    let sni = query.get("sni").or_else(|| query.get("peer")).cloned().unwrap_or_default();
+    let sni = query
+        .get("sni")
+        .or_else(|| query.get("peer"))
+        .cloned()
+        .unwrap_or_default();
     let header_host = query.get("host").cloned().unwrap_or_default();
     let path = query.get("path").cloned().unwrap_or_else(|| "/".into());
     let service_name = query.get("serviceName").cloned().unwrap_or_default();
@@ -611,7 +713,10 @@ fn extract_stream_settings(query: &HashMap<String, String>, host: &str) -> Resul
     let pbk = query.get("pbk").map(|s| s.as_str()).unwrap_or("");
     let sid = query.get("sid").map(|s| s.as_str()).unwrap_or("");
 
-    let vcn = query.get("vcn").or_else(|| query.get("verifyPeerCertByName")).cloned()
+    let vcn = query
+        .get("vcn")
+        .or_else(|| query.get("verifyPeerCertByName"))
+        .cloned()
         .or_else(|| {
             if !sni.is_empty() && sni != host && host.parse::<std::net::IpAddr>().is_err() {
                 Some(host.to_string())
@@ -621,7 +726,11 @@ fn extract_stream_settings(query: &HashMap<String, String>, host: &str) -> Resul
         })
         .unwrap_or_default();
 
-    let pinned_cert = query.get("pcs").or_else(|| query.get("pinnedPeerCertSha256")).cloned().unwrap_or_default();
+    let pinned_cert = query
+        .get("pcs")
+        .or_else(|| query.get("pinnedPeerCertSha256"))
+        .cloned()
+        .unwrap_or_default();
 
     build_stream_settings(
         network,
@@ -729,9 +838,12 @@ mod tests {
     #[test]
     fn test_vless_generation_wintun() {
         let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#Sample-Node";
-        let config = parse_and_generate_xray_config(uri, 10808, 10809, true).expect("Should parse with TUN");
+        let config =
+            parse_and_generate_xray_config(uri, 10808, 10809, true).expect("Should parse with TUN");
         let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
-        let inbounds = json_val["inbounds"].as_array().expect("inbounds must be array");
+        let inbounds = json_val["inbounds"]
+            .as_array()
+            .expect("inbounds must be array");
         assert_eq!(inbounds.len(), 3);
         assert_eq!(inbounds[2]["protocol"], "tun");
         assert_eq!(inbounds[2]["settings"]["name"], "wintun");
@@ -739,7 +851,7 @@ mod tests {
 
     #[test]
     fn test_extract_helpers() {
-        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=zoom.us&type=tcp#SLT%20sample-node";
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=tcp#Sample-Node";
         assert_eq!(extract_node_address(uri), "example.com:443");
         assert_eq!(extract_protocol_tag(uri), "(VLESS + TCP + TLS)");
     }
