@@ -216,7 +216,7 @@ async fn handle_socks5_client(
 
     sock.write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x04, 0x38]).await?;
 
-    let (mut sock_rx, mut sock_tx) = sock.into_split();
+    let (mut sock_rx, mut sock_tx) = sock.split();
     let mut chan_stream = channel.into_stream();
     let (mut chan_rx, mut chan_tx) = tokio::io::split(&mut chan_stream);
 
