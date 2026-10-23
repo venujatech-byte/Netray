@@ -98,9 +98,8 @@ pub async fn run_real_tunnel_worker(
     }
 
     if cfg.enable_tun {
-        let _ = Command::new("ip").args(["link", "delete", "tun0"]).output().await;
+        let _ = Command::new("ip").args(["link", "delete", "netray0"]).output().await;
     }
-    let _ = Command::new("pkill").args(["-f", "netray_xray_"]).output().await;
 
     send_log(&log_tx, "Supervisor", "Tunnel is offline.", LogLevel::Info).await;
 }
@@ -344,10 +343,9 @@ async fn run_xray_engine(
     cfg: &TunnelConfig,
     stop_rx: &mut tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // 0. Clean up any stale processes or orphaned tun0 before starting
-    let _ = Command::new("pkill").args(["-f", "netray_xray_"]).output().await;
+    // Each run owns its Xray child; avoid killing another Netray session.
     if cfg.enable_tun {
-        let _ = Command::new("ip").args(["link", "delete", "tun0"]).output().await;
+        let _ = Command::new("ip").args(["link", "delete", "netray0"]).output().await;
     }
 
     // 1. Locate xray / v2ray binary
@@ -426,7 +424,7 @@ async fn run_xray_engine(
             send_log(
                 log_tx,
                 "TUN",
-                "TUN mode active (root/CAP_NET_ADMIN verified; creating tun0 virtual interface)...",
+                "TUN mode active (root/CAP_NET_ADMIN verified; creating netray0 virtual interface)...",
                 LogLevel::Success,
             )
             .await;
@@ -434,7 +432,7 @@ async fn run_xray_engine(
             send_log(
                 log_tx,
                 "TUN",
-                "TUN mode requires root privileges to create virtual interface 'tun0'. Requesting authorization via pkexec...",
+                "TUN mode requires root privileges to create virtual interface 'netray0'. Requesting authorization via pkexec...",
                 LogLevel::Info,
             )
             .await;
@@ -462,7 +460,7 @@ cleanup() {
         kill -KILL "$XRAY_PID" 2>/dev/null
         wait "$XRAY_PID" 2>/dev/null
     fi
-    ip link delete tun0 2>/dev/null
+    ip link delete netray0 2>/dev/null
     rm -f "$cfg"
     exit 0
 }
@@ -546,7 +544,7 @@ cleanup
     let _ = tokio::fs::remove_file(&config_path).await;
     let _ = Command::new("pkill").args(["-f", &config_path]).output().await;
     if cfg.enable_tun {
-        let _ = Command::new("ip").args(["link", "delete", "tun0"]).output().await;
+        let _ = Command::new("ip").args(["link", "delete", "netray0"]).output().await;
     }
     Ok(())
 }

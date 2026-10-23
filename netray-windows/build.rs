@@ -1,10 +1,5 @@
-//! Netray Windows Build Script
-//! Configures Windows application metadata and manifests.
-
 fn main() {
-    // Only link windows subsystem / manifests when targeting windows
-    #[cfg(target_os = "windows")]
-    {
-        println!("cargo:rerun-if-changed=resources/app.manifest");
+    if std::env::var_os("CARGO_CFG_TARGET_OS").is_some_and(|os| os == "windows") {
+        println!("cargo:rustc-link-arg-bin=netray-windows=/MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\"");
     }
 }

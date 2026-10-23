@@ -340,7 +340,10 @@ pub fn parse_and_generate_xray_config(
     if trimmed.starts_with('{') {
         let mut val: Value =
             serde_json::from_str(trimmed).map_err(|e| format!("Invalid JSON config: {}", e))?;
-        inject_inbounds(&mut val, socks_port, http_port, enable_tun);
+        inject_inbounds(&mut val, socks_port, http_port, enable_tun)?;
+        if enable_tun {
+            configure_tun(&mut val)?;
+        }
         return serde_json::to_string_pretty(&val)
             .map_err(|e| format!("Serialization error: {}", e));
     }
@@ -360,7 +363,7 @@ pub fn parse_and_generate_xray_config(
         );
     };
 
-    let mut inbounds = vec![
+    let inbounds = vec![
         json!({
             "tag": "socks-in",
             "port": socks_port,
@@ -390,23 +393,7 @@ pub fn parse_and_generate_xray_config(
         }),
     ];
 
-    if enable_tun {
-        // Windows uses wintun adapter
-        inbounds.push(json!({
-            "tag": "tun-in",
-            "protocol": "tun",
-            "settings": {
-                "name": "wintun",
-                "mtu": 1500
-            },
-            "sniffing": {
-                "enabled": true,
-                "destOverride": ["http", "tls"]
-            }
-        }));
-    }
-
-    let root_cfg = json!({
+    let mut root_cfg = json!({
         "log": {
             "loglevel": "warning"
         },
@@ -433,28 +420,37 @@ pub fn parse_and_generate_xray_config(
             ]
         }
     });
+    if enable_tun {
+        configure_tun(&mut root_cfg)?;
+    }
 
     serde_json::to_string_pretty(&root_cfg)
         .map_err(|e| format!("Failed to format configuration: {}", e))
 }
 
-fn inject_inbounds(val: &mut Value, socks_port: u16, http_port: u16, enable_tun: bool) {
-    let Some(obj) = val.as_object_mut() else {
-        return;
-    };
+fn inject_inbounds(
+    val: &mut Value,
+    socks_port: u16,
+    http_port: u16,
+    enable_tun: bool,
+) -> Result<(), String> {
+    let obj = val
+        .as_object_mut()
+        .ok_or("Xray JSON config must be an object.")?;
     let inbounds = obj.entry("inbounds").or_insert_with(|| json!([]));
-
-    if let Some(arr) = inbounds.as_array_mut() {
-        arr.retain(|i| {
-            if let Some(p) = i.get("port").and_then(|p| p.as_u64()) {
-                p != socks_port as u64 && p != http_port as u64
-            } else if let Some(proto) = i.get("protocol").and_then(|p| p.as_str()) {
-                proto != "tun"
-            } else {
-                true
-            }
-        });
-        arr.push(json!({
+    let arr = inbounds
+        .as_array_mut()
+        .ok_or("Xray JSON inbounds must be an array.")?;
+    arr.retain(|i| {
+        if let Some(p) = i.get("port").and_then(|p| p.as_u64()) {
+            p != socks_port as u64 && p != http_port as u64
+        } else if let Some(proto) = i.get("protocol").and_then(|p| p.as_str()) {
+            proto != "tun"
+        } else {
+            true
+        }
+    });
+    arr.push(json!({
             "tag": "socks-in",
             "port": socks_port,
             "listen": "127.0.0.1",
@@ -465,7 +461,7 @@ fn inject_inbounds(val: &mut Value, socks_port: u16, http_port: u16, enable_tun:
             },
             "settings": { "auth": "noauth", "udp": true }
         }));
-        arr.push(json!({
+    arr.push(json!({
             "tag": "http-in",
             "port": http_port,
             "listen": "127.0.0.1",
@@ -476,21 +472,115 @@ fn inject_inbounds(val: &mut Value, socks_port: u16, http_port: u16, enable_tun:
             },
             "settings": { "allowTransparent": false }
         }));
-        if enable_tun {
-            arr.push(json!({
-                "tag": "tun-in",
-                "protocol": "tun",
-                "settings": {
-                    "name": "wintun",
-                    "mtu": 1500
-                },
-                "sniffing": {
-                    "enabled": true,
-                    "destOverride": ["http", "tls"]
-                }
-            }));
-        }
+    if enable_tun {
+        arr.push(json!({
+            "tag": "tun-in",
+            "protocol": "tun",
+            "settings": { "name": "wintun", "mtu": 1500 }
+        }));
     }
+    Ok(())
+}
+
+fn configure_tun(config: &mut Value) -> Result<(), String> {
+    let inbounds = config
+        .get_mut("inbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or("Xray config inbounds must be an array for TUN mode.")?;
+    let index = inbounds
+        .iter()
+        .position(|inbound| inbound["protocol"] == "tun")
+        .unwrap_or_else(|| {
+            inbounds.push(json!({ "tag": "tun-in", "protocol": "tun" }));
+            inbounds.len() - 1
+        });
+    let inbound = &mut inbounds[index];
+    let tag = inbound["tag"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            inbound["tag"] = json!("tun-in");
+            "tun-in".to_owned()
+        });
+    inbound["settings"] = json!({
+        "name": "wintun",
+        "desc": "Netray",
+        "mtu": 1500,
+        "gateway": ["198.18.0.1/30", "fc00::1/64"],
+        "dns": ["1.1.1.1", "8.8.8.8"],
+        "autoSystemRoutingTable": ["0.0.0.0/0", "::/0"],
+        "autoOutboundsInterface": "auto",
+        "autoSystemWfpBlockLeak": ["dns", "misconfigtun"]
+    });
+
+    let dns = config
+        .as_object_mut()
+        .ok_or("Xray config must be a JSON object.")?
+        .entry("dns")
+        .or_insert_with(|| json!({ "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"] }));
+    if !dns.is_object() {
+        return Err("Xray DNS config must be an object for TUN mode.".to_owned());
+    }
+    if dns.get("servers").is_some_and(|servers| !servers.is_array()) {
+        return Err("Xray DNS servers must be an array for TUN mode.".to_owned());
+    }
+    if dns["servers"].as_array().map_or(true, Vec::is_empty) {
+        dns["servers"] = json!(["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]);
+    }
+
+    let outbounds = config
+        .get_mut("outbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or("Xray config outbounds must be an array for TUN mode.")?;
+    if outbounds.is_empty() {
+        return Err("Xray config needs at least one outbound for TUN mode.".to_owned());
+    }
+    let primary = outbounds
+        .iter()
+        .position(|outbound| outbound["tag"] == "proxy")
+        .or_else(|| {
+            outbounds.iter().position(|outbound| {
+                !matches!(outbound["protocol"].as_str(), Some("dns" | "freedom" | "blackhole"))
+            })
+        })
+        .unwrap_or(0);
+    if outbounds[primary]["tag"].as_str().is_none() {
+        outbounds[primary]["tag"] = json!("netray-primary");
+    }
+    let primary_tag = outbounds[primary]["tag"].as_str().unwrap().to_owned();
+    let dns_tag = if let Some(outbound) = outbounds
+        .iter_mut()
+        .find(|outbound| outbound["protocol"] == "dns")
+    {
+        if outbound["tag"].as_str().is_none() {
+            outbound["tag"] = json!("netray-dns");
+        }
+        outbound["tag"].as_str().unwrap().to_owned()
+    } else {
+        outbounds.push(json!({ "tag": "netray-dns", "protocol": "dns" }));
+        "netray-dns".to_owned()
+    };
+
+    let routing = config
+        .as_object_mut()
+        .ok_or("Xray config must be a JSON object.")?
+        .entry("routing")
+        .or_insert_with(|| json!({ "rules": [] }));
+    let routing = routing
+        .as_object_mut()
+        .ok_or("Xray routing config must be an object for TUN mode.")?;
+    let rules = routing
+        .entry("rules")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or("Xray routing rules must be an array for TUN mode.")?;
+    rules.insert(0, json!({
+        "type": "field", "inboundTag": [tag], "port": 53, "outboundTag": dns_tag
+    }));
+    rules.insert(1, json!({
+        "type": "field", "inboundTag": [tag], "outboundTag": primary_tag
+    }));
+    Ok(())
 }
 
 fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
@@ -847,6 +937,25 @@ mod tests {
         assert_eq!(inbounds.len(), 3);
         assert_eq!(inbounds[2]["protocol"], "tun");
         assert_eq!(inbounds[2]["settings"]["name"], "wintun");
+        assert_eq!(
+            inbounds[2]["settings"]["autoSystemRoutingTable"],
+            json!(["0.0.0.0/0", "::/0"])
+        );
+        assert_eq!(
+            inbounds[2]["settings"]["autoSystemWfpBlockLeak"],
+            json!(["dns", "misconfigtun"])
+        );
+        assert_eq!(json_val["routing"]["rules"][0]["outboundTag"], "netray-dns");
+        assert_eq!(json_val["routing"]["rules"][1]["outboundTag"], "proxy");
+    }
+
+    #[test]
+    fn test_full_json_gets_a_routed_tun_inbound() {
+        let raw = r#"{"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"freedom"}]}"#;
+        let config = parse_and_generate_xray_config(raw, 10808, 10809, true).unwrap();
+        let config: Value = serde_json::from_str(&config).unwrap();
+        assert_eq!(config["inbounds"][2]["protocol"], "tun");
+        assert_eq!(config["routing"]["rules"][1]["outboundTag"], "proxy");
     }
 
     #[test]

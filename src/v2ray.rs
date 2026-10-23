@@ -153,7 +153,7 @@ fn assemble_xray_config(
     http_port: u16,
     enable_tun: bool,
 ) -> Value {
-    let mut inbounds = vec![
+    let inbounds = vec![
         json!({
             "tag": "socks-in",
             "port": socks_port,
@@ -180,22 +180,7 @@ fn assemble_xray_config(
         }),
     ];
 
-    if enable_tun {
-        inbounds.push(json!({
-            "tag": "tun-in",
-            "protocol": "tun",
-            "settings": {
-                "name": "tun0",
-                "mtu": 1500
-            },
-            "sniffing": {
-                "enabled": true,
-                "destOverride": ["http", "tls", "quic"]
-            }
-        }));
-    }
-
-    json!({
+    let mut config = json!({
         "log": {
             "loglevel": "warning"
         },
@@ -211,7 +196,123 @@ fn assemble_xray_config(
                 "protocol": "blackhole"
             }
         ]
-    })
+    });
+    if enable_tun {
+        configure_tun(&mut config).expect("generated Xray config supports TUN");
+    }
+    config
+}
+
+fn configure_tun(config: &mut Value) -> Result<(), String> {
+    let tun = json!({
+        "tag": "tun-in",
+        "protocol": "tun",
+        "settings": {
+            "name": "netray0",
+            "mtu": 1500,
+            "gateway": ["198.18.0.1/30", "fc00::1/64"],
+            "autoSystemRoutingTable": ["0.0.0.0/0", "::/0"],
+            "autoOutboundsInterface": "auto",
+            "autoSystemDnsToGateway": true
+        },
+        "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] }
+    });
+    let inbounds = config
+        .get_mut("inbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or("Xray config inbounds must be an array for TUN mode.")?;
+    let index = inbounds
+        .iter()
+        .position(|inbound| inbound["protocol"] == "tun")
+        .unwrap_or_else(|| {
+            inbounds.push(tun);
+            inbounds.len() - 1
+        });
+    let inbound = &mut inbounds[index];
+    let tag = inbound["tag"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            inbound["tag"] = json!("tun-in");
+            "tun-in".to_owned()
+        });
+    inbound["settings"] = json!({
+        "name": "netray0",
+        "mtu": 1500,
+        "gateway": ["198.18.0.1/30", "fc00::1/64"],
+        "autoSystemRoutingTable": ["0.0.0.0/0", "::/0"],
+        "autoOutboundsInterface": "auto",
+        "autoSystemDnsToGateway": true
+    });
+
+    let dns = config
+        .as_object_mut()
+        .ok_or("Xray config must be a JSON object.")?
+        .entry("dns")
+        .or_insert_with(|| json!({ "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"] }));
+    if !dns.is_object() {
+        return Err("Xray DNS config must be an object for TUN mode.".to_owned());
+    }
+    if dns.get("servers").is_some_and(|servers| !servers.is_array()) {
+        return Err("Xray DNS servers must be an array for TUN mode.".to_owned());
+    }
+    if dns["servers"].as_array().map_or(true, Vec::is_empty) {
+        dns["servers"] = json!(["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]);
+    }
+
+    let outbounds = config
+        .get_mut("outbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or("Xray config outbounds must be an array for TUN mode.")?;
+    if outbounds.is_empty() {
+        return Err("Xray config needs at least one outbound for TUN mode.".to_owned());
+    }
+    let primary = outbounds
+        .iter()
+        .position(|outbound| outbound["tag"] == "proxy")
+        .or_else(|| {
+            outbounds.iter().position(|outbound| {
+                !matches!(outbound["protocol"].as_str(), Some("dns" | "freedom" | "blackhole"))
+            })
+        })
+        .unwrap_or(0);
+    if outbounds[primary]["tag"].as_str().is_none() {
+        outbounds[primary]["tag"] = json!("netray-primary");
+    }
+    let primary_tag = outbounds[primary]["tag"].as_str().unwrap().to_owned();
+    let dns_tag = if let Some(outbound) = outbounds
+        .iter_mut()
+        .find(|outbound| outbound["protocol"] == "dns")
+    {
+        if outbound["tag"].as_str().is_none() {
+            outbound["tag"] = json!("netray-dns");
+        }
+        outbound["tag"].as_str().unwrap().to_owned()
+    } else {
+        outbounds.push(json!({ "tag": "netray-dns", "protocol": "dns" }));
+        "netray-dns".to_owned()
+    };
+
+    let routing = config
+        .as_object_mut()
+        .ok_or("Xray config must be a JSON object.")?
+        .entry("routing")
+        .or_insert_with(|| json!({ "rules": [] }));
+    let routing = routing
+        .as_object_mut()
+        .ok_or("Xray routing config must be an object for TUN mode.")?;
+    let rules = routing
+        .entry("rules")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or("Xray routing rules must be an array for TUN mode.")?;
+    rules.insert(0, json!({
+        "type": "field", "inboundTag": [tag], "port": 53, "outboundTag": dns_tag
+    }));
+    rules.insert(1, json!({
+        "type": "field", "inboundTag": [tag], "outboundTag": primary_tag
+    }));
+    Ok(())
 }
 
 /// Handle raw JSON configurations (preserving inbounds if present, or wrapping in full config)
@@ -229,14 +330,20 @@ fn handle_json_config(
         if parsed.get("log").is_none() {
             parsed["log"] = json!({ "loglevel": "warning" });
         }
+        if enable_tun {
+            configure_tun(&mut parsed)?;
+        }
         return serde_json::to_string_pretty(&parsed)
             .map_err(|e| format!("Serialization error: {}", e));
     }
 
     // If it has outbounds but no inbounds, add standard inbounds
     if let Some(outbounds) = parsed.get("outbounds") {
-        let mut full = assemble_xray_config(json!({}), socks_port, http_port, enable_tun);
+        let mut full = assemble_xray_config(json!({}), socks_port, http_port, false);
         full["outbounds"] = outbounds.clone();
+        if enable_tun {
+            configure_tun(&mut full)?;
+        }
         return serde_json::to_string_pretty(&full)
             .map_err(|e| format!("Serialization error: {}", e));
     }
@@ -1123,7 +1230,14 @@ mod tests {
             .expect("inbounds must be array");
         assert_eq!(inbounds.len(), 3);
         assert_eq!(inbounds[2]["protocol"], "tun");
-        assert_eq!(inbounds[2]["settings"]["name"], "tun0");
+        assert_eq!(inbounds[2]["settings"]["name"], "netray0");
+        assert_eq!(
+            inbounds[2]["settings"]["autoSystemRoutingTable"],
+            json!(["0.0.0.0/0", "::/0"])
+        );
+        assert_eq!(inbounds[2]["settings"]["autoSystemDnsToGateway"], true);
+        assert_eq!(json_val["routing"]["rules"][0]["outboundTag"], "netray-dns");
+        assert_eq!(json_val["routing"]["rules"][1]["outboundTag"], "proxy");
 
         if let Ok(bin) = find_xray_binary() {
             let res = test_xray_config(&bin, &config).await;
@@ -1133,6 +1247,15 @@ mod tests {
                 res
             );
         }
+    }
+
+    #[test]
+    fn test_full_json_gets_a_routed_tun_inbound() {
+        let raw = r#"{"inbounds":[],"outbounds":[{"tag":"proxy","protocol":"freedom"}]}"#;
+        let config = parse_and_generate_xray_config(raw, 10808, 10809, true).unwrap();
+        let config: Value = serde_json::from_str(&config).unwrap();
+        assert_eq!(config["inbounds"][0]["protocol"], "tun");
+        assert_eq!(config["routing"]["rules"][1]["outboundTag"], "proxy");
     }
 
     #[test]

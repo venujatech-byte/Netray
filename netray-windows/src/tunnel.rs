@@ -257,10 +257,7 @@ async fn run_xray_engine(
     cfg: &TunnelConfig,
     stop_rx: &mut tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // 0. Pre-clean existing xray instances
-    let _ = Command::new("taskkill").args(["/F", "/IM", "xray.exe"]).output().await;
-
-    // 1. Locate xray.exe
+    // 0. Locate xray.exe
     let xray_bin = match crate::v2ray::find_xray_binary() {
         Ok(bin) => bin,
         Err(e) => {
@@ -298,6 +295,8 @@ async fn run_xray_engine(
        .stdout(Stdio::piped())
        .stderr(Stdio::piped())
        .kill_on_drop(true);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
 
     let mut child = cmd.spawn()?;
 
@@ -316,7 +315,6 @@ async fn run_xray_engine(
         _ = &mut *stop_rx => {
             send_log(log_tx, "Supervisor", "Stopping Xray core and tearing down WinTun interface...", LogLevel::Info).await;
             let _ = child.kill().await;
-            let _ = Command::new("taskkill").args(["/F", "/IM", "xray.exe"]).output().await;
         }
     };
 
