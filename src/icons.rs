@@ -24,6 +24,8 @@ pub const ACTIVITY: &[u8] = lucide_svg!(r#"<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
 pub const PLAY: &[u8] = lucide_svg!(r#"<polygon points="6 3 20 12 6 21 6 3" fill="currentColor"/>"#);
 pub const SQUARE: &[u8] = lucide_svg!(r#"<rect width="16" height="16" x="4" y="4" rx="2" fill="currentColor"/>"#);
 pub const CHECK: &[u8] = lucide_svg!(r#"<path d="M20 6 9 17l-5-5"/>"#);
+pub const MINIMIZE: &[u8] = lucide_svg!(r#"<path d="M5 12h14"/>"#);
+pub const MAXIMIZE: &[u8] = lucide_svg!(r#"<rect x="5" y="5" width="14" height="14" rx="1"/>"#);
 pub const CLOSE: &[u8] = lucide_svg!(r#"<path d="M18 6 6 18"/><path d="m6 6 12 12"/>"#);
 pub const BACK: &[u8] = lucide_svg!(r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#);
 

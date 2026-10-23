@@ -1108,26 +1108,60 @@ impl NetrayApp {
             ViewMode::Logs => self.view_logs_screen(),
             ViewMode::SshSettings => self.view_ssh_screen(),
         };
+        let window_control = |icon, label, message, close| {
+            iced::widget::tooltip(
+                button(
+                    container(icons::lucide_icon(icon, 16, Color::WHITE))
+                        .center_x(Length::Fill)
+                        .center_y(Length::Fill),
+                )
+                .width(36)
+                .height(32)
+                .padding(0)
+                .style(move |_, status| button::Style {
+                    background: match status {
+                        button::Status::Hovered | button::Status::Pressed => {
+                            Some(if close { FAILURE_RED } else { SURFACE_CARD }.into())
+                        }
+                        _ => None,
+                    },
+                    text_color: Color::WHITE,
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .on_press(message),
+                text(label).size(12),
+                iced::widget::tooltip::Position::Bottom,
+            )
+        };
         let titlebar = row![
             iced::widget::mouse_area(
                 container(text("Netray").size(14))
-                    .padding(10)
+                    .padding([0, 10])
+                    .height(32)
+                    .center_y(Length::Fill)
                     .width(Length::Fill)
             )
             .on_press(Message::DragWindow),
-            button("−")
-                .style(button::text)
-                .padding(10)
-                .on_press(Message::MinimizeToTray),
-            button("□")
-                .style(button::text)
-                .padding(10)
-                .on_press(Message::MaximizeWindow),
-            button("×")
-                .style(button::text)
-                .padding(10)
-                .on_press(Message::RequestExit),
+            window_control(
+                icons::MINIMIZE,
+                "Minimize to tray",
+                Message::MinimizeToTray,
+                false
+            ),
+            window_control(
+                icons::MAXIMIZE,
+                "Maximize / restore",
+                Message::MaximizeWindow,
+                false
+            ),
+            window_control(icons::CLOSE, "Close", Message::RequestExit, true),
         ]
+        .spacing(4)
+        .padding(4)
         .align_y(Alignment::Center);
         let content = column![titlebar, content].height(Length::Fill);
         if self.close_confirmation.is_some() {
