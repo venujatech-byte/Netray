@@ -25,7 +25,12 @@ try {
     Expand-Archive -Path $zip -DestinationPath $extract
     Copy-Item (Join-Path $extract "*") -Destination $package -Recurse -Force
     Copy-Item $exe -Destination $package -Force
-    Set-Content (Join-Path $package "THIRD-PARTY-NOTICES.txt") "Xray-core $version is distributed under the Mozilla Public License 2.0. See LICENSE and https://github.com/XTLS/Xray-core for license and dependency notices."
+    Set-Content (Join-Path $package "THIRD-PARTY-NOTICES.txt") @"
+Netray bundles the unmodified Xray-core $version executable from XTLS/Xray-core.
+License: Mozilla Public License 2.0; see the accompanying LICENSE file.
+Corresponding source: https://github.com/XTLS/Xray-core/tree/$version
+Dependency licenses and notices: https://github.com/XTLS/Xray-core/blob/$version/go.mod
+"@
 
     $archive = Join-Path (Split-Path $package -Parent) "netray-windows.zip"
     Compress-Archive -Path (Join-Path $package "*") -DestinationPath $archive -Force
