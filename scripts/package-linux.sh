@@ -25,7 +25,7 @@ mkdir -p "$package" dist
 curl --fail --location --silent --show-error "$base_url/$asset" -o "$work/$asset"
 curl --fail --location --silent --show-error "$base_url/$asset.dgst" -o "$work/$asset.dgst"
 
-expected=$(awk '$1 == "SHA256" || $1 == "SHA2-256" { print $NF; exit }' "$work/$asset.dgst")
+expected=$(awk 'tolower($1) ~ /^sha256=/ { sub(/^[^=]*=/, "", $1); if ($1 == "") $1 = $2; print $1; exit } ($1 == "SHA256" || $1 == "SHA2-256") && $3 == "=" { print $4; exit }' "$work/$asset.dgst")
 actual=$(sha256sum "$work/$asset" | awk '{ print $1 }')
 if [[ -z "$expected" || "${actual,,}" != "${expected,,}" ]]; then
     echo "Xray release SHA-256 checksum is missing or does not match." >&2
