@@ -52,10 +52,13 @@ if ! command -v rpmbuild >/dev/null; then
     exit 1
 fi
 topdir="$work/rpmbuild"
-mkdir -p "$topdir/SOURCES" "$work/rpmroot/opt/netray" "$work/rpmroot/usr/bin"
+mkdir -p "$topdir/SOURCES" "$work/rpmroot/opt/netray" "$work/rpmroot/usr/bin" \
+    "$work/rpmroot/usr/share/applications" "$work/rpmroot/usr/share/icons/hicolor/scalable/apps"
 cp -a "$package/." "$work/rpmroot/opt/netray/"
 mkdir -p "$work/rpmroot/usr/share/licenses/netray"
 cp packaging/LICENSE-Netray.txt "$work/rpmroot/usr/share/licenses/netray/"
+cp packaging/netray.desktop "$work/rpmroot/usr/share/applications/"
+cp packaging/netray.svg "$work/rpmroot/usr/share/icons/hicolor/scalable/apps/"
 ln -s /opt/netray/netray "$work/rpmroot/usr/bin/netray"
 tar -czf "$topdir/SOURCES/netray-payload.tar.gz" -C "$work/rpmroot" .
 rpmbuild -bb packaging/netray.spec \

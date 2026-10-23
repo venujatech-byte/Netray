@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Netray
+GenericName=Network Tunnel Client
+Comment=Manage network tunnels and proxy profiles
+Exec=netray
+Icon=netray
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true

@@ -40,7 +40,7 @@ cargo run
 bash scripts/package-linux.sh 0.1.1
 ```
 
-The packages are written to `dist/`. Install the RPM with `sudo dnf install ./dist/netray-0.1.1-1.x86_64.rpm`; it installs Netray and Xray together and preserves Xray's upstream license and source notice. RPM architecture follows the build host; portable archives support Linux x86-64 and ARM64.
+The packages are written to `dist/`. Install the RPM with `sudo dnf install ./dist/netray-0.1.1-1.x86_64.rpm`; it installs Netray and Xray together, adds Netray to the desktop application menu, and preserves Xray's upstream license and source notice. RPM architecture follows the build host; portable archives support Linux x86-64 and ARM64.
 
 Every push to `main` or `master` builds Windows and Linux packages and publishes a GitHub Release tagged `v0.1.<run number>`. Pull requests build both platforms without publishing a release.
 

@@ -25,6 +25,8 @@ cp -a payload/. %{buildroot}/
 
 %files
 %{_bindir}/netray
+%{_datadir}/applications/netray.desktop
+%{_datadir}/icons/hicolor/scalable/apps/netray.svg
 /opt/netray/netray
 /opt/netray/xray
 /opt/netray/geoip.dat
