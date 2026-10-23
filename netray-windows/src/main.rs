@@ -26,6 +26,10 @@ const TEXT_MUTED: Color = Color::from_rgb(0.55, 0.60, 0.68);
 const INACTIVE_STRIP: Color = Color::from_rgb(0.30, 0.33, 0.38);
 const SUCCESS_GREEN: Color = Color::from_rgb(0.22, 0.78, 0.49);
 const FAILURE_RED: Color = Color::from_rgb(0.95, 0.35, 0.40);
+const APP_VERSION: &str = match option_env!("NETRAY_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 fn format_uptime(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
@@ -50,15 +54,20 @@ fn form_card_style(_theme: &Theme) -> container::Style {
 }
 
 pub fn main() -> iced::Result {
+    let window = iced::window::Settings {
+        size: (460.0, 600.0).into(),
+        icon: create_window_icon(),
+        exit_on_close_request: false,
+        ..Default::default()
+    };
     iced::application("Netray", NetrayApp::update, NetrayApp::view)
         .subscription(NetrayApp::subscription)
         .theme(|_| Theme::Dark)
-        .exit_on_close_request(false)
-        .window_size((460.0, 600.0))
+        .window(window)
         .run_with(NetrayApp::new)
 }
 
-fn create_tray_icon() -> Result<(TrayIcon, MenuItem), Box<dyn std::error::Error>> {
+fn load_logo_pixels() -> Result<(Vec<u8>, u32, u32), Box<dyn std::error::Error>> {
     let decoder = png::Decoder::new(std::io::Cursor::new(include_bytes!(
         "../../packaging/netray-tray.png"
     )));
@@ -70,15 +79,29 @@ fn create_tray_icon() -> Result<(TrayIcon, MenuItem), Box<dyn std::error::Error>
             .ok_or("tray icon image is too large")?
     ];
     let info = reader.next_frame(&mut pixels)?;
-    let icon = TrayIconImage::from_rgba(
-        pixels[..info.buffer_size()].to_vec(),
-        info.width,
-        info.height,
-    )?;
+    Ok((pixels[..info.buffer_size()].to_vec(), info.width, info.height))
+}
+
+fn create_window_icon() -> Option<iced::window::Icon> {
+    let (pixels, width, height) = load_logo_pixels().ok()?;
+    iced::window::icon::from_rgba(pixels, width, height).ok()
+}
+
+fn create_tray_icon() -> Result<(TrayIcon, MenuItem), Box<dyn std::error::Error>> {
+    let (pixels, width, height) = load_logo_pixels()?;
+    let icon = TrayIconImage::from_rgba(pixels, width, height)?;
     let show = MenuItem::with_id("show", "Show Netray", true, None);
+    let hide = MenuItem::with_id("hide", "Hide to Tray", true, None);
     let connect = MenuItem::with_id("connect", "Connect", true, None);
     let exit = MenuItem::with_id("exit", "Exit", true, None);
-    let menu = Menu::with_items(&[&show, &connect, &PredefinedMenuItem::separator(), &exit])?;
+    let menu = Menu::with_items(&[
+        &show,
+        &hide,
+        &PredefinedMenuItem::separator(),
+        &connect,
+        &PredefinedMenuItem::separator(),
+        &exit,
+    ])?;
     let tray = TrayIconBuilder::new()
         .with_icon(icon)
         .with_menu(Box::new(menu))
@@ -194,6 +217,7 @@ pub enum Message {
     SetViewMode(ViewMode),
     TunnelModeChanged(TunnelMode),
     ToggleTunnel,
+    MinimizeToTray,
 
     SelectProfile(String),
     PingProfile(String),
@@ -809,6 +833,12 @@ impl NetrayApp {
                                     .chain(iced::window::gain_focus(id));
                             }
                         }
+                        "hide" => {
+                            if let Some(id) = self.window_id {
+                                self.hidden_to_tray = true;
+                                return iced::window::change_mode(id, iced::window::Mode::Hidden);
+                            }
+                        }
                         "connect" if self.is_running || !self.worker_active => {
                             return self.update(Message::ToggleTunnel);
                         }
@@ -844,6 +874,16 @@ impl NetrayApp {
                 }
             }
             Message::Minimized(_) => Task::none(),
+            Message::MinimizeToTray => {
+                if self.tray_icon.is_some() {
+                    self.hidden_to_tray = true;
+                    self.window_id
+                        .map(|id| iced::window::change_mode(id, iced::window::Mode::Hidden))
+                        .unwrap_or_else(Task::none)
+                } else {
+                    Task::none()
+                }
+            }
             Message::ConfirmExit => {
                 if self.worker_active {
                     self.exit_after_stop = true;
@@ -1027,6 +1067,14 @@ impl NetrayApp {
                     ..Default::default()
                 })
                 .on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
+            button("Hide")
+                .padding(6)
+                .style(|_, _| button::Style {
+                    background: None,
+                    text_color: TEXT_MUTED,
+                    ..Default::default()
+                })
+                .on_press(Message::MinimizeToTray),
             button(icons::lucide_icon(icons::MORE_VERTICAL, 20, Color::WHITE))
                 .padding(6)
                 .style(|_, _| button::Style {
@@ -1750,7 +1798,15 @@ impl NetrayApp {
         )
         .height(Length::Fill);
 
-        column![top_bar, content,]
+        column![
+            top_bar,
+            content,
+            text(format!("Version {APP_VERSION}"))
+                .size(11)
+                .color(TEXT_MUTED)
+                .width(Length::Fill)
+                .align_x(Alignment::Center),
+        ]
             .spacing(6)
             .width(Length::Fill)
             .height(Length::Fill)
