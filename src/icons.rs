@@ -20,6 +20,7 @@ pub const PLUS: &[u8] = lucide_svg!(r#"<path d="M5 12h14"/><path d="M12 5v14"/>"
 pub const SHARE: &[u8] = lucide_svg!(r#"<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>"#);
 pub const PENCIL: &[u8] = lucide_svg!(r#"<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/>"#);
 pub const TRASH: &[u8] = lucide_svg!(r#"<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>"#);
+pub const ACTIVITY: &[u8] = lucide_svg!(r#"<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>"#);
 pub const PLAY: &[u8] = lucide_svg!(r#"<polygon points="6 3 20 12 6 21 6 3" fill="currentColor"/>"#);
 pub const SQUARE: &[u8] = lucide_svg!(r#"<rect width="16" height="16" x="4" y="4" rx="2" fill="currentColor"/>"#);
 pub const CHECK: &[u8] = lucide_svg!(r#"<path d="M20 6 9 17l-5-5"/>"#);
