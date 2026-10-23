@@ -265,25 +265,26 @@ impl NetrayApp {
     }
 
     fn save_current_state(&self) -> Result<std::path::PathBuf, String> {
-        let app_data = storage::AppData {
-            v2ray_profiles: self.v2ray_profiles.clone(),
-            active_profile_id: self.active_profile_id.clone(),
-            v2ray_uri_or_json: self.v2ray_uri_or_json.clone(),
-            local_socks_port: self.local_socks_port.clone(),
+        let mode_str = format!("{:?}", self.tunnel_mode);
+        let app_ref = storage::AppDataRef {
+            v2ray_profiles: &self.v2ray_profiles,
+            active_profile_id: self.active_profile_id.as_deref(),
+            v2ray_uri_or_json: &self.v2ray_uri_or_json,
+            local_socks_port: &self.local_socks_port,
             enable_tun: self.enable_tun,
             enable_sysproxy: self.enable_sysproxy,
-            tunnel_mode: format!("{:?}", self.tunnel_mode),
-            ssh_host: self.ssh_host.clone(),
-            ssh_port: self.ssh_port.clone(),
-            ssh_user: self.ssh_user.clone(),
-            ssh_pass: self.ssh_pass.clone(),
-            proxy_ip: self.proxy_ip.clone(),
-            proxy_port: self.proxy_port.clone(),
-            payload_text: self.payload_text.clone(),
-            bug_host: self.bug_host.clone(),
-            sni_host: self.sni_host.clone(),
+            tunnel_mode: &mode_str,
+            ssh_host: &self.ssh_host,
+            ssh_port: &self.ssh_port,
+            ssh_user: &self.ssh_user,
+            ssh_pass: &self.ssh_pass,
+            proxy_ip: &self.proxy_ip,
+            proxy_port: &self.proxy_port,
+            payload_text: &self.payload_text,
+            bug_host: &self.bug_host,
+            sni_host: &self.sni_host,
         };
-        storage::save_data(&app_data)
+        storage::save_state_ref(&app_ref)
     }
 
     fn push_log(&mut self, source: &str, message: impl Into<String>, level: LogLevel) {
@@ -314,8 +315,8 @@ impl NetrayApp {
                 Task::none()
             }
             Message::SelectProfile(id) => {
-                if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id).cloned() {
-                    self.v2ray_uri_or_json = p.config;
+                if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id) {
+                    self.v2ray_uri_or_json = p.config.clone();
                     self.active_profile_id = Some(id);
                     let _ = self.save_current_state();
                 }
@@ -326,7 +327,7 @@ impl NetrayApp {
                 iced::clipboard::write(cfg)
             }
             Message::EditProfile(id) => {
-                if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id).cloned() {
+                if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id) {
                     self.node_edit_state = v2ray::NodeEditState::from_profile(&p.id, &p.name, &p.config);
                     self.view_mode = ViewMode::EditNode;
                 }

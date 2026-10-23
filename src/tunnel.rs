@@ -431,18 +431,12 @@ async fn run_xray_engine(
 
     let mut cmd = if use_pkexec {
         let mut c = Command::new("pkexec");
-        c.arg(&xray_bin)
-            .arg("run")
-            .arg("-c")
-            .arg(&config_path);
+        c.arg(&xray_bin);
         c
     } else {
-        let mut c = Command::new(&xray_bin);
-        c.arg("run")
-            .arg("-c")
-            .arg(&config_path);
-        c
+        Command::new(&xray_bin)
     };
+    cmd.args(["run", "-c", &config_path]);
 
     let mut child = match cmd
         .stdout(Stdio::piped())
