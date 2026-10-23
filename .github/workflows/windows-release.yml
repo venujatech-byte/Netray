@@ -1,4 +1,4 @@
-name: Netray Windows CI
+name: Netray Build and Release
 
 on:
   push:
@@ -7,37 +7,97 @@ on:
     branches: [ master, main ]
 
 jobs:
-  build-windows:
-    name: Build Netray Windows Binary
-    runs-on: windows-latest
+  build:
+    name: Build ${{ matrix.os }} packages
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      NETRAY_VERSION: 0.1.${{ github.run_number }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
+
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip rpm pkg-config libasound2-dev libudev-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libvulkan-dev
 
       - name: Cache Cargo registry and target
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            target
             netray-windows/target
-          key: ${{ runner.os }}-cargo-windows-${{ hashFiles('netray-windows/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'netray-windows/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-windows-
+            ${{ runner.os }}-cargo-
 
-      - name: Run Windows Tests
+      - name: Run Windows tests
+        if: runner.os == 'Windows'
         run: cargo test --manifest-path netray-windows/Cargo.toml --verbose
 
-      - name: Build Release Binary
-        run: cargo build --manifest-path netray-windows/Cargo.toml --release
+      - name: Build Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --manifest-path netray-windows/Cargo.toml --release
+          ./netray-windows/scripts/package-windows.ps1 -Version $env:NETRAY_VERSION
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - name: Build Linux RPM and portable package
+        if: runner.os == 'Linux'
+        run: bash scripts/package-linux.sh "$NETRAY_VERSION"
+
+      - name: Upload Windows release package
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
         with:
-          name: netray-windows-x86_64
-          path: netray-windows/target/release/netray-windows.exe
+          name: netray-windows
+          path: netray-windows/dist/*.zip
+
+      - name: Upload Linux release packages
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: netray-linux
+          path: dist/*
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: netray-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: 0.1.${{ github.run_number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* --target "${GITHUB_SHA}" \
+              --title "Netray $tag" \
+              --notes "Automated Netray release from commit ${GITHUB_SHA}."
+          fi
