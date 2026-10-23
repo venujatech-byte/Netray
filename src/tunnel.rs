@@ -65,33 +65,42 @@ pub async fn run_real_tunnel_worker(
     )
     .await;
 
-    let engine_task = async {
-        let result = match cfg.mode {
-            TunnelMode::SshPayload => run_ssh_payload_engine(&log_tx, &cfg, false).await,
-            TunnelMode::SshSslSni => run_ssh_payload_engine(&log_tx, &cfg, true).await,
-            TunnelMode::V2RayXray => run_xray_engine(&log_tx, &cfg).await,
-            TunnelMode::SlowDns => {
-                Err("SlowDNS binary wrapper not yet configured.".into())
+    let result = match cfg.mode {
+        TunnelMode::SshPayload => {
+            tokio::select! {
+                res = run_ssh_payload_engine(&log_tx, &cfg, false) => res,
+                _ = &mut stop_rx => {
+                    send_log(&log_tx, "Supervisor", "Tunnel stopped by user. All sockets closed.", LogLevel::Warn).await;
+                    Ok(())
+                }
             }
-        };
-
-        if let Err(e) = result {
-            send_log(&log_tx, "Error", format!("Engine failed: {}", e), LogLevel::Error).await;
         }
+        TunnelMode::SshSslSni => {
+            tokio::select! {
+                res = run_ssh_payload_engine(&log_tx, &cfg, true) => res,
+                _ = &mut stop_rx => {
+                    send_log(&log_tx, "Supervisor", "Tunnel stopped by user. All sockets closed.", LogLevel::Warn).await;
+                    Ok(())
+                }
+            }
+        }
+        TunnelMode::V2RayXray => run_xray_engine(&log_tx, &cfg, &mut stop_rx).await,
+        TunnelMode::SlowDns => Err("SlowDNS binary wrapper not yet configured.".into()),
     };
 
-    // Wait for either the engine to exit OR the user to click STOP TUNNEL
-    tokio::select! {
-        _ = engine_task => {}
-        _ = &mut stop_rx => {
-            send_log(&log_tx, "Supervisor", "Tunnel stopped by user. All sockets and child processes closed.", LogLevel::Warn).await;
-        }
+    if let Err(e) = result {
+        send_log(&log_tx, "Error", format!("Engine failed: {}", e), LogLevel::Error).await;
     }
 
     if cfg.enable_sysproxy || cfg.enable_tun {
         crate::sysproxy::disable_system_proxy().await;
         send_log(&log_tx, "SystemProxy", "System-wide proxy & TUN routing disabled. Network restored.", LogLevel::Info).await;
     }
+
+    if cfg.enable_tun {
+        let _ = Command::new("ip").args(["link", "delete", "tun0"]).output().await;
+    }
+    let _ = Command::new("pkill").args(["-f", "netray_xray_"]).output().await;
 
     send_log(&log_tx, "Supervisor", "Tunnel is offline.", LogLevel::Info).await;
 }
@@ -327,7 +336,14 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
 async fn run_xray_engine(
     log_tx: &mpsc::UnboundedSender<LogEntry>,
     cfg: &TunnelConfig,
+    stop_rx: &mut tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // 0. Clean up any stale processes or orphaned tun0 before starting
+    let _ = Command::new("pkill").args(["-f", "netray_xray_"]).output().await;
+    if cfg.enable_tun {
+        let _ = Command::new("ip").args(["link", "delete", "tun0"]).output().await;
+    }
+
     // 1. Locate xray / v2ray binary
     let xray_bin = match crate::v2ray::find_xray_binary() {
         Ok(bin) => bin,
@@ -429,46 +445,55 @@ async fn run_xray_engine(
 
     send_log(log_tx, "Xray", "Spawning core process...", LogLevel::Info).await;
 
+    let supervisor_script = r#"
+xray_bin="$1"
+cfg="$2"
+
+cleanup() {
+    if [ -n "$XRAY_PID" ]; then
+        kill -TERM "$XRAY_PID" 2>/dev/null
+        wait "$XRAY_PID" 2>/dev/null
+        kill -9 "$XRAY_PID" 2>/dev/null
+    fi
+    ip link delete tun0 2>/dev/null
+    rm -f "$cfg"
+    exit 0
+}
+
+trap cleanup TERM INT HUP EXIT
+
+"$xray_bin" run -c "$cfg" &
+XRAY_PID=$!
+
+cat >/dev/null 2>&1
+cleanup
+"#;
+
+    let xray_bin_str = xray_bin.to_string_lossy().to_string();
     let mut cmd = if use_pkexec {
         let mut c = Command::new("pkexec");
-        c.arg(&xray_bin);
+        c.args(["sh", "-c", supervisor_script, "_", &xray_bin_str, &config_path]);
         c
     } else {
-        Command::new(&xray_bin)
+        let mut c = Command::new("sh");
+        c.args(["-c", supervisor_script, "_", &xray_bin_str, &config_path]);
+        c
     };
-    cmd.args(["run", "-c", &config_path]);
 
-    let mut child = match cmd
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
+        .kill_on_drop(true);
+
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             let _ = tokio::fs::remove_file(&config_path).await;
-            if use_pkexec {
-                send_log(
-                    log_tx,
-                    "TUN",
-                    format!("Failed to spawn pkexec: {}. Falling back to unprivileged core.", e),
-                    LogLevel::Warn,
-                )
-                .await;
-                let mut fallback = Command::new(&xray_bin);
-                fallback
-                    .arg("run")
-                    .arg("-c")
-                    .arg(&config_path)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .kill_on_drop(true)
-                    .spawn()?
-            } else {
-                return Err(e.into());
-            }
+            return Err(e.into());
         }
     };
+
+    let mut stdin = child.stdin.take();
 
     if let Some(stdout) = child.stdout.take() {
         spawn_xray_log_pipe(stdout, log_tx.clone());
@@ -478,27 +503,43 @@ async fn run_xray_engine(
         spawn_xray_log_pipe(stderr, log_tx.clone());
     }
 
-    let status = child.wait().await?;
-    let _ = tokio::fs::remove_file(&config_path).await;
-    let _ = tokio::process::Command::new("pkill")
-        .args(["-f", &config_path])
-        .output()
-        .await;
-
-    if !status.success() {
-        if use_pkexec && status.code() == Some(126) {
-            send_log(
-                log_tx,
-                "TUN",
-                "TUN authorization was dismissed. Tip: Enable GNOME System Proxy for rootless routing, or grant capability: sudo setcap cap_net_admin,cap_net_bind_service=+ep /usr/local/bin/xray",
-                LogLevel::Warn,
-            )
-            .await;
-        } else {
-            send_log(log_tx, "Xray", format!("Core process exited with: {}", status), LogLevel::Warn).await;
+    let status_opt = tokio::select! {
+        res = child.wait() => {
+            Some(res?)
         }
-    } else {
-        send_log(log_tx, "Xray", format!("Core process exited cleanly: {}", status), LogLevel::Info).await;
+        _ = &mut *stop_rx => {
+            send_log(log_tx, "Supervisor", "Stopping Xray core and tearing down TUN interface...", LogLevel::Info).await;
+            // Dropping stdin triggers the supervisor's cleanup trap immediately
+            drop(stdin.take());
+            // Give up to 1 second for graceful exit, then ensure process is dead
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(1000), child.wait()).await;
+            let _ = child.kill().await;
+            None
+        }
+    };
+
+    if let Some(status) = status_opt {
+        if !status.success() {
+            if use_pkexec && status.code() == Some(126) {
+                send_log(
+                    log_tx,
+                    "TUN",
+                    "TUN authorization was dismissed. Tip: Enable GNOME System Proxy for rootless routing, or grant capability: sudo setcap cap_net_admin,cap_net_bind_service=+ep /usr/local/bin/xray",
+                    LogLevel::Warn,
+                )
+                .await;
+            } else {
+                send_log(log_tx, "Xray", format!("Core process exited with: {}", status), LogLevel::Warn).await;
+            }
+        } else {
+            send_log(log_tx, "Xray", format!("Core process exited cleanly: {}", status), LogLevel::Info).await;
+        }
+    }
+
+    let _ = tokio::fs::remove_file(&config_path).await;
+    let _ = Command::new("pkill").args(["-f", &config_path]).output().await;
+    if cfg.enable_tun {
+        let _ = Command::new("ip").args(["link", "delete", "tun0"]).output().await;
     }
     Ok(())
 }
