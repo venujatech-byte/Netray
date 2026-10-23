@@ -1,6 +1,7 @@
 mod tunnel;
 pub mod sysproxy;
 pub mod v2ray;
+pub mod storage;
 use tunnel::{run_real_tunnel_worker, TunnelConfig};
 use chrono::Local;
 use iced::futures::SinkExt;
@@ -99,6 +100,10 @@ pub struct NetrayApp {
     pub enable_tun: bool,
     pub enable_sysproxy: bool,
 
+    // Saved V2Ray Profiles & Persistence
+    pub v2ray_profiles: Vec<storage::V2RayProfile>,
+    pub active_profile_id: Option<String>,
+
     // Real-time Logs & Background Worker Control
     pub logs: Vec<LogEntry>,
     pub log_sender: Option<mpsc::UnboundedSender<LogEntry>>,
@@ -141,6 +146,12 @@ pub enum Message {
     ToggleTunMode(bool),
     ToggleSysProxy(bool),
 
+    // Profile Management & Persistence
+    SaveCurrentProfile,
+    SelectProfile(String),
+    DeleteProfile(String),
+    ExportActiveXrayJson,
+
     // Real-time Logger Events
     LoggerReady(mpsc::UnboundedSender<LogEntry>),
     NewLog(LogEntry),
@@ -149,36 +160,48 @@ pub enum Message {
 
 impl NetrayApp {
     fn new() -> (Self, Task<Message>) {
-        let app = Self {
-            active_tab: ActiveTab::PayloadSni,
-            is_running: false,
-            tunnel_mode: TunnelMode::SshPayload,
+        let saved = storage::load_data();
 
-            payload_text: "GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]"
-                .to_string(),
-            bug_host: "cdn.bug-example.com".to_string(),
-            sni_host: "cdn.bug-example.com".to_string(),
+        let tunnel_mode = match saved.tunnel_mode.as_str() {
+            "SshPayload" => TunnelMode::SshPayload,
+            "SshSslSni" => TunnelMode::SshSslSni,
+            "SlowDns" => TunnelMode::SlowDns,
+            _ => TunnelMode::V2RayXray,
+        };
+
+        let app = Self {
+            active_tab: ActiveTab::V2RayConfig,
+            is_running: false,
+            tunnel_mode,
+
+            payload_text: saved.payload_text,
+            bug_host: saved.bug_host,
+            sni_host: saved.sni_host,
             gen_keep_alive: true,
             gen_online_host: true,
             gen_split: false,
 
-            ssh_host: "sg1.myserver.com".to_string(),
-            ssh_port: "22".to_string(),
-            ssh_user: "netray".to_string(),
-            ssh_pass: "".to_string(),
-            proxy_ip: "104.16.51.111".to_string(),
-            proxy_port: "80".to_string(),
-            local_socks_port: "10808".to_string(),
+            ssh_host: saved.ssh_host,
+            ssh_port: saved.ssh_port,
+            ssh_user: saved.ssh_user,
+            ssh_pass: saved.ssh_pass,
+            proxy_ip: saved.proxy_ip,
+            proxy_port: saved.proxy_port,
+            local_socks_port: saved.local_socks_port,
 
-            v2ray_uri_or_json: "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#Sample-Node"
-                .to_string(),
-            enable_tun: true,
-            enable_sysproxy: true,
+            v2ray_uri_or_json: saved.v2ray_uri_or_json,
+            enable_tun: saved.enable_tun,
+            enable_sysproxy: saved.enable_sysproxy,
+            v2ray_profiles: saved.v2ray_profiles,
+            active_profile_id: saved.active_profile_id,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
-                source: "System".into(),
-                message: "Netray Linux initialized. Ready to start tunnel.".into(),
+                source: "Storage".into(),
+                message: format!(
+                    "Loaded persistent configuration from {}",
+                    storage::get_config_path().display()
+                ),
                 level: LogLevel::Info,
             }],
             log_sender: None,
@@ -187,6 +210,33 @@ impl NetrayApp {
         };
 
         (app, Task::none())
+    }
+
+    fn save_current_state(&self) -> Result<std::path::PathBuf, String> {
+        let app_data = storage::AppData {
+            v2ray_profiles: self.v2ray_profiles.clone(),
+            active_profile_id: self.active_profile_id.clone(),
+            v2ray_uri_or_json: self.v2ray_uri_or_json.clone(),
+            local_socks_port: self.local_socks_port.clone(),
+            enable_tun: self.enable_tun,
+            enable_sysproxy: self.enable_sysproxy,
+            tunnel_mode: match self.tunnel_mode {
+                TunnelMode::SshPayload => "SshPayload".to_string(),
+                TunnelMode::SshSslSni => "SshSslSni".to_string(),
+                TunnelMode::V2RayXray => "V2RayXray".to_string(),
+                TunnelMode::SlowDns => "SlowDns".to_string(),
+            },
+            ssh_host: self.ssh_host.clone(),
+            ssh_port: self.ssh_port.clone(),
+            ssh_user: self.ssh_user.clone(),
+            ssh_pass: self.ssh_pass.clone(),
+            proxy_ip: self.proxy_ip.clone(),
+            proxy_port: self.proxy_port.clone(),
+            payload_text: self.payload_text.clone(),
+            bug_host: self.bug_host.clone(),
+            sni_host: self.sni_host.clone(),
+        };
+        storage::save_data(&app_data)
     }
 
     // Helper to push logs from anywhere in the UI or background tasks
@@ -307,13 +357,40 @@ impl NetrayApp {
                         || trimmed.starts_with("ss://")
                         || trimmed.starts_with('{')
                     {
+                        let node_name = crate::v2ray::extract_node_name(trimmed);
+                        let id = format!(
+                            "node-{}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                        );
+                        let profile = storage::V2RayProfile {
+                            id: id.clone(),
+                            name: node_name.clone(),
+                            config: trimmed.to_string(),
+                            created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                        };
+                        self.v2ray_profiles.retain(|p| p.config != trimmed);
+                        self.v2ray_profiles.insert(0, profile);
+                        self.active_profile_id = Some(id);
+
                         self.v2ray_uri_or_json = trimmed.to_string();
                         self.tunnel_mode = TunnelMode::V2RayXray;
                         self.active_tab = ActiveTab::V2RayConfig;
+
+                        if let Ok(path) = self.save_current_state() {
+                            self.push_log(
+                                "Storage",
+                                format!("Auto-saved node '{}' to {}", node_name, path.display()),
+                                LogLevel::Success,
+                            );
+                        }
                         self.push_log(
                             "Clipboard",
                             format!(
-                                "Imported V2Ray config ({} chars) from clipboard. Switched mode to V2Ray/Xray.",
+                                "Imported V2Ray node '{}' ({} chars). Switched mode to V2Ray/Xray.",
+                                node_name,
                                 trimmed.len()
                             ),
                             LogLevel::Success,
@@ -331,8 +408,90 @@ impl NetrayApp {
                 Task::none()
             }
 
+            Message::SaveCurrentProfile => {
+                let trimmed = self.v2ray_uri_or_json.trim();
+                if !trimmed.is_empty() {
+                    let node_name = crate::v2ray::extract_node_name(trimmed);
+                    let id = format!(
+                        "node-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                    );
+                    let profile = storage::V2RayProfile {
+                        id: id.clone(),
+                        name: node_name.clone(),
+                        config: trimmed.to_string(),
+                        created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                    };
+                    self.v2ray_profiles.retain(|p| p.config != trimmed);
+                    self.v2ray_profiles.insert(0, profile);
+                    self.active_profile_id = Some(id);
+                    if let Ok(path) = self.save_current_state() {
+                        self.push_log(
+                            "Storage",
+                            format!("Saved profile '{}' to {}", node_name, path.display()),
+                            LogLevel::Success,
+                        );
+                    }
+                }
+                Task::none()
+            }
+
+            Message::SelectProfile(id) => {
+                if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id).cloned() {
+                    self.v2ray_uri_or_json = p.config;
+                    self.active_profile_id = Some(id);
+                    self.tunnel_mode = TunnelMode::V2RayXray;
+                    self.active_tab = ActiveTab::V2RayConfig;
+                    let _ = self.save_current_state();
+                    self.push_log("Storage", format!("Activated profile '{}'.", p.name), LogLevel::Success);
+                }
+                Task::none()
+            }
+
+            Message::DeleteProfile(id) => {
+                self.v2ray_profiles.retain(|p| p.id != id);
+                if self.active_profile_id.as_deref() == Some(&id) {
+                    self.active_profile_id = self.v2ray_profiles.first().map(|p| p.id.clone());
+                    if let Some(first) = self.v2ray_profiles.first() {
+                        self.v2ray_uri_or_json = first.config.clone();
+                    }
+                }
+                let _ = self.save_current_state();
+                self.push_log("Storage", "Deleted profile from saved configuration.", LogLevel::Info);
+                Task::none()
+            }
+
+            Message::ExportActiveXrayJson => {
+                let socks_p: u16 = self.local_socks_port.parse().unwrap_or(10808);
+                let http_p = socks_p.saturating_add(1);
+                match crate::v2ray::parse_and_generate_xray_config(&self.v2ray_uri_or_json, socks_p, http_p, self.enable_tun) {
+                    Ok(json_cfg) => {
+                        match storage::save_active_xray_json(&json_cfg) {
+                            Ok(path) => {
+                                self.push_log(
+                                    "Storage",
+                                    format!("Exported active Xray config to {}", path.display()),
+                                    LogLevel::Success,
+                                );
+                            }
+                            Err(e) => {
+                                self.push_log("Storage", format!("Failed to export Xray config: {}", e), LogLevel::Error);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.push_log("Storage", format!("Config error: {}", e), LogLevel::Error);
+                    }
+                }
+                Task::none()
+            }
+
             Message::ToggleTunMode(v) => {
                 self.enable_tun = v;
+                let _ = self.save_current_state();
                 self.push_log(
                     "Config",
                     if v { "TUN Mode enabled (virtual network interface)." } else { "TUN Mode disabled." },
@@ -343,6 +502,7 @@ impl NetrayApp {
 
             Message::ToggleSysProxy(v) => {
                 self.enable_sysproxy = v;
+                let _ = self.save_current_state();
                 self.push_log(
                     "Config",
                     if v { "GNOME System Proxy enabled." } else { "GNOME System Proxy disabled." },
@@ -505,6 +665,9 @@ impl NetrayApp {
                 .on_toggle(Message::ToggleSysProxy)
                 .size(13),
             Space::with_height(10),
+            button(text(format!("Profiles ({})", self.v2ray_profiles.len())).width(Length::Fill))
+                .on_press(Message::TabSelected(ActiveTab::Home))
+                .width(Length::Fill),
             button(text("Payload / SNI").width(Length::Fill))
                 .on_press(Message::TabSelected(ActiveTab::PayloadSni))
                 .width(Length::Fill),
@@ -625,18 +788,23 @@ impl NetrayApp {
             .saturating_add(1);
 
         let node_name = crate::v2ray::extract_node_name(&self.v2ray_uri_or_json);
+        let config_path_display = storage::get_config_path().display().to_string();
 
         column![
             text("V2Ray / Xray Configuration").size(20),
-            text("Directly connects through Xray/V2Ray core with TUN Mode and System Proxy support.")
-                .size(13)
-                .color(Color::from_rgb(0.7, 0.7, 0.7)),
+            text(format!("Configuration auto-saved to: {}", config_path_display))
+                .size(12)
+                .color(Color::from_rgb(0.6, 0.6, 0.6)),
             Space::with_height(5),
             row![
                 text(format!("Active Node: {}", node_name))
                     .size(14)
                     .color(Color::from_rgb(0.35, 0.85, 0.95)),
-            ],
+                Space::with_width(15),
+                text(format!("({} profiles stored)", self.v2ray_profiles.len()))
+                    .size(12)
+                    .color(Color::from_rgb(0.5, 0.5, 0.5)),
+            ].align_y(Alignment::Center),
             Space::with_height(5),
             text("Configuration URI / Raw Xray JSON:"),
             text_input("vless://... or vmess://... or Xray JSON", &self.v2ray_uri_or_json)
@@ -674,18 +842,106 @@ impl NetrayApp {
             .spacing(25),
             Space::with_height(15),
             row![
-                button("📋 Import from Clipboard").on_press(Message::RequestClipboardImport),
-                button("✓ Validate Configuration").on_press(Message::ValidateV2RayConfig),
+                button("📋 Import Clipboard").on_press(Message::RequestClipboardImport),
+                button("💾 Save to Profiles").on_press(Message::SaveCurrentProfile),
+                button("📂 Export Xray JSON").on_press(Message::ExportActiveXrayJson),
+                button("✓ Validate Config").on_press(Message::ValidateV2RayConfig),
                 button("Load Sample Node").on_press(Message::LoadSampleV2Ray),
             ]
-            .spacing(15),
+            .spacing(12),
         ]
         .spacing(12)
         .into()
     }
 
     fn view_home_tab(&self) -> Element<'_, Message> {
-        column![text("Profiles").size(20)].into()
+        let profiles_count = self.v2ray_profiles.len();
+        let config_path_display = storage::get_config_path().display().to_string();
+
+        let profile_list: Vec<Element<Message>> = self
+            .v2ray_profiles
+            .iter()
+            .map(|p| {
+                let is_active = self.active_profile_id.as_deref() == Some(&p.id)
+                    || self.v2ray_uri_or_json == p.config;
+                let active_badge = if is_active {
+                    text("● ACTIVE").size(12).color(Color::from_rgb(0.2, 0.9, 0.4))
+                } else {
+                    text("IDLE").size(12).color(Color::from_rgb(0.5, 0.5, 0.5))
+                };
+
+                let proto_color = if p.config.starts_with("vless://") {
+                    Color::from_rgb(0.3, 0.8, 0.95)
+                } else if p.config.starts_with("vmess://") {
+                    Color::from_rgb(0.9, 0.5, 0.9)
+                } else if p.config.starts_with("trojan://") {
+                    Color::from_rgb(0.95, 0.7, 0.3)
+                } else {
+                    Color::from_rgb(0.5, 0.8, 0.5)
+                };
+
+                let proto_name = if p.config.starts_with("vless://") {
+                    "VLESS"
+                } else if p.config.starts_with("vmess://") {
+                    "VMESS"
+                } else if p.config.starts_with("trojan://") {
+                    "TROJAN"
+                } else if p.config.starts_with("ss://") {
+                    "SHADOWSOCKS"
+                } else {
+                    "JSON"
+                };
+
+                let id_clone_1 = p.id.clone();
+                let id_clone_2 = p.id.clone();
+
+                container(
+                    row![
+                        column![
+                            row![
+                                text(&p.name).size(16).color(Color::WHITE),
+                                Space::with_width(10),
+                                text(format!("[{}]", proto_name)).size(12).color(proto_color),
+                                Space::with_width(10),
+                                active_badge,
+                            ].align_y(Alignment::Center),
+                            Space::with_height(3),
+                            text(&p.created_at).size(11).color(Color::from_rgb(0.5, 0.5, 0.5)),
+                        ].width(Length::Fill),
+                        row![
+                            button("▶ Activate").on_press(Message::SelectProfile(id_clone_1)),
+                            button("🗑 Delete").on_press(Message::DeleteProfile(id_clone_2)),
+                        ].spacing(10),
+                    ]
+                    .align_y(Alignment::Center)
+                    .padding(10),
+                )
+                .width(Length::Fill)
+                .into()
+            })
+            .collect();
+
+        column![
+            text("Saved V2Ray / Xray Profiles").size(22),
+            text(format!("Configuration file: {}", config_path_display))
+                .size(12)
+                .color(Color::from_rgb(0.6, 0.6, 0.6)),
+            Space::with_height(10),
+            row![
+                button("📋 Import from Clipboard").on_press(Message::RequestClipboardImport),
+                button("💾 Save Current Config as Profile").on_press(Message::SaveCurrentProfile),
+                button("📂 Export Active Xray JSON").on_press(Message::ExportActiveXrayJson),
+            ].spacing(12),
+            Space::with_height(15),
+            text(format!("Stored Profiles ({})", profiles_count)).size(15),
+            if profile_list.is_empty() {
+                Element::from(text("No saved profiles. Click 'Import from Clipboard' or paste a link to save your first profile.").color(Color::from_rgb(0.6, 0.6, 0.6)))
+            } else {
+                scrollable(column(profile_list).spacing(8)).height(Length::Fill).into()
+            }
+        ]
+        .spacing(10)
+        .into()
     }
 
     fn view_logs_tab(&self) -> Element<'_, Message> {
