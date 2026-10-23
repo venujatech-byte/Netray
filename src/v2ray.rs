@@ -260,6 +260,25 @@ fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
     let pbk = query.get("pbk").cloned().unwrap_or_default();
     let sid = query.get("sid").cloned().unwrap_or_default();
 
+    let vcn = query
+        .get("vcn")
+        .or_else(|| query.get("verifyPeerCertByName"))
+        .cloned()
+        .or_else(|| {
+            if !sni.is_empty() && sni != host && host.parse::<std::net::IpAddr>().is_err() {
+                Some(host.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    let pinned_cert = query
+        .get("pcs")
+        .or_else(|| query.get("pinnedPeerCertSha256"))
+        .cloned()
+        .unwrap_or_default();
+
     let mut user_obj = json!({
         "id": uuid,
         "encryption": encryption,
@@ -278,6 +297,8 @@ fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
         &fp,
         &pbk,
         &sid,
+        &vcn,
+        &pinned_cert,
     )?;
 
     Ok(json!({
@@ -370,6 +391,12 @@ fn parse_vmess_uri(uri_str: &str) -> Result<Value, String> {
         .and_then(|v| v.as_str())
         .unwrap_or("/");
 
+    let vcn = if !effective_sni.is_empty() && effective_sni != host && host.parse::<std::net::IpAddr>().is_err() {
+        host.to_string()
+    } else {
+        "".to_string()
+    };
+
     let stream_settings = build_stream_settings(
         network,
         security,
@@ -379,6 +406,8 @@ fn parse_vmess_uri(uri_str: &str) -> Result<Value, String> {
         "",
         "chrome",
         "",
+        "",
+        &vcn,
         "",
     )?;
 
@@ -432,6 +461,25 @@ fn parse_trojan_uri(uri_str: &str) -> Result<Value, String> {
     let service_name = query.get("serviceName").cloned().unwrap_or_default();
     let fp = query.get("fp").cloned().unwrap_or_else(|| "chrome".to_string());
 
+    let vcn = query
+        .get("vcn")
+        .or_else(|| query.get("verifyPeerCertByName"))
+        .cloned()
+        .or_else(|| {
+            if !sni.is_empty() && sni != host && host.parse::<std::net::IpAddr>().is_err() {
+                Some(host.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    let pinned_cert = query
+        .get("pcs")
+        .or_else(|| query.get("pinnedPeerCertSha256"))
+        .cloned()
+        .unwrap_or_default();
+
     let stream_settings = build_stream_settings(
         network,
         security,
@@ -442,6 +490,8 @@ fn parse_trojan_uri(uri_str: &str) -> Result<Value, String> {
         &fp,
         "",
         "",
+        &vcn,
+        &pinned_cert,
     )?;
 
     Ok(json!({
@@ -520,6 +570,8 @@ fn build_stream_settings(
     fp: &str,
     pbk: &str,
     sid: &str,
+    vcn: &str,
+    pinned_cert: &str,
 ) -> Result<Value, String> {
     let mut settings = json!({
         "network": network,
@@ -573,11 +625,16 @@ fn build_stream_settings(
     if security == "tls" {
         settings["security"] = json!("tls");
         let mut tls_settings = json!({
-            "allowInsecure": false,
             "fingerprint": fp,
         });
         if !sni.is_empty() {
             tls_settings["serverName"] = json!(sni);
+        }
+        if !vcn.is_empty() {
+            tls_settings["verifyPeerCertByName"] = json!(vcn);
+        }
+        if !pinned_cert.is_empty() {
+            tls_settings["pinnedPeerCertSha256"] = json!(pinned_cert);
         }
         settings["tlsSettings"] = tls_settings;
     } else if security == "reality" {
@@ -754,6 +811,22 @@ mod tests {
         assert_eq!(inbounds.len(), 3);
         assert_eq!(inbounds[2]["protocol"], "tun");
         assert_eq!(inbounds[2]["settings"]["name"], "tun0");
+    }
+
+    #[tokio::test]
+    async fn test_sni_bughost_verify_peer_cert() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=zoom.us&type=ws&path=%2F#BugHostNode";
+        let config = parse_and_generate_xray_config(uri, 10808, 10809, false).expect("Should parse");
+        let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
+
+        let tls_settings = &json_val["outbounds"][0]["streamSettings"]["tlsSettings"];
+        assert_eq!(tls_settings["serverName"], "zoom.us");
+        assert_eq!(tls_settings["verifyPeerCertByName"], "example.com");
+
+        if let Ok(bin) = find_xray_binary() {
+            let res = test_xray_config(&bin, &config).await;
+            assert!(res.is_ok(), "Xray validation failed for bug host: {:?}", res);
+        }
     }
 }
 
