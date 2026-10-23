@@ -526,10 +526,10 @@ impl NetrayApp {
                 }
 
                 self.logs.push(entry);
-                if self.logs.len() > 1000 {
-                    self.logs.remove(0);
+                if self.logs.len() > 150 {
+                    self.logs.drain(0..30);
                 }
-                scrollable::snap_to(self.log_scroll_id.clone(), scrollable::RelativeOffset::END)
+                Task::none()
             }
 
             Message::ClearLogs => {
@@ -948,6 +948,9 @@ impl NetrayApp {
         let log_rows: Vec<Element<Message>> = self
             .logs
             .iter()
+            .rev()
+            .take(60)
+            .rev()
             .map(|entry| {
                 let color = match entry.level {
                     LogLevel::Info => Color::from_rgb(0.75, 0.82, 0.9),

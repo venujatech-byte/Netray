@@ -311,6 +311,19 @@ fn classify_xray_log(line: &str) -> LogLevel {
     }
 }
 
+fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
+    stream: R,
+    tx: mpsc::UnboundedSender<LogEntry>,
+) {
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stream).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            let lvl = classify_xray_log(&line);
+            send_log(&tx, "Xray", line, lvl).await;
+        }
+    });
+}
+
 async fn run_xray_engine(
     log_tx: &mpsc::UnboundedSender<LogEntry>,
     cfg: &TunnelConfig,
@@ -464,25 +477,11 @@ async fn run_xray_engine(
     };
 
     if let Some(stdout) = child.stdout.take() {
-        let mut reader = BufReader::new(stdout).lines();
-        let tx = log_tx.clone();
-        tokio::spawn(async move {
-            while let Ok(Some(line)) = reader.next_line().await {
-                let lvl = classify_xray_log(&line);
-                send_log(&tx, "Xray", line, lvl).await;
-            }
-        });
+        spawn_xray_log_pipe(stdout, log_tx.clone());
     }
 
     if let Some(stderr) = child.stderr.take() {
-        let mut reader = BufReader::new(stderr).lines();
-        let tx = log_tx.clone();
-        tokio::spawn(async move {
-            while let Ok(Some(line)) = reader.next_line().await {
-                let lvl = classify_xray_log(&line);
-                send_log(&tx, "Xray", line, lvl).await;
-            }
-        });
+        spawn_xray_log_pipe(stderr, log_tx.clone());
     }
 
     let status = child.wait().await?;
