@@ -18,9 +18,11 @@ try {
     Invoke-WebRequest "$releaseUrl/$asset" -OutFile $zip
     Invoke-WebRequest "$releaseUrl/$asset.dgst" -OutFile $dgst
 
-    $match = [regex]::Match((Get-Content $dgst -Raw), '(?im)^SHA(?:2-)?256\s+\(.*?\)\s*=\s*([0-9a-f]{64})\s*$')
+    $checksumText = Get-Content $dgst -Raw
+    $match = [regex]::Match($checksumText, '(?im)^\s*sha256\s*=\s*([0-9a-f]{64})\s*$|^\s*SHA(?:2-)?256\s+\([^)]*\)\s*=\s*([0-9a-f]{64})\s*$')
     if (-not $match.Success) { throw "Xray release checksum is missing or invalid." }
-    if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $match.Groups[1].Value.ToUpperInvariant()) {
+    $expected = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+    if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expected.ToUpperInvariant()) {
         throw "Xray release checksum does not match."
     }
 
