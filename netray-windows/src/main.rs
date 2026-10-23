@@ -1,19 +1,22 @@
-mod tunnel;
-pub mod sysproxy;
-pub mod v2ray;
-pub mod storage;
-pub mod icons;
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use tunnel::{run_real_tunnel_worker, TunnelConfig};
+pub mod icons;
+pub mod storage;
+pub mod sysproxy;
+mod tunnel;
+pub mod v2ray;
+
 use chrono::Local;
 use iced::futures::SinkExt;
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
 use iced::widget::{
     button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
 };
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tray_icon::{Icon as TrayIconImage, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tunnel::{run_real_tunnel_worker, TunnelConfig};
 
 const ACCENT_BLUE: Color = Color::from_rgb(0.15, 0.48, 0.98); // #2563EB
 const ACCENT_BLUE_LIGHT: Color = Color::from_rgb(0.24, 0.58, 1.0); // #3B82F6
@@ -25,7 +28,12 @@ const FAILURE_RED: Color = Color::from_rgb(0.95, 0.35, 0.40);
 
 fn format_uptime(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
-    format!("{:02}:{:02}:{:02}", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+    format!(
+        "{:02}:{:02}:{:02}",
+        seconds / 3600,
+        (seconds / 60) % 60,
+        seconds % 60
+    )
 }
 
 fn form_card_style(_theme: &Theme) -> container::Style {
@@ -41,15 +49,35 @@ fn form_card_style(_theme: &Theme) -> container::Style {
 }
 
 pub fn main() -> iced::Result {
-    iced::application(
-        "Netray (Windows)",
-        NetrayApp::update,
-        NetrayApp::view,
-    )
-    .subscription(NetrayApp::subscription)
-    .theme(|_| Theme::Dark)
-    .window_size((520.0, 780.0))
-    .run_with(NetrayApp::new)
+    iced::application("Netray (Windows)", NetrayApp::update, NetrayApp::view)
+        .subscription(NetrayApp::subscription)
+        .theme(|_| Theme::Dark)
+        .exit_on_close_request(false)
+        .window_size((460.0, 600.0))
+        .run_with(NetrayApp::new)
+}
+
+fn create_tray_icon() -> Result<TrayIcon, Box<dyn std::error::Error>> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(include_bytes!(
+        "../../packaging/netray-tray.png"
+    )));
+    let mut reader = decoder.read_info()?;
+    let mut pixels = vec![
+        0;
+        reader
+            .output_buffer_size()
+            .ok_or("tray icon image is too large")?
+    ];
+    let info = reader.next_frame(&mut pixels)?;
+    let icon = TrayIconImage::from_rgba(
+        pixels[..info.buffer_size()].to_vec(),
+        info.width,
+        info.height,
+    )?;
+    Ok(TrayIconBuilder::new()
+        .with_icon(icon)
+        .with_tooltip("Netray")
+        .build()?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,12 +129,14 @@ pub async fn send_log(
     msg: impl Into<String>,
     level: LogLevel,
 ) {
-    let _ = tx.send(LogEntry {
-        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-        source: source.into(),
-        message: msg.into(),
-        level,
-    }).await;
+    let _ = tx
+        .send(LogEntry {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            source: source.into(),
+            message: msg.into(),
+            level,
+        })
+        .await;
 }
 
 pub struct NetrayApp {
@@ -143,6 +173,12 @@ pub struct NetrayApp {
     pub logs: Vec<LogEntry>,
     pub log_sender: Option<mpsc::Sender<LogEntry>>,
     pub stop_signal: Option<tokio::sync::oneshot::Sender<()>>,
+    close_confirmation: Option<iced::window::Id>,
+    window_id: Option<iced::window::Id>,
+    hidden_to_tray: bool,
+    exit_after_stop: bool,
+    tray_icon: Option<TrayIcon>,
+    worker_active: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -199,6 +235,12 @@ pub enum Message {
     NewLog(LogEntry),
     UptimeTick,
     ClearLogs,
+    CloseRequested(iced::window::Id),
+    WindowOpened(iced::window::Id),
+    WindowTick,
+    Minimized(Option<bool>),
+    ConfirmExit,
+    CancelExit,
 }
 
 impl NetrayApp {
@@ -256,6 +298,12 @@ impl NetrayApp {
             }],
             log_sender: None,
             stop_signal: None,
+            close_confirmation: None,
+            window_id: None,
+            hidden_to_tray: false,
+            exit_after_stop: false,
+            tray_icon: None,
+            worker_active: false,
         };
 
         (app, Task::none())
@@ -318,10 +366,18 @@ impl NetrayApp {
             Message::PingProfile(id) => {
                 if self.ping_in_progress.is_some() {
                     Task::none()
-                } else if let Some(config) = self.v2ray_profiles.iter().find(|p| p.id == id).map(|p| p.config.clone()) {
+                } else if let Some(config) = self
+                    .v2ray_profiles
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.config.clone())
+                {
                     self.ping_results.remove(&id);
                     self.ping_in_progress = Some(id.clone());
-                    Task::perform(async move { v2ray::ping_profile(&config).await }, move |result| Message::PingFinished(id.clone(), result))
+                    Task::perform(
+                        async move { v2ray::ping_profile(&config).await },
+                        move |result| Message::PingFinished(id.clone(), result),
+                    )
                 } else {
                     Task::none()
                 }
@@ -330,8 +386,30 @@ impl NetrayApp {
                 if self.ping_in_progress.as_deref() == Some(&id) {
                     self.ping_in_progress = None;
                     let (display, log, level) = match result {
-                        Ok(ms) => (format!("TCP · {ms} ms"), format!("{}: TCP connection in {ms} ms", self.v2ray_profiles.iter().find(|p| p.id == id).map(|p| p.name.as_str()).unwrap_or("Profile")), LogLevel::Success),
-                        Err(error) => ("Failed".to_string(), format!("Ping failed for {}: {error}", self.v2ray_profiles.iter().find(|p| p.id == id).map(|p| p.name.as_str()).unwrap_or("profile")), LogLevel::Warn),
+                        Ok(ms) => (
+                            format!("TCP · {ms} ms"),
+                            format!(
+                                "{}: TCP connection in {ms} ms",
+                                self.v2ray_profiles
+                                    .iter()
+                                    .find(|p| p.id == id)
+                                    .map(|p| p.name.as_str())
+                                    .unwrap_or("Profile")
+                            ),
+                            LogLevel::Success,
+                        ),
+                        Err(error) => (
+                            "Failed".to_string(),
+                            format!(
+                                "Ping failed for {}: {error}",
+                                self.v2ray_profiles
+                                    .iter()
+                                    .find(|p| p.id == id)
+                                    .map(|p| p.name.as_str())
+                                    .unwrap_or("profile")
+                            ),
+                            LogLevel::Warn,
+                        ),
                     };
                     self.ping_results.insert(id, display);
                     self.push_log("Ping", log, level);
@@ -339,8 +417,17 @@ impl NetrayApp {
                 Task::none()
             }
             Message::ShareProfile(id) => {
-                if let Some(config) = self.v2ray_profiles.iter().find(|p| p.id == id).map(|p| p.config.clone()) {
-                    self.push_log("Share", "Copied configuration link to clipboard.", LogLevel::Success);
+                if let Some(config) = self
+                    .v2ray_profiles
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.config.clone())
+                {
+                    self.push_log(
+                        "Share",
+                        "Copied configuration link to clipboard.",
+                        LogLevel::Success,
+                    );
                     iced::clipboard::write(config)
                 } else {
                     Task::none()
@@ -348,7 +435,8 @@ impl NetrayApp {
             }
             Message::EditProfile(id) => {
                 if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id) {
-                    self.node_edit_state = v2ray::NodeEditState::from_profile(&p.id, &p.name, &p.config);
+                    self.node_edit_state =
+                        v2ray::NodeEditState::from_profile(&p.id, &p.name, &p.config);
                     self.view_mode = ViewMode::EditNode;
                 }
                 Task::none()
@@ -361,22 +449,59 @@ impl NetrayApp {
                         .unwrap_or_default()
                         .as_millis()
                 );
-                self.node_edit_state = v2ray::NodeEditState::from_profile(&id, "New VLess Node", "");
+                self.node_edit_state =
+                    v2ray::NodeEditState::from_profile(&id, "New VLess Node", "");
                 self.view_mode = ViewMode::EditNode;
                 Task::none()
             }
-            Message::EditRemarksChanged(v) => { self.node_edit_state.remarks = v; Task::none() }
-            Message::EditAddressChanged(v) => { self.node_edit_state.address = v; Task::none() }
-            Message::EditPortChanged(v) => { self.node_edit_state.port = v; Task::none() }
-            Message::EditEncryptMethodChanged(v) => { self.node_edit_state.encrypt_method = v; Task::none() }
-            Message::EditFlowChanged(v) => { self.node_edit_state.flow = v; Task::none() }
-            Message::EditUserIdChanged(v) => { self.node_edit_state.user_id = v; Task::none() }
-            Message::EditTransportChanged(v) => { self.node_edit_state.transport_protocol = v; Task::none() }
-            Message::EditHeaderTypeChanged(v) => { self.node_edit_state.header_type = v; Task::none() }
-            Message::EditTlsTypeChanged(v) => { self.node_edit_state.tls_type = v; Task::none() }
-            Message::EditSniChanged(v) => { self.node_edit_state.sni = v; Task::none() }
-            Message::EditFingerprintChanged(v) => { self.node_edit_state.fingerprint = v; Task::none() }
-            Message::EditAlpnChanged(v) => { self.node_edit_state.alpn = v; Task::none() }
+            Message::EditRemarksChanged(v) => {
+                self.node_edit_state.remarks = v;
+                Task::none()
+            }
+            Message::EditAddressChanged(v) => {
+                self.node_edit_state.address = v;
+                Task::none()
+            }
+            Message::EditPortChanged(v) => {
+                self.node_edit_state.port = v;
+                Task::none()
+            }
+            Message::EditEncryptMethodChanged(v) => {
+                self.node_edit_state.encrypt_method = v;
+                Task::none()
+            }
+            Message::EditFlowChanged(v) => {
+                self.node_edit_state.flow = v;
+                Task::none()
+            }
+            Message::EditUserIdChanged(v) => {
+                self.node_edit_state.user_id = v;
+                Task::none()
+            }
+            Message::EditTransportChanged(v) => {
+                self.node_edit_state.transport_protocol = v;
+                Task::none()
+            }
+            Message::EditHeaderTypeChanged(v) => {
+                self.node_edit_state.header_type = v;
+                Task::none()
+            }
+            Message::EditTlsTypeChanged(v) => {
+                self.node_edit_state.tls_type = v;
+                Task::none()
+            }
+            Message::EditSniChanged(v) => {
+                self.node_edit_state.sni = v;
+                Task::none()
+            }
+            Message::EditFingerprintChanged(v) => {
+                self.node_edit_state.fingerprint = v;
+                Task::none()
+            }
+            Message::EditAlpnChanged(v) => {
+                self.node_edit_state.alpn = v;
+                Task::none()
+            }
             Message::CancelEditNode => {
                 self.view_mode = ViewMode::Profiles;
                 Task::none()
@@ -406,11 +531,17 @@ impl NetrayApp {
                 self.active_profile_id = Some(id);
                 self.v2ray_uri_or_json = uri;
                 let _ = self.save_current_state();
-                self.push_log("Config", format!("Saved node '{}'.", name), LogLevel::Success);
+                self.push_log(
+                    "Config",
+                    format!("Saved node '{}'.", name),
+                    LogLevel::Success,
+                );
                 self.view_mode = ViewMode::Profiles;
                 Task::none()
             }
-            Message::RequestClipboardImport => iced::clipboard::read().map(Message::ClipboardImported),
+            Message::RequestClipboardImport => {
+                iced::clipboard::read().map(Message::ClipboardImported)
+            }
             Message::ClipboardImported(content) => {
                 if let Some(text) = content {
                     let trimmed = text.trim();
@@ -421,7 +552,13 @@ impl NetrayApp {
                         || trimmed.starts_with('{')
                     {
                         let node_name = v2ray::extract_node_name(trimmed);
-                        let id = format!("node-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
+                        let id = format!(
+                            "node-{}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                        );
                         let profile = storage::V2RayProfile {
                             id: id.clone(),
                             name: node_name.clone(),
@@ -433,7 +570,11 @@ impl NetrayApp {
                         self.v2ray_uri_or_json = trimmed.to_string();
                         self.tunnel_mode = TunnelMode::V2RayXray;
                         let _ = self.save_current_state();
-                        self.push_log("Clipboard", format!("Imported and activated '{}'.", node_name), LogLevel::Success);
+                        self.push_log(
+                            "Clipboard",
+                            format!("Imported and activated '{}'.", node_name),
+                            LogLevel::Success,
+                        );
                     }
                 }
                 Task::none()
@@ -463,12 +604,30 @@ impl NetrayApp {
                 let _ = self.save_current_state();
                 Task::none()
             }
-            Message::PayloadChanged(v) => { self.payload_text = v; Task::none() }
-            Message::BugHostChanged(v) => { self.bug_host = v; Task::none() }
-            Message::SniChanged(v) => { self.sni_host = v; Task::none() }
-            Message::ToggleKeepAlive(v) => { self.gen_keep_alive = v; Task::none() }
-            Message::ToggleOnlineHost(v) => { self.gen_online_host = v; Task::none() }
-            Message::ToggleSplit(v) => { self.gen_split = v; Task::none() }
+            Message::PayloadChanged(v) => {
+                self.payload_text = v;
+                Task::none()
+            }
+            Message::BugHostChanged(v) => {
+                self.bug_host = v;
+                Task::none()
+            }
+            Message::SniChanged(v) => {
+                self.sni_host = v;
+                Task::none()
+            }
+            Message::ToggleKeepAlive(v) => {
+                self.gen_keep_alive = v;
+                Task::none()
+            }
+            Message::ToggleOnlineHost(v) => {
+                self.gen_online_host = v;
+                Task::none()
+            }
+            Message::ToggleSplit(v) => {
+                self.gen_split = v;
+                Task::none()
+            }
             Message::GeneratePayload => {
                 let mut tpl = String::new();
                 if self.gen_split {
@@ -487,37 +646,144 @@ impl NetrayApp {
                 self.payload_text = tpl;
                 Task::none()
             }
-            Message::SshHostChanged(v) => { self.ssh_host = v; Task::none() }
-            Message::SshPortChanged(v) => { self.ssh_port = v; Task::none() }
-            Message::SshUserChanged(v) => { self.ssh_user = v; Task::none() }
-            Message::SshPassChanged(v) => { self.ssh_pass = v; Task::none() }
-            Message::ProxyIpChanged(v) => { self.proxy_ip = v; Task::none() }
-            Message::ProxyPortChanged(v) => { self.proxy_port = v; Task::none() }
-            Message::V2RayConfigChanged(v) => { self.v2ray_uri_or_json = v; Task::none() }
-            Message::LocalSocksPortChanged(v) => { self.local_socks_port = v; Task::none() }
+            Message::SshHostChanged(v) => {
+                self.ssh_host = v;
+                Task::none()
+            }
+            Message::SshPortChanged(v) => {
+                self.ssh_port = v;
+                Task::none()
+            }
+            Message::SshUserChanged(v) => {
+                self.ssh_user = v;
+                Task::none()
+            }
+            Message::SshPassChanged(v) => {
+                self.ssh_pass = v;
+                Task::none()
+            }
+            Message::ProxyIpChanged(v) => {
+                self.proxy_ip = v;
+                Task::none()
+            }
+            Message::ProxyPortChanged(v) => {
+                self.proxy_port = v;
+                Task::none()
+            }
+            Message::V2RayConfigChanged(v) => {
+                self.v2ray_uri_or_json = v;
+                Task::none()
+            }
+            Message::LocalSocksPortChanged(v) => {
+                self.local_socks_port = v;
+                Task::none()
+            }
             Message::LoggerReady(sender) => {
                 self.log_sender = Some(sender);
                 Task::none()
             }
             Message::NewLog(entry) => {
-                if (entry.source == "Supervisor" && (entry.message.contains("offline") || entry.message.contains("Tunnel stopped")))
+                if (entry.source == "Supervisor"
+                    && (entry.message.contains("offline")
+                        || entry.message.contains("Tunnel stopped")))
                     || (entry.source == "Error" && entry.message.contains("Engine failed"))
                 {
                     self.is_running = false;
                     self.connected_at = None;
                     self.stop_signal = None;
+                    self.worker_active = false;
                 }
+                let stopped = entry.source == "Supervisor"
+                    && (entry.message.contains("offline")
+                        || entry.message.contains("Tunnel stopped"));
                 self.logs.push(entry);
                 if self.logs.len() > 150 {
                     self.logs.drain(0..30);
                 }
-                Task::none()
+                if stopped && self.exit_after_stop {
+                    self.exit_after_stop = false;
+                    self.close_confirmation
+                        .take()
+                        .map(iced::window::close)
+                        .unwrap_or_else(Task::none)
+                } else {
+                    Task::none()
+                }
             }
             Message::ClearLogs => {
                 self.logs.clear();
                 Task::none()
             }
             Message::UptimeTick => Task::none(),
+            Message::CloseRequested(id) => {
+                self.close_confirmation = Some(id);
+                Task::none()
+            }
+            Message::WindowOpened(id) => {
+                self.window_id = Some(id);
+                if self.tray_icon.is_none() {
+                    match create_tray_icon() {
+                        Ok(icon) => self.tray_icon = Some(icon),
+                        Err(error) => self.push_log("Tray", format!("System tray unavailable: {error}"), LogLevel::Warn),
+                    }
+                }
+                Task::none()
+            }
+            Message::WindowTick => {
+                if let Ok(event) = TrayIconEvent::receiver().try_recv() {
+                    if matches!(
+                        event,
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            ..
+                        } | TrayIconEvent::DoubleClick { .. }
+                    ) {
+                        self.hidden_to_tray = false;
+                        if let Some(id) = self.window_id {
+                            return iced::window::change_mode(id, iced::window::Mode::Windowed)
+                                .chain(iced::window::minimize(id, false))
+                                .chain(iced::window::gain_focus(id));
+                        }
+                    }
+                }
+                if self.hidden_to_tray {
+                    Task::none()
+                } else if let Some(id) = self.window_id {
+                    // shortcut: Wayland does not report minimized state; add a native shell hook if Wayland tray minimization is needed.
+                    iced::window::get_minimized(id).map(Message::Minimized)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::Minimized(Some(true)) => {
+                if self.tray_icon.is_some() {
+                    self.hidden_to_tray = true;
+                    self.window_id
+                        .map(|id| iced::window::change_mode(id, iced::window::Mode::Hidden))
+                        .unwrap_or_else(Task::none)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::Minimized(_) => Task::none(),
+            Message::ConfirmExit => {
+                if self.worker_active {
+                    self.exit_after_stop = true;
+                    if let Some(stop) = self.stop_signal.take() {
+                        let _ = stop.send(());
+                    }
+                    Task::none()
+                } else {
+                    self.close_confirmation
+                        .take()
+                        .map(iced::window::close)
+                        .unwrap_or_else(Task::none)
+                }
+            }
+            Message::CancelExit => {
+                self.close_confirmation = None;
+                Task::none()
+            }
             Message::ToggleTunnel => {
                 if self.is_running {
                     if let Some(stop_tx) = self.stop_signal.take() {
@@ -529,6 +795,7 @@ impl NetrayApp {
                     Task::none()
                 } else {
                     self.is_running = true;
+                    self.worker_active = true;
                     self.connected_at = Some(Instant::now());
                     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
                     self.stop_signal = Some(stop_tx);
@@ -557,18 +824,27 @@ impl NetrayApp {
                     };
 
                     let log_tx_opt = self.log_sender.clone();
-                    self.push_log("Supervisor", format!("Starting [{}] on Windows...", self.tunnel_mode), LogLevel::Info);
+                    self.push_log(
+                        "Supervisor",
+                        format!("Starting [{}] on Windows...", self.tunnel_mode),
+                        LogLevel::Info,
+                    );
 
-                    Task::perform(async move {
-                        if let Some(tx) = log_tx_opt {
-                            run_real_tunnel_worker(tx, stop_rx, cfg).await;
-                        }
-                    }, |_| Message::NewLog(LogEntry {
-                        timestamp: Local::now().format("%H:%M:%S").to_string(),
-                        source: "Supervisor".into(),
-                        message: "Tunnel stopped.".into(),
-                        level: LogLevel::Warn,
-                    }))
+                    Task::perform(
+                        async move {
+                            if let Some(tx) = log_tx_opt {
+                                run_real_tunnel_worker(tx, stop_rx, cfg).await;
+                            }
+                        },
+                        |_| {
+                            Message::NewLog(LogEntry {
+                                timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                source: "Supervisor".into(),
+                                message: "Tunnel stopped.".into(),
+                                level: LogLevel::Warn,
+                            })
+                        },
+                    )
                 }
             }
         }
@@ -584,22 +860,62 @@ impl NetrayApp {
                 }
             })
         });
+        let mut subscriptions = vec![
+            logs,
+            iced::window::close_requests().map(Message::CloseRequested),
+            iced::window::open_events().map(Message::WindowOpened),
+            iced::time::every(Duration::from_secs(1)).map(|_| Message::WindowTick),
+        ];
         if self.is_running && self.view_mode == ViewMode::Profiles {
-            Subscription::batch([
-                logs,
-                iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick),
-            ])
-        } else {
-            logs
+            subscriptions
+                .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick));
         }
+        Subscription::batch(subscriptions)
     }
 
     fn view(&self) -> Element<'_, Message> {
-        match self.view_mode {
+        let content = match self.view_mode {
             ViewMode::Profiles => self.view_profiles_screen(),
             ViewMode::EditNode => self.view_edit_screen(),
             ViewMode::Logs => self.view_logs_screen(),
             ViewMode::SshSettings => self.view_ssh_screen(),
+        };
+        if self.close_confirmation.is_some() {
+            let dialog = container(
+                column![
+                    text("Stop Netray and exit?").size(20),
+                    text("The active tunnel will be stopped before the app closes.")
+                        .size(14)
+                        .color(TEXT_MUTED),
+                    row![
+                        button("Cancel").on_press(Message::CancelExit),
+                        button("Stop and Exit").on_press(Message::ConfirmExit),
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+                ]
+                .spacing(16)
+                .padding(20),
+            )
+            .style(form_card_style)
+            .width(Length::Fixed(340.0));
+            iced::widget::stack![
+                content,
+                container(dialog)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.62).into()),
+                        ..Default::default()
+                    }),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            content
         }
     }
 
@@ -607,43 +923,73 @@ impl NetrayApp {
         let top_bar = row![
             button(icons::lucide_icon(icons::MENU, 22, Color::WHITE))
                 .padding(6)
-                .style(|_, _| button::Style { background: None, ..Default::default() })
+                .style(|_, _| button::Style {
+                    background: None,
+                    ..Default::default()
+                })
                 .on_press(Message::SetViewMode(ViewMode::SshSettings)),
             Space::with_width(12),
             text("Netray").size(22).color(Color::WHITE),
             Space::with_width(Length::Fill),
             button(icons::lucide_icon(icons::FILE_PLUS, 20, Color::WHITE))
                 .padding(6)
-                .style(|_, _| button::Style { background: None, ..Default::default() })
+                .style(|_, _| button::Style {
+                    background: None,
+                    ..Default::default()
+                })
                 .on_press(Message::AddNewProfile),
             button(icons::lucide_icon(icons::LINK, 20, Color::WHITE))
                 .padding(6)
-                .style(|_, _| button::Style { background: None, ..Default::default() })
+                .style(|_, _| button::Style {
+                    background: None,
+                    ..Default::default()
+                })
                 .on_press(Message::RequestClipboardImport),
             button(icons::lucide_icon(icons::MORE_VERTICAL, 20, Color::WHITE))
                 .padding(6)
-                .style(|_, _| button::Style { background: None, ..Default::default() })
+                .style(|_, _| button::Style {
+                    background: None,
+                    ..Default::default()
+                })
                 .on_press(Message::SetViewMode(ViewMode::Logs)),
         ]
         .spacing(6)
         .align_y(Alignment::Center)
-        .padding(iced::Padding { top: 12.0, bottom: 8.0, left: 16.0, right: 16.0 });
+        .padding(iced::Padding {
+            top: 12.0,
+            bottom: 8.0,
+            left: 16.0,
+            right: 16.0,
+        });
 
         let sub_bar = row![
             button(icons::lucide_icon(icons::PLUS, 18, Color::WHITE))
                 .padding(8)
                 .style(|_, _| button::Style {
                     background: Some(ACCENT_BLUE.into()),
-                    border: iced::Border { radius: 18.0.into(), ..Default::default() },
+                    border: iced::Border {
+                        radius: 18.0.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 })
                 .on_press(Message::AddNewProfile),
             Space::with_width(10),
-            text(format!("{} profiles", self.v2ray_profiles.len())).size(13).color(TEXT_MUTED),
+            text(format!("{} profiles", self.v2ray_profiles.len()))
+                .size(13)
+                .color(TEXT_MUTED),
             Space::with_width(Length::Fill),
-            text(if self.is_running { "Tunnel active" } else { "Offline" })
-                .size(12)
-                .color(if self.is_running { SUCCESS_GREEN } else { TEXT_MUTED }),
+            text(if self.is_running {
+                "Tunnel active"
+            } else {
+                "Offline"
+            })
+            .size(12)
+            .color(if self.is_running {
+                SUCCESS_GREEN
+            } else {
+                TEXT_MUTED
+            }),
             Space::with_width(12),
             checkbox("WinTun", self.enable_tun)
                 .size(16)
@@ -654,7 +1000,12 @@ impl NetrayApp {
                 .on_toggle(Message::ToggleSysProxy),
         ]
         .align_y(Alignment::Center)
-        .padding(iced::Padding { top: 4.0, bottom: 8.0, left: 16.0, right: 16.0 });
+        .padding(iced::Padding {
+            top: 4.0,
+            bottom: 8.0,
+            left: 16.0,
+            right: 16.0,
+        });
 
         let cards: Vec<Element<'_, Message>> = self
             .v2ray_profiles
@@ -662,7 +1013,11 @@ impl NetrayApp {
             .map(|p| {
                 let is_active = self.active_profile_id.as_deref() == Some(&p.id)
                     || self.v2ray_uri_or_json == p.config;
-                let strip_color = if is_active { ACCENT_BLUE } else { INACTIVE_STRIP };
+                let strip_color = if is_active {
+                    ACCENT_BLUE
+                } else {
+                    INACTIVE_STRIP
+                };
                 let node_addr = v2ray::extract_node_address(&p.config);
                 let proto_tag = v2ray::extract_protocol_tag(&p.config);
 
@@ -671,39 +1026,111 @@ impl NetrayApp {
                 let p_id_3 = p.id.clone();
                 let share_id = p.id.clone();
                 let pinging = self.ping_in_progress.as_deref() == Some(&p.id);
-                let ping_press = self.ping_in_progress.is_none().then(|| Message::PingProfile(p.id.clone()));
-                let ping_result = if pinging { "Testing…" } else { self.ping_results.get(&p.id).map(String::as_str).unwrap_or_default() };
-                let ping_color = if ping_result == "Failed" { FAILURE_RED } else { SUCCESS_GREEN };
+                let ping_press = self
+                    .ping_in_progress
+                    .is_none()
+                    .then(|| Message::PingProfile(p.id.clone()));
+                let ping_result = if pinging {
+                    "Testing…"
+                } else {
+                    self.ping_results
+                        .get(&p.id)
+                        .map(String::as_str)
+                        .unwrap_or_default()
+                };
+                let ping_color = if ping_result == "Failed" {
+                    FAILURE_RED
+                } else {
+                    SUCCESS_GREEN
+                };
 
-                container(row![
-                    container(Space::with_width(2))
-                        .height(76)
-                        .style(move |_| container::Style {
-                            background: Some(strip_color.into()),
-                            border: iced::Border { radius: 2.0.into(), ..Default::default() },
-                            ..Default::default()
+                container(
+                    row![
+                        container(Space::with_width(2)).height(76).style(move |_| {
+                            container::Style {
+                                background: Some(strip_color.into()),
+                                border: iced::Border {
+                                    radius: 2.0.into(),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            }
                         }),
-                    Space::with_width(12),
-                    column![
-                        button(column![
-                            text(p.name.as_str()).size(15).color(Color::WHITE),
-                            text(node_addr).size(12).color(TEXT_MUTED),
-                        ].spacing(4).width(Length::Fill))
-                        .padding(0)
-                        .width(Length::Fill)
-                        .style(|_, _| button::Style { background: None, text_color: Color::WHITE, ..Default::default() })
-                        .on_press(Message::SelectProfile(p_id_1)),
-                        row![
-                            text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
-                            text(ping_result).size(11).color(ping_color),
-                            Space::with_width(Length::Fill),
-                            button(icons::lucide_icon(icons::ACTIVITY, 18, Color::WHITE)).padding(10).style(move |_, _| button::Style { background: Some(if pinging { ACCENT_BLUE_LIGHT } else { ACCENT_BLUE }.into()), text_color: Color::WHITE, border: iced::Border { radius: 24.0.into(), ..Default::default() }, ..Default::default() }).on_press_maybe(ping_press),
-                            button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::ShareProfile(share_id)),
-                            button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::EditProfile(p_id_2)),
-                            button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::DeleteProfile(p_id_3)),
-                        ].spacing(4).align_y(Alignment::Center),
-                    ].spacing(10).width(Length::Fill),
-                ].align_y(Alignment::Center).padding(12))
+                        Space::with_width(12),
+                        column![
+                            button(
+                                column![
+                                    text(p.name.as_str()).size(15).color(Color::WHITE),
+                                    text(node_addr).size(12).color(TEXT_MUTED),
+                                ]
+                                .spacing(4)
+                                .width(Length::Fill)
+                            )
+                            .padding(0)
+                            .width(Length::Fill)
+                            .style(|_, _| button::Style {
+                                background: None,
+                                text_color: Color::WHITE,
+                                ..Default::default()
+                            })
+                            .on_press(Message::SelectProfile(p_id_1)),
+                            row![
+                                text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
+                                text(ping_result).size(11).color(ping_color),
+                                Space::with_width(Length::Fill),
+                                button(icons::lucide_icon(icons::ACTIVITY, 18, Color::WHITE))
+                                    .padding(10)
+                                    .style(move |_, _| button::Style {
+                                        background: Some(
+                                            if pinging {
+                                                ACCENT_BLUE_LIGHT
+                                            } else {
+                                                ACCENT_BLUE
+                                            }
+                                            .into()
+                                        ),
+                                        text_color: Color::WHITE,
+                                        border: iced::Border {
+                                            radius: 24.0.into(),
+                                            ..Default::default()
+                                        },
+                                        ..Default::default()
+                                    })
+                                    .on_press_maybe(ping_press),
+                                button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
+                                    .padding(6)
+                                    .style(|_, _| button::Style {
+                                        background: None,
+                                        text_color: TEXT_MUTED,
+                                        ..Default::default()
+                                    })
+                                    .on_press(Message::ShareProfile(share_id)),
+                                button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED))
+                                    .padding(6)
+                                    .style(|_, _| button::Style {
+                                        background: None,
+                                        text_color: TEXT_MUTED,
+                                        ..Default::default()
+                                    })
+                                    .on_press(Message::EditProfile(p_id_2)),
+                                button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED))
+                                    .padding(6)
+                                    .style(|_, _| button::Style {
+                                        background: None,
+                                        text_color: TEXT_MUTED,
+                                        ..Default::default()
+                                    })
+                                    .on_press(Message::DeleteProfile(p_id_3)),
+                            ]
+                            .spacing(4)
+                            .align_y(Alignment::Center),
+                        ]
+                        .spacing(10)
+                        .width(Length::Fill),
+                    ]
+                    .align_y(Alignment::Center)
+                    .padding(12),
+                )
                 .width(Length::Fill)
                 .style(form_card_style)
                 .into()
@@ -721,9 +1148,14 @@ impl NetrayApp {
             .width(Length::Fill)
             .into()
         } else {
-            scrollable(column(cards).spacing(10).padding(iced::Padding { top: 0.0, bottom: 80.0, left: 12.0, right: 12.0 }))
-                .height(Length::Fill)
-                .into()
+            scrollable(column(cards).spacing(10).padding(iced::Padding {
+                top: 0.0,
+                bottom: 80.0,
+                left: 12.0,
+                right: 12.0,
+            }))
+            .height(Length::Fill)
+            .into()
         };
 
         let fab_icon = if self.is_running {
@@ -733,37 +1165,61 @@ impl NetrayApp {
         };
 
         let fab_row = row![
-            button(row![
-                text("●").color(if self.is_running { SUCCESS_GREEN } else { TEXT_MUTED }),
-                text(if self.is_running {
-                    format!("CONNECTED · {}", format_uptime(self.connected_at.map(|at| at.elapsed()).unwrap_or_default()))
-                } else { "DISCONNECTED".to_string() }).size(12).color(TEXT_MUTED),
-            ].spacing(6).align_y(Alignment::Center))
-                .padding(8)
-                .style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() })
-                .on_press(Message::SetViewMode(ViewMode::Logs)),
+            button(
+                row![
+                    text("●").color(if self.is_running {
+                        SUCCESS_GREEN
+                    } else {
+                        TEXT_MUTED
+                    }),
+                    text(if self.is_running {
+                        format!(
+                            "CONNECTED · {}",
+                            format_uptime(
+                                self.connected_at.map(|at| at.elapsed()).unwrap_or_default()
+                            )
+                        )
+                    } else {
+                        "DISCONNECTED".to_string()
+                    })
+                    .size(12)
+                    .color(TEXT_MUTED),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+            )
+            .padding(8)
+            .style(|_, _| button::Style {
+                background: None,
+                text_color: TEXT_MUTED,
+                ..Default::default()
+            })
+            .on_press(Message::SetViewMode(ViewMode::Logs)),
             Space::with_width(Length::Fill),
             button(fab_icon)
                 .padding(16)
                 .style(|_, _| button::Style {
                     background: Some(ACCENT_BLUE.into()),
-                    border: iced::Border { radius: 32.0.into(), ..Default::default() },
+                    border: iced::Border {
+                        radius: 32.0.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 })
                 .on_press(Message::ToggleTunnel),
         ]
-        .padding(iced::Padding { top: 6.0, bottom: 12.0, left: 16.0, right: 16.0 });
+        .padding(iced::Padding {
+            top: 6.0,
+            bottom: 12.0,
+            left: 16.0,
+            right: 16.0,
+        });
 
-        column![
-            top_bar,
-            sub_bar,
-            list_content,
-            fab_row,
-        ]
-        .spacing(4)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        column![top_bar, sub_bar, list_content, fab_row,]
+            .spacing(4)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     fn view_edit_screen(&self) -> Element<'_, Message> {
@@ -779,7 +1235,12 @@ impl NetrayApp {
                 .on_press(Message::SaveEditedNode),
         ]
         .align_y(Alignment::Center)
-        .padding(iced::Padding { top: 10.0, bottom: 10.0, left: 12.0, right: 12.0 });
+        .padding(iced::Padding {
+            top: 10.0,
+            bottom: 10.0,
+            left: 12.0,
+            right: 12.0,
+        });
 
         let remarks_card = container(
             column![
@@ -788,7 +1249,7 @@ impl NetrayApp {
                     .on_input(Message::EditRemarksChanged)
                     .padding(6),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -832,7 +1293,7 @@ impl NetrayApp {
                 )
                 .width(Length::Fill),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -848,7 +1309,7 @@ impl NetrayApp {
                 )
                 .width(Length::Fill),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -861,7 +1322,7 @@ impl NetrayApp {
                     .on_input(Message::EditUserIdChanged)
                     .padding(6),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -877,7 +1338,7 @@ impl NetrayApp {
                 )
                 .width(Length::Fill),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -893,7 +1354,7 @@ impl NetrayApp {
                 )
                 .width(Length::Fill),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -909,7 +1370,7 @@ impl NetrayApp {
                 )
                 .width(Length::Fill),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -918,11 +1379,11 @@ impl NetrayApp {
         let sni_card = container(
             column![
                 text("Server name indication").size(11).color(TEXT_MUTED),
-                text_input("SNI (e.g. zoom.us)", &self.node_edit_state.sni)
+                text_input("SNI (e.g. example.com)", &self.node_edit_state.sni)
                     .on_input(Message::EditSniChanged)
                     .padding(6),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -938,7 +1399,7 @@ impl NetrayApp {
                 )
                 .width(Length::Fill),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -954,7 +1415,7 @@ impl NetrayApp {
                 )
                 .width(Length::Fill),
             ]
-            .spacing(4)
+            .spacing(4),
         )
         .padding(10)
         .width(Length::Fill)
@@ -976,18 +1437,20 @@ impl NetrayApp {
                 Space::with_height(20),
             ]
             .spacing(10)
-            .padding(iced::Padding { top: 0.0, bottom: 20.0, left: 16.0, right: 16.0 })
+            .padding(iced::Padding {
+                top: 0.0,
+                bottom: 20.0,
+                left: 16.0,
+                right: 16.0,
+            }),
         )
         .height(Length::Fill);
 
-        column![
-            top_bar,
-            form_content,
-        ]
-        .spacing(6)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        column![top_bar, form_content,]
+            .spacing(6)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     fn view_logs_screen(&self) -> Element<'_, Message> {
@@ -1001,17 +1464,39 @@ impl NetrayApp {
             button("Clear Logs").padding(6).on_press(Message::ClearLogs),
         ]
         .align_y(Alignment::Center)
-        .padding(iced::Padding { top: 10.0, bottom: 10.0, left: 12.0, right: 12.0 });
+        .padding(iced::Padding {
+            top: 10.0,
+            bottom: 10.0,
+            left: 12.0,
+            right: 12.0,
+        });
 
-        let status_text = if self.is_running { "CONNECTED" } else { "STOPPED" };
-        let status_color = if self.is_running { Color::from_rgb(0.2, 0.8, 0.4) } else { Color::from_rgb(0.8, 0.3, 0.3) };
+        let status_text = if self.is_running {
+            "CONNECTED"
+        } else {
+            "STOPPED"
+        };
+        let status_color = if self.is_running {
+            Color::from_rgb(0.2, 0.8, 0.4)
+        } else {
+            Color::from_rgb(0.8, 0.3, 0.3)
+        };
 
         let status_bar = row![
-            text(format!("STATUS: {}", status_text)).size(14).color(status_color),
+            text(format!("STATUS: {}", status_text))
+                .size(14)
+                .color(status_color),
             Space::with_width(Length::Fill),
-            text(format!("MODE: {}", self.tunnel_mode)).size(13).color(TEXT_MUTED),
+            text(format!("MODE: {}", self.tunnel_mode))
+                .size(13)
+                .color(TEXT_MUTED),
         ]
-        .padding(iced::Padding { top: 0.0, bottom: 6.0, left: 16.0, right: 16.0 });
+        .padding(iced::Padding {
+            top: 0.0,
+            bottom: 6.0,
+            left: 16.0,
+            right: 16.0,
+        });
 
         let log_rows: Vec<Element<'_, Message>> = self
             .logs
@@ -1028,8 +1513,12 @@ impl NetrayApp {
                 };
 
                 row![
-                    text(format!("[{}]", entry.timestamp)).size(12).color(Color::from_rgb(0.5, 0.5, 0.5)),
-                    text(format!("[{}]", entry.source)).size(12).color(ACCENT_BLUE_LIGHT),
+                    text(format!("[{}]", entry.timestamp))
+                        .size(12)
+                        .color(Color::from_rgb(0.5, 0.5, 0.5)),
+                    text(format!("[{}]", entry.source))
+                        .size(12)
+                        .color(ACCENT_BLUE_LIGHT),
                     text(&entry.message).size(12).color(color),
                 ]
                 .spacing(8)
@@ -1037,26 +1526,31 @@ impl NetrayApp {
             })
             .collect();
 
-        let terminal = container(
-            scrollable(column(log_rows).spacing(6)).height(Length::Fill)
-        )
-        .padding(12)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
-            border: iced::Border {
-                radius: 6.0.into(),
-                width: 1.0,
-                color: Color::from_rgb(0.18, 0.20, 0.25),
-            },
-            ..Default::default()
-        });
+        let terminal = container(scrollable(column(log_rows).spacing(6)).height(Length::Fill))
+            .padding(12)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 1.0,
+                    color: Color::from_rgb(0.18, 0.20, 0.25),
+                },
+                ..Default::default()
+            });
 
         column![
             top_bar,
             status_bar,
-            container(terminal).padding(iced::Padding { top: 8.0, bottom: 12.0, left: 12.0, right: 12.0 }).height(Length::Fill),
+            container(terminal)
+                .padding(iced::Padding {
+                    top: 8.0,
+                    bottom: 12.0,
+                    left: 12.0,
+                    right: 12.0
+                })
+                .height(Length::Fill),
         ]
         .width(Length::Fill)
         .height(Length::Fill)
@@ -1072,7 +1566,12 @@ impl NetrayApp {
             text("SSH & Payload Injector").size(20).color(Color::WHITE),
         ]
         .align_y(Alignment::Center)
-        .padding(iced::Padding { top: 10.0, bottom: 10.0, left: 12.0, right: 12.0 });
+        .padding(iced::Padding {
+            top: 10.0,
+            bottom: 10.0,
+            left: 12.0,
+            right: 12.0,
+        });
 
         let content = scrollable(
             column![
@@ -1096,7 +1595,8 @@ impl NetrayApp {
                 Space::with_height(10),
                 row![
                     checkbox("Keep-Alive", self.gen_keep_alive).on_toggle(Message::ToggleKeepAlive),
-                    checkbox("Online-Host", self.gen_online_host).on_toggle(Message::ToggleOnlineHost),
+                    checkbox("Online-Host", self.gen_online_host)
+                        .on_toggle(Message::ToggleOnlineHost),
                     checkbox("Split", self.gen_split).on_toggle(Message::ToggleSplit),
                 ]
                 .spacing(12),
@@ -1110,38 +1610,63 @@ impl NetrayApp {
                 Space::with_height(20),
                 text("SSH Server & Account:").size(14).color(TEXT_MUTED),
                 row![
-                    text_input("SSH Host", &self.ssh_host).on_input(Message::SshHostChanged).width(Length::FillPortion(3)).padding(8),
-                    text_input("Port", &self.ssh_port).on_input(Message::SshPortChanged).width(Length::FillPortion(1)).padding(8),
-                ].spacing(8),
+                    text_input("SSH Host", &self.ssh_host)
+                        .on_input(Message::SshHostChanged)
+                        .width(Length::FillPortion(3))
+                        .padding(8),
+                    text_input("Port", &self.ssh_port)
+                        .on_input(Message::SshPortChanged)
+                        .width(Length::FillPortion(1))
+                        .padding(8),
+                ]
+                .spacing(8),
                 Space::with_height(10),
                 row![
-                    text_input("Username", &self.ssh_user).on_input(Message::SshUserChanged).width(Length::FillPortion(1)).padding(8),
-                    text_input("Password", &self.ssh_pass).on_input(Message::SshPassChanged).width(Length::FillPortion(1)).padding(8),
-                ].spacing(8),
+                    text_input("Username", &self.ssh_user)
+                        .on_input(Message::SshUserChanged)
+                        .width(Length::FillPortion(1))
+                        .padding(8),
+                    text_input("Password", &self.ssh_pass)
+                        .on_input(Message::SshPassChanged)
+                        .width(Length::FillPortion(1))
+                        .padding(8),
+                ]
+                .spacing(8),
                 Space::with_height(10),
                 text("Proxy IP & Port:").size(14).color(TEXT_MUTED),
                 row![
-                    text_input("104.16.51.111", &self.proxy_ip).on_input(Message::ProxyIpChanged).width(Length::FillPortion(3)).padding(8),
-                    text_input("80", &self.proxy_port).on_input(Message::ProxyPortChanged).width(Length::FillPortion(1)).padding(8),
-                ].spacing(8),
+                    text_input("104.16.51.111", &self.proxy_ip)
+                        .on_input(Message::ProxyIpChanged)
+                        .width(Length::FillPortion(3))
+                        .padding(8),
+                    text_input("80", &self.proxy_port)
+                        .on_input(Message::ProxyPortChanged)
+                        .width(Length::FillPortion(1))
+                        .padding(8),
+                ]
+                .spacing(8),
                 Space::with_height(10),
                 text("Local SOCKS5 Port:").size(14).color(TEXT_MUTED),
-                text_input("10808", &self.local_socks_port).on_input(Message::LocalSocksPortChanged).padding(8),
+                text_input("10808", &self.local_socks_port)
+                    .on_input(Message::LocalSocksPortChanged)
+                    .padding(8),
                 Space::with_height(30),
             ]
             .spacing(8)
-            .padding(iced::Padding { top: 0.0, bottom: 20.0, left: 16.0, right: 16.0 })
+            .padding(iced::Padding {
+                top: 0.0,
+                bottom: 20.0,
+                left: 16.0,
+                right: 16.0,
+            }),
         )
         .height(Length::Fill);
 
-        column![
-            top_bar,
-            content,
-        ]
-        .spacing(6)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        column![top_bar, content,]
+            .spacing(6)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 }
 
@@ -1152,7 +1677,8 @@ mod performance_tests {
     #[test]
     fn uptime_only_subscribes_when_visible_and_running() {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
-        let subscriptions = |app: &NetrayApp| iced::advanced::subscription::into_recipes(app.subscription()).len();
+        let subscriptions =
+            |app: &NetrayApp| iced::advanced::subscription::into_recipes(app.subscription()).len();
         assert_eq!(subscriptions(&app), 1);
         app.is_running = true;
         assert_eq!(subscriptions(&app), 2);
@@ -1171,10 +1697,13 @@ mod performance_tests {
         send_log(&tx, "Test", "first", LogLevel::Info).await;
         let pending = send_log(&tx, "Test", "second", LogLevel::Info);
         tokio::pin!(pending);
-        assert!(tokio::time::timeout(Duration::from_millis(10), &mut pending).await.is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut pending)
+                .await
+                .is_err()
+        );
         assert_eq!(rx.recv().await.unwrap().message, "first");
         pending.await;
         assert_eq!(rx.recv().await.unwrap().message, "second");
     }
-
 }
