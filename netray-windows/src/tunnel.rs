@@ -78,7 +78,7 @@ pub async fn run_real_tunnel_worker(
         send_log(&log_tx, "Error", format!("Engine failed: {}", e), LogLevel::Error).await;
     }
 
-    if cfg.enable_sysproxy || cfg.enable_tun {
+    if cfg.enable_sysproxy {
         crate::sysproxy::disable_system_proxy().await;
         send_log(&log_tx, "SystemProxy", "System proxy disabled. Network restored.", LogLevel::Info).await;
     }

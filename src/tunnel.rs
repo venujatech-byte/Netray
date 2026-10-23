@@ -92,9 +92,9 @@ pub async fn run_real_tunnel_worker(
         send_log(&log_tx, "Error", format!("Engine failed: {}", e), LogLevel::Error).await;
     }
 
-    if cfg.enable_sysproxy || cfg.enable_tun {
+    if cfg.enable_sysproxy {
         crate::sysproxy::disable_system_proxy().await;
-        send_log(&log_tx, "SystemProxy", "System-wide proxy & TUN routing disabled. Network restored.", LogLevel::Info).await;
+        send_log(&log_tx, "SystemProxy", "System proxy disabled. Network restored.", LogLevel::Info).await;
     }
 
     if cfg.enable_tun {
@@ -458,8 +458,9 @@ cfg="$2"
 cleanup() {
     if [ -n "$XRAY_PID" ]; then
         kill -TERM "$XRAY_PID" 2>/dev/null
+        sleep 1
+        kill -KILL "$XRAY_PID" 2>/dev/null
         wait "$XRAY_PID" 2>/dev/null
-        kill -9 "$XRAY_PID" 2>/dev/null
     fi
     ip link delete tun0 2>/dev/null
     rm -f "$cfg"
@@ -518,7 +519,7 @@ cleanup
             // Dropping stdin triggers the supervisor's cleanup trap immediately
             drop(stdin.take());
             // Give up to 1 second for graceful exit, then ensure process is dead
-            let _ = tokio::time::timeout(std::time::Duration::from_millis(1000), child.wait()).await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
             let _ = child.kill().await;
             None
         }

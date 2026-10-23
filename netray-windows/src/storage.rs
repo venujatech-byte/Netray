@@ -46,7 +46,7 @@ impl Default for AppData {
             v2ray_uri_or_json: sample_uri,
             local_socks_port: "10808".to_string(),
             enable_tun: true,
-            enable_sysproxy: true,
+            enable_sysproxy: false,
             tunnel_mode: "V2RayXray".to_string(),
             ssh_host: "sg1.myserver.com".to_string(),
             ssh_port: "22".to_string(),

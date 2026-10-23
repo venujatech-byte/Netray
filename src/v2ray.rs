@@ -1166,14 +1166,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_sni_bughost_verify_peer_cert() {
-        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#BugHostNode";
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@server.example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#BugHostNode";
         let config =
             parse_and_generate_xray_config(uri, 10808, 10809, false).expect("Should parse");
         let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
 
         let tls_settings = &json_val["outbounds"][0]["streamSettings"]["tlsSettings"];
         assert_eq!(tls_settings["serverName"], "example.com");
-        assert_eq!(tls_settings["verifyPeerCertByName"], "example.com");
+        assert_eq!(tls_settings["verifyPeerCertByName"], "server.example.com");
 
         if let Ok(bin) = find_xray_binary() {
             let res = test_xray_config(&bin, &config).await;

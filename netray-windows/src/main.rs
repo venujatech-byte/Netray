@@ -49,7 +49,7 @@ fn form_card_style(_theme: &Theme) -> container::Style {
 }
 
 pub fn main() -> iced::Result {
-    iced::application("Netray (Windows)", NetrayApp::update, NetrayApp::view)
+    iced::application("Netray", NetrayApp::update, NetrayApp::view)
         .subscription(NetrayApp::subscription)
         .theme(|_| Theme::Dark)
         .exit_on_close_request(false)
@@ -288,7 +288,7 @@ impl NetrayApp {
             ping_results: HashMap::new(),
 
             enable_tun: saved.enable_tun,
-            enable_sysproxy: saved.enable_sysproxy,
+            enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
@@ -344,7 +344,38 @@ impl NetrayApp {
         }
     }
 
+    fn config_locked(&self) -> bool {
+        self.is_running || self.worker_active
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
+        if self.config_locked()
+            && matches!(
+                &message,
+                Message::SetViewMode(ViewMode::EditNode)
+                    | Message::SelectProfile(_)
+                    | Message::EditProfile(_)
+                    | Message::DeleteProfile(_)
+                    | Message::AddNewProfile
+                    | Message::SaveEditedNode
+                    | Message::RequestClipboardImport
+                    | Message::ClipboardImported(_)
+                    | Message::EditRemarksChanged(_)
+                    | Message::EditAddressChanged(_)
+                    | Message::EditPortChanged(_)
+                    | Message::EditEncryptMethodChanged(_)
+                    | Message::EditFlowChanged(_)
+                    | Message::EditUserIdChanged(_)
+                    | Message::EditTransportChanged(_)
+                    | Message::EditHeaderTypeChanged(_)
+                    | Message::EditTlsTypeChanged(_)
+                    | Message::EditSniChanged(_)
+                    | Message::EditFingerprintChanged(_)
+                    | Message::EditAlpnChanged(_)
+            )
+        {
+            return Task::none();
+        }
         match message {
             Message::SetViewMode(mode) => {
                 self.view_mode = mode;
@@ -596,11 +627,17 @@ impl NetrayApp {
             }
             Message::ToggleTunMode(v) => {
                 self.enable_tun = v;
+                if v {
+                    self.enable_sysproxy = false;
+                }
                 let _ = self.save_current_state();
                 Task::none()
             }
             Message::ToggleSysProxy(v) => {
                 self.enable_sysproxy = v;
+                if v {
+                    self.enable_tun = false;
+                }
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -920,6 +957,7 @@ impl NetrayApp {
     }
 
     fn view_profiles_screen(&self) -> Element<'_, Message> {
+        let config_locked = self.config_locked();
         let top_bar = row![
             button(icons::lucide_icon(icons::MENU, 22, Color::WHITE))
                 .padding(6)
@@ -937,14 +975,14 @@ impl NetrayApp {
                     background: None,
                     ..Default::default()
                 })
-                .on_press(Message::AddNewProfile),
+                .on_press_maybe((!config_locked).then(|| Message::AddNewProfile)),
             button(icons::lucide_icon(icons::LINK, 20, Color::WHITE))
                 .padding(6)
                 .style(|_, _| button::Style {
                     background: None,
                     ..Default::default()
                 })
-                .on_press(Message::RequestClipboardImport),
+                .on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
             button(icons::lucide_icon(icons::MORE_VERTICAL, 20, Color::WHITE))
                 .padding(6)
                 .style(|_, _| button::Style {
@@ -973,7 +1011,7 @@ impl NetrayApp {
                     },
                     ..Default::default()
                 })
-                .on_press(Message::AddNewProfile),
+                .on_press_maybe((!config_locked).then(|| Message::AddNewProfile)),
             Space::with_width(10),
             text(format!("{} profiles", self.v2ray_profiles.len()))
                 .size(13)
@@ -1060,7 +1098,13 @@ impl NetrayApp {
                         column![
                             button(
                                 column![
-                                    text(p.name.as_str()).size(15).color(Color::WHITE),
+                                    row![
+                                        text(p.name.as_str()).size(15).color(Color::WHITE),
+                                        Space::with_width(Length::Fill),
+                                        text(if is_active { "SELECTED" } else { "" })
+                                            .size(9)
+                                            .color(SUCCESS_GREEN),
+                                    ],
                                     text(node_addr).size(12).color(TEXT_MUTED),
                                 ]
                                 .spacing(4)
@@ -1073,7 +1117,7 @@ impl NetrayApp {
                                 text_color: Color::WHITE,
                                 ..Default::default()
                             })
-                            .on_press(Message::SelectProfile(p_id_1)),
+                            .on_press_maybe((!config_locked).then(|| Message::SelectProfile(p_id_1))),
                             row![
                                 text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
                                 text(ping_result).size(11).color(ping_color),
@@ -1112,7 +1156,7 @@ impl NetrayApp {
                                         text_color: TEXT_MUTED,
                                         ..Default::default()
                                     })
-                                    .on_press(Message::EditProfile(p_id_2)),
+                                    .on_press_maybe((!config_locked).then(|| Message::EditProfile(p_id_2))),
                                 button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED))
                                     .padding(6)
                                     .style(|_, _| button::Style {
@@ -1120,7 +1164,7 @@ impl NetrayApp {
                                         text_color: TEXT_MUTED,
                                         ..Default::default()
                                     })
-                                    .on_press(Message::DeleteProfile(p_id_3)),
+                                    .on_press_maybe((!config_locked).then(|| Message::DeleteProfile(p_id_3))),
                             ]
                             .spacing(4)
                             .align_y(Alignment::Center),
@@ -1142,7 +1186,7 @@ impl NetrayApp {
                 Space::with_height(40),
                 text("No profiles added yet.").size(15).color(TEXT_MUTED),
                 Space::with_height(10),
-                button("Import from Clipboard").on_press(Message::RequestClipboardImport),
+                button("Import from Clipboard").on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
             ]
             .align_x(Alignment::Center)
             .width(Length::Fill)
@@ -1679,17 +1723,17 @@ mod performance_tests {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
         let subscriptions =
             |app: &NetrayApp| iced::advanced::subscription::into_recipes(app.subscription()).len();
-        assert_eq!(subscriptions(&app), 1);
+        assert_eq!(subscriptions(&app), 4);
         app.is_running = true;
-        assert_eq!(subscriptions(&app), 2);
+        assert_eq!(subscriptions(&app), 5);
         for view in [ViewMode::Logs, ViewMode::EditNode, ViewMode::SshSettings] {
             app.view_mode = view;
-            assert_eq!(subscriptions(&app), 1);
+            assert_eq!(subscriptions(&app), 4);
         }
         app.view_mode = ViewMode::Profiles;
-        assert_eq!(subscriptions(&app), 2);
+        assert_eq!(subscriptions(&app), 5);
         app.is_running = false;
-        assert_eq!(subscriptions(&app), 1);
+        assert_eq!(subscriptions(&app), 4);
     }
     #[tokio::test]
     async fn logging_waits_for_capacity_without_losing_entries() {

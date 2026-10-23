@@ -23,7 +23,7 @@ fn test_windows_storage_roundtrip() {
     assert!(loaded.v2ray_profiles.len() >= 2);
     assert_eq!(loaded.v2ray_profiles[1].name, "Windows Direct Node");
     assert!(loaded.enable_tun);
-    assert!(loaded.enable_sysproxy);
+    assert!(!loaded.enable_sysproxy);
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
