@@ -7,6 +7,8 @@ URL:            https://github.com/venujatech-byte/Netray
 Source0:        netray-payload.tar.gz
 BuildArch:      %{_arch}
 %global debug_package %{nil}
+# Keep the verified upstream Xray binary byte-for-byte intact.
+%global __os_install_post %{nil}
 
 %description
 Netray desktop client with the Xray-core proxy engine bundled for Linux.
