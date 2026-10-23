@@ -1,9 +1,9 @@
 use base64::prelude::*;
-use percent_encoding::percent_decode_str;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use url::Url;
+
 
 /// Locate xray.exe or v2ray.exe on Windows
 pub fn find_xray_binary() -> Result<PathBuf, String> {
@@ -344,10 +344,11 @@ pub fn parse_and_generate_xray_config(
 }
 
 fn inject_inbounds(val: &mut Value, socks_port: u16, http_port: u16, enable_tun: bool) {
-    if !val.is_object() {
+    let Some(obj) = val.as_object_mut() else {
         return;
-    }
-    let inbounds = val.entry("inbounds").or_insert_with(|| json!([]));
+    };
+    let inbounds = obj.entry("inbounds").or_insert_with(|| json!([]));
+
     if let Some(arr) = inbounds.as_array_mut() {
         arr.retain(|i| {
             if let Some(p) = i.get("port").and_then(|p| p.as_u64()) {
