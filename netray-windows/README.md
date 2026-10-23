@@ -8,7 +8,7 @@ Ultra-lightweight, high-performance V2Ray, VLess, and SSH tunneling client for W
   - System proxy manipulation via Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`).
   - Seamless notification using `wininet.dll` (`InternetSetOptionW`).
   - Native WinTun adapter inbound support (`wintun.dll`) for complete system-wide traffic tunneling.
-  - Automatic `xray.exe` and `v2ray.exe` detection across PATH, `%ProgramFiles%\Xray`, `%LOCALAPPDATA%\Xray`, and local directory.
+  - Uses a bundled `xray.exe` beside Netray, or finds an existing core on PATH or in common install folders.
   - Windows process supervision and clean termination (`taskkill /F /T /IM xray.exe`).
 - **Modern Iced GUI**:
   - Electric Blue accent palette tailored for Windows 10 and Windows 11 dark mode.
@@ -23,7 +23,7 @@ Ultra-lightweight, high-performance V2Ray, VLess, and SSH tunneling client for W
 ### Prerequisites
 
 1. Install [Rust](https://rustup.rs/) (1.75+ recommended).
-2. Download `xray.exe` or `v2ray.exe` and ensure it is placed in your PATH or in the same directory as the executable.
+2. For development runs, install Xray or put `xray.exe` on PATH. The release package includes Xray.
 3. (Optional for WinTun Mode) Download `wintun.dll` using `scripts\setup-wintun.ps1`.
 
 ### Running on Windows
@@ -43,4 +43,4 @@ cargo run --release
 ```bat
 scripts\build.bat
 ```
-The compiled binary will be placed at `target\release\netray-windows.exe`.
+This builds `dist\netray-windows.zip`, a portable package containing Netray and the official Xray-core release. The build downloads the pinned Xray release from GitHub and verifies its SHA-256 checksum.
