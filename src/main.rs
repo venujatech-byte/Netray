@@ -36,7 +36,7 @@ fn form_card_style(_theme: &Theme) -> container::Style {
 
 pub fn main() -> iced::Result {
     iced::application(
-        "Netray Linux (Rust)",
+        "Netray (Rust)",
         NetrayApp::update,
         NetrayApp::view,
     )
@@ -615,18 +615,18 @@ impl NetrayApp {
 
     fn view(&self) -> Element<'_, Message> {
         match self.view_mode {
-            ViewMode::Profiles => self.view_netray_profiles_screen(),
-            ViewMode::EditNode => self.view_netray_edit_screen(),
+            ViewMode::Profiles => self.view_profiles_screen(),
+            ViewMode::EditNode => self.view_edit_screen(),
             ViewMode::Logs => self.view_logs_screen(),
             ViewMode::SshSettings => self.view_ssh_screen(),
         }
     }
 
     // ========================================================================
-    // SCREEN 1: NETRAY PROFILES SCREEN (Matching Screenshot 1)
+    // SCREEN 1: PROFILES SCREEN
     // ========================================================================
 
-    fn view_netray_profiles_screen(&self) -> Element<'_, Message> {
+    fn view_profiles_screen(&self) -> Element<'_, Message> {
         // 1. Top App Bar
         let top_bar = row![
             button(icons::lucide_icon(icons::MENU, 22, Color::WHITE))
@@ -797,7 +797,7 @@ impl NetrayApp {
     // SCREEN 2: EDIT VLESS / NODE EDITOR (Matching Screenshots 2 & 3)
     // ========================================================================
 
-    fn view_netray_edit_screen(&self) -> Element<'_, Message> {
+    fn view_edit_screen(&self) -> Element<'_, Message> {
         let top_bar = row![
             button(icons::lucide_icon(icons::CLOSE, 22, Color::WHITE))
                 .padding(6)
