@@ -256,6 +256,7 @@ fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
     let path = query.get("path").cloned().unwrap_or_else(|| "/".to_string());
     let header_host = query.get("host").cloned().unwrap_or_else(|| sni.clone());
     let service_name = query.get("serviceName").cloned().unwrap_or_default();
+    let header_type = query.get("headerType").cloned().unwrap_or_else(|| "none".to_string());
     let fp = query.get("fp").cloned().unwrap_or_else(|| "chrome".to_string());
     let pbk = query.get("pbk").cloned().unwrap_or_default();
     let sid = query.get("sid").cloned().unwrap_or_default();
@@ -294,6 +295,7 @@ fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
         &header_host,
         &path,
         &service_name,
+        &header_type,
         &fp,
         &pbk,
         &sid,
@@ -391,6 +393,11 @@ fn parse_vmess_uri(uri_str: &str) -> Result<Value, String> {
         .and_then(|v| v.as_str())
         .unwrap_or("/");
 
+    let header_type = json_val
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none");
+
     let vcn = if !effective_sni.is_empty() && effective_sni != host && host.parse::<std::net::IpAddr>().is_err() {
         host.to_string()
     } else {
@@ -404,6 +411,7 @@ fn parse_vmess_uri(uri_str: &str) -> Result<Value, String> {
         host_header,
         path,
         "",
+        header_type,
         "chrome",
         "",
         "",
@@ -459,6 +467,7 @@ fn parse_trojan_uri(uri_str: &str) -> Result<Value, String> {
     let path = query.get("path").cloned().unwrap_or_else(|| "/".to_string());
     let header_host = query.get("host").cloned().unwrap_or_else(|| sni.clone());
     let service_name = query.get("serviceName").cloned().unwrap_or_default();
+    let header_type = query.get("headerType").cloned().unwrap_or_else(|| "none".to_string());
     let fp = query.get("fp").cloned().unwrap_or_else(|| "chrome".to_string());
 
     let vcn = query
@@ -487,6 +496,7 @@ fn parse_trojan_uri(uri_str: &str) -> Result<Value, String> {
         &header_host,
         &path,
         &service_name,
+        &header_type,
         &fp,
         "",
         "",
@@ -567,6 +577,7 @@ fn build_stream_settings(
     host_header: &str,
     path: &str,
     service_name: &str,
+    header_type: &str,
     fp: &str,
     pbk: &str,
     sid: &str,
@@ -606,18 +617,31 @@ fn build_stream_settings(
             settings["httpSettings"] = h2_obj;
         }
         "tcp" => {
-            if !host_header.is_empty() {
-                settings["tcpSettings"] = json!({
-                    "header": {
-                        "type": "http",
-                        "request": {
-                            "headers": {
-                                "Host": [host_header]
-                            }
+            if header_type.eq_ignore_ascii_case("http") {
+                let mut http_obj = json!({
+                    "type": "http"
+                });
+                if !host_header.is_empty() {
+                    http_obj["request"] = json!({
+                        "headers": {
+                            "Host": [host_header]
                         }
-                    }
+                    });
+                }
+                settings["tcpSettings"] = json!({
+                    "header": http_obj
                 });
             }
+        }
+        "kcp" => {
+            let mut kcp_obj = json!({});
+            if !header_type.is_empty() && !header_type.eq_ignore_ascii_case("none") {
+                kcp_obj["header"] = json!({ "type": header_type });
+            }
+            if !path.is_empty() && path != "/" {
+                kcp_obj["seed"] = json!(path);
+            }
+            settings["kcpSettings"] = kcp_obj;
         }
         _ => {}
     }
@@ -659,6 +683,18 @@ static TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 
 /// Validate configuration using `xray run -test -c <file>`
 pub async fn test_xray_config(xray_bin: &Path, config_json: &str) -> Result<(), String> {
+    // If the config contains a TUN inbound, strip it for dry-run validation.
+    // Xray attempts to create the real tun interface during -test mode,
+    // which fails with EPERM for non-root users.
+    let validation_json = if let Ok(mut val) = serde_json::from_str::<Value>(config_json) {
+        if let Some(inbounds) = val.get_mut("inbounds").and_then(|i| i.as_array_mut()) {
+            inbounds.retain(|ib| ib.get("protocol").and_then(|p| p.as_str()) != Some("tun"));
+        }
+        serde_json::to_string(&val).unwrap_or_else(|_| config_json.to_string())
+    } else {
+        config_json.to_string()
+    };
+
     let count = TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let temp_test_file = format!(
         "/tmp/netray_xray_test_{}_{}_{}.json",
@@ -669,7 +705,7 @@ pub async fn test_xray_config(xray_bin: &Path, config_json: &str) -> Result<(), 
             .as_nanos(),
         count
     );
-    tokio::fs::write(&temp_test_file, config_json)
+    tokio::fs::write(&temp_test_file, &validation_json)
         .await
         .map_err(|e| format!("Failed to write test config: {}", e))?;
 
@@ -801,8 +837,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_tun_inbound_generation() {
+    #[tokio::test]
+    async fn test_tun_inbound_generation() {
         let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2F#Sample-Node";
         let config = parse_and_generate_xray_config(uri, 10808, 10809, true).expect("Should parse with TUN");
         let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
@@ -811,6 +847,32 @@ mod tests {
         assert_eq!(inbounds.len(), 3);
         assert_eq!(inbounds[2]["protocol"], "tun");
         assert_eq!(inbounds[2]["settings"]["name"], "tun0");
+
+        if let Ok(bin) = find_xray_binary() {
+            let res = test_xray_config(&bin, &config).await;
+            assert!(res.is_ok(), "Xray validation should succeed with TUN: {:?}", res);
+        }
+    }
+
+    #[test]
+    fn test_vless_tcp_no_fake_http() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=zoom.us&type=tcp#TcpNode";
+        let config = parse_and_generate_xray_config(uri, 10808, 10809, false).expect("Should parse");
+        let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
+        let stream = &json_val["outbounds"][0]["streamSettings"];
+        assert_eq!(stream["network"], "tcp");
+        assert!(stream.get("tcpSettings").is_none(), "Standard TCP must NOT have fake HTTP tcpSettings");
+    }
+
+    #[test]
+    fn test_vless_tcp_with_http_obfuscation() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=zoom.us&type=tcp&headerType=http&host=zoom.us#HttpTcpNode";
+        let config = parse_and_generate_xray_config(uri, 10808, 10809, false).expect("Should parse");
+        let json_val: Value = serde_json::from_str(&config).expect("Must be valid JSON");
+        let stream = &json_val["outbounds"][0]["streamSettings"];
+        assert_eq!(stream["network"], "tcp");
+        assert_eq!(stream["tcpSettings"]["header"]["type"], "http");
+        assert_eq!(stream["tcpSettings"]["header"]["request"]["headers"]["Host"][0], "zoom.us");
     }
 
     #[tokio::test]
