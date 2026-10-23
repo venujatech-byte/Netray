@@ -1080,6 +1080,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires an installed or packaged Xray core"]
     fn test_find_binary() {
         let bin = find_xray_binary();
         assert!(

@@ -62,6 +62,22 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/package-linux.sh "$NETRAY_VERSION"
 
+      - name: Test packaged Linux core
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/netray-core-test"
+          tar -xzf "dist/netray-linux-linux-64-$NETRAY_VERSION.tar.gz" -C "$RUNNER_TEMP/netray-core-test"
+          export PATH="$RUNNER_TEMP/netray-core-test:$PATH"
+          export NETRAY_TEST_XRAY="$RUNNER_TEMP/netray-core-test/xray"
+          cargo test --locked -- --ignored
+
+      - name: Test packaged Windows core
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:NETRAY_TEST_XRAY = (Resolve-Path "netray-windows/dist/netray-windows/xray.exe").Path
+          cargo test --locked --manifest-path netray-windows/Cargo.toml -- --ignored
+
       - name: Upload Windows release package
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
