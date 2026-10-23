@@ -7,6 +7,7 @@ pub mod icons;
 use tunnel::{run_real_tunnel_worker, TunnelConfig};
 use chrono::Local;
 use iced::futures::SinkExt;
+use std::collections::HashMap;
 use iced::widget::{
     button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
 };
@@ -18,6 +19,8 @@ const ACCENT_BLUE_LIGHT: Color = Color::from_rgb(0.24, 0.58, 1.0); // #3B82F6
 const SURFACE_CARD: Color = Color::from_rgb(0.14, 0.16, 0.20);
 const TEXT_MUTED: Color = Color::from_rgb(0.55, 0.60, 0.68);
 const INACTIVE_STRIP: Color = Color::from_rgb(0.30, 0.33, 0.38);
+const SUCCESS_GREEN: Color = Color::from_rgb(0.22, 0.78, 0.49);
+const FAILURE_RED: Color = Color::from_rgb(0.95, 0.35, 0.40);
 
 fn form_card_style(_theme: &Theme) -> container::Style {
     container::Style {
@@ -124,6 +127,8 @@ pub struct NetrayApp {
     pub v2ray_profiles: Vec<storage::V2RayProfile>,
     pub active_profile_id: Option<String>,
     pub node_edit_state: v2ray::NodeEditState,
+    pub ping_in_progress: Option<String>,
+    pub ping_results: HashMap<String, String>,
 
     pub enable_tun: bool,
     pub enable_sysproxy: bool,
@@ -140,6 +145,8 @@ pub enum Message {
     ToggleTunnel,
 
     SelectProfile(String),
+    PingProfile(String),
+    PingFinished(String, Result<u128, String>),
     EditProfile(String),
     DeleteProfile(String),
     ShareProfile(String),
@@ -223,6 +230,8 @@ impl NetrayApp {
             v2ray_profiles: saved.v2ray_profiles,
             active_profile_id: active_id,
             node_edit_state: v2ray::NodeEditState::default(),
+            ping_in_progress: None,
+            ping_results: HashMap::new(),
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy,
@@ -294,6 +303,29 @@ impl NetrayApp {
                 }
                 Task::none()
             }
+            Message::PingProfile(id) => {
+                if self.ping_in_progress.is_some() {
+                    Task::none()
+                } else if let Some(config) = self.v2ray_profiles.iter().find(|p| p.id == id).map(|p| p.config.clone()) {
+                    self.ping_results.remove(&id);
+                    self.ping_in_progress = Some(id.clone());
+                    Task::perform(async move { v2ray::ping_profile(&config).await }, move |result| Message::PingFinished(id.clone(), result))
+                } else {
+                    Task::none()
+                }
+            }
+            Message::PingFinished(id, result) => {
+                if self.ping_in_progress.as_deref() == Some(&id) {
+                    self.ping_in_progress = None;
+                    let (display, log, level) = match result {
+                        Ok(ms) => (format!("TCP · {ms} ms"), format!("{}: TCP connection in {ms} ms", self.v2ray_profiles.iter().find(|p| p.id == id).map(|p| p.name.as_str()).unwrap_or("Profile")), LogLevel::Success),
+                        Err(error) => ("Failed".to_string(), format!("Ping failed for {}: {error}", self.v2ray_profiles.iter().find(|p| p.id == id).map(|p| p.name.as_str()).unwrap_or("profile")), LogLevel::Warn),
+                    };
+                    self.ping_results.insert(id, display);
+                    self.push_log("Ping", log, level);
+                }
+                Task::none()
+            }
             Message::ShareProfile(cfg) => {
                 self.push_log("Share", "Copied configuration link to clipboard.", LogLevel::Success);
                 iced::clipboard::write(cfg)
@@ -337,6 +369,10 @@ impl NetrayApp {
                 let id = self.node_edit_state.id.clone();
                 let name = self.node_edit_state.remarks.trim().to_string();
                 let uri = self.node_edit_state.to_vless_uri();
+                self.ping_results.remove(&id);
+                if self.ping_in_progress.as_deref() == Some(&id) {
+                    self.ping_in_progress = None;
+                }
 
                 if let Some(existing) = self.v2ray_profiles.iter_mut().find(|p| p.id == id) {
                     existing.name = name.clone();
@@ -388,6 +424,10 @@ impl NetrayApp {
             }
             Message::DeleteProfile(id) => {
                 self.v2ray_profiles.retain(|p| p.id != id);
+                self.ping_results.remove(&id);
+                if self.ping_in_progress.as_deref() == Some(&id) {
+                    self.ping_in_progress = None;
+                }
                 if self.active_profile_id.as_deref() == Some(&id) {
                     self.active_profile_id = self.v2ray_profiles.first().map(|p| p.id.clone());
                     if let Some(first) = self.v2ray_profiles.first() {
@@ -566,18 +606,12 @@ impl NetrayApp {
                 })
                 .on_press(Message::AddNewProfile),
             Space::with_width(10),
-            container(text("Default").size(13).color(ACCENT_BLUE_LIGHT))
-                .padding(iced::Padding { top: 5.0, bottom: 5.0, left: 12.0, right: 12.0 })
-                .style(|_| container::Style {
-                    background: Some(Color::from_rgba(0.15, 0.48, 0.98, 0.15).into()),
-                    border: iced::Border {
-                        radius: 12.0.into(),
-                        width: 1.0,
-                        color: ACCENT_BLUE,
-                    },
-                    ..Default::default()
-                }),
+            text(format!("{} profiles", self.v2ray_profiles.len())).size(13).color(TEXT_MUTED),
             Space::with_width(Length::Fill),
+            text(if self.is_running { "Tunnel active" } else { "Offline" })
+                .size(12)
+                .color(if self.is_running { SUCCESS_GREEN } else { TEXT_MUTED }),
+            Space::with_width(12),
             checkbox("WinTun", self.enable_tun)
                 .size(16)
                 .on_toggle(Message::ToggleTunMode),
@@ -603,10 +637,14 @@ impl NetrayApp {
                 let p_id_2 = p.id.clone();
                 let p_id_3 = p.id.clone();
                 let p_cfg_1 = p.config.clone();
+                let ping_label = if self.ping_in_progress.as_deref() == Some(&p.id) { "Testing…" } else { "Ping" };
+                let ping_press = self.ping_in_progress.is_none().then(|| Message::PingProfile(p.id.clone()));
+                let ping_result = self.ping_results.get(&p.id).cloned().unwrap_or_default();
+                let ping_color = if ping_result == "Failed" { FAILURE_RED } else { SUCCESS_GREEN };
 
                 container(
                     row![
-                        container(Space::with_width(5))
+                        container(Space::with_width(1))
                             .height(44)
                             .style(move |_| container::Style {
                                 background: Some(strip_color.into()),
@@ -616,9 +654,9 @@ impl NetrayApp {
                         Space::with_width(10),
                         button(
                             column![
-                                text(p.name.clone()).size(13).color(TEXT_MUTED),
+                                text(p.name.clone()).size(14).color(Color::WHITE),
                                 Space::with_height(2),
-                                text(node_addr).size(15).color(Color::WHITE),
+                                text(node_addr).size(13).color(TEXT_MUTED),
                             ]
                             .width(Length::Fill)
                         )
@@ -626,6 +664,9 @@ impl NetrayApp {
                         .on_press(Message::SelectProfile(p_id_1)),
                         column![
                             row![
+                                button(ping_label)
+                                    .padding(5)
+                                    .on_press_maybe(ping_press),
                                 button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
                                     .padding(4)
                                     .on_press(Message::ShareProfile(p_cfg_1)),
@@ -638,7 +679,11 @@ impl NetrayApp {
                             ]
                             .spacing(6),
                             Space::with_height(4),
-                            text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
+                            row![
+                                text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
+                                Space::with_width(6),
+                                text(ping_result).size(11).color(ping_color),
+                            ],
                         ]
                         .align_x(Alignment::End),
                     ]

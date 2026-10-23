@@ -2,6 +2,9 @@ use base64::prelude::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+use tokio::net::TcpStream;
+use tokio::time::{timeout, Duration};
 use url::Url;
 
 /// Locate the xray or v2ray binary on the local system
@@ -769,6 +772,32 @@ pub fn extract_node_address(raw: &str) -> String {
         }
     }
     "127.0.0.1:443".to_string()
+}
+
+pub async fn ping_profile(raw: &str) -> Result<u128, String> {
+    let normalized = parse_and_generate_xray_config(raw, 10808, 10809, false)?;
+    let config: Value = serde_json::from_str(&normalized).map_err(|e| format!("Invalid Xray config: {e}"))?;
+    let outbounds = config.get("outbounds").and_then(Value::as_array)
+        .ok_or_else(|| "No outbound server found in config.".to_string())?;
+    let server = outbounds.iter().find_map(|outbound| {
+            let settings = outbound.get("settings")?;
+            settings.get("vnext").and_then(Value::as_array).and_then(|items| items.first())
+                .or_else(|| settings.get("servers").and_then(Value::as_array).and_then(|items| items.first()))
+        }).ok_or_else(|| "No remote server endpoint found in config.".to_string())?;
+    let host = server.get("address").and_then(Value::as_str)
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| "Remote server address is missing.".to_string())?;
+    let port = server.get("port").and_then(Value::as_u64)
+        .or_else(|| server.get("port").and_then(Value::as_str).and_then(|p| p.parse().ok()))
+        .filter(|p| (1..=65535).contains(p))
+        .ok_or_else(|| "Remote server port is invalid.".to_string())? as u16;
+
+    let started = Instant::now();
+    match timeout(Duration::from_secs(5), TcpStream::connect((host, port))).await {
+        Ok(Ok(_)) => Ok(started.elapsed().as_millis()),
+        Ok(Err(error)) => Err(format!("TCP connection failed: {error}")),
+        Err(_) => Err("TCP connection timed out after 5 seconds.".to_string()),
+    }
 }
 
 #[derive(Debug, Clone, Default)]
