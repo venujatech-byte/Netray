@@ -691,9 +691,13 @@ impl NetrayApp {
                     row![
                         // Left Accent Strip (Blue when active, gray when inactive)
                         container(Space::with_width(5))
-                            .height(Length::Fill)
+                            .height(44)
                             .style(move |_| container::Style {
                                 background: Some(strip_color.into()),
+                                border: iced::Border {
+                                    radius: 2.0.into(),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             }),
                         Space::with_width(10),
