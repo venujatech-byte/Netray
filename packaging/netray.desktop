@@ -6,5 +6,5 @@ Comment=Manage network tunnels and proxy profiles
 Exec=netray
 Icon=netray
 Terminal=false
-Categories=Network;Utility;
+Categories=Network;
 StartupNotify=true
