@@ -8,6 +8,14 @@ use url::Url;
 /// Locate xray.exe or v2ray.exe on Windows
 pub fn find_xray_binary() -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(path) = exe.parent().map(|dir| dir.join("xray.exe")) {
+            if path.is_file() {
+                return Ok(path);
+            }
+        }
+    }
+
     let candidates = [
         cwd.join("xray.exe"),
         cwd.join("v2ray.exe"),
@@ -17,13 +25,10 @@ pub fn find_xray_binary() -> Result<PathBuf, String> {
         PathBuf::from(r#"C:\Program Files\v2ray\v2ray.exe"#),
         PathBuf::from(r#"C:\xray\xray.exe"#),
         PathBuf::from(r#"C:\v2ray\v2ray.exe"#),
-        // Fallback for Linux cross-testing
-        PathBuf::from("/usr/local/bin/xray"),
-        PathBuf::from("/usr/bin/xray"),
     ];
 
     for path in &candidates {
-        if path.exists() {
+        if path.is_file() {
             return Ok(path.clone());
         }
     }
@@ -32,17 +37,13 @@ pub fn find_xray_binary() -> Result<PathBuf, String> {
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path_var) {
             let exe = dir.join("xray.exe");
-            if exe.exists() {
+            if exe.is_file() {
                 return Ok(exe);
-            }
-            let linux_bin = dir.join("xray");
-            if linux_bin.exists() {
-                return Ok(linux_bin);
             }
         }
     }
 
-    Ok(PathBuf::from("xray.exe"))
+    Err("Xray core was not found. Install xray.exe or place it beside Netray, in its bin folder, or on PATH.".to_string())
 }
 
 /// Extract human-readable node name or remark from link
