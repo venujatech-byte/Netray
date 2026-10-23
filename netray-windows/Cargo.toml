@@ -3,7 +3,16 @@ name = "netray-windows"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "netray_windows"
+path = "src/lib.rs"
+
+[[bin]]
+name = "netray-windows"
+path = "src/main.rs"
+
 [dependencies]
+
 iced = { version = "0.13", features = ["tokio", "advanced", "svg"] }
 tokio = { version = "1", features = ["full"] }
 russh = "0.45"
