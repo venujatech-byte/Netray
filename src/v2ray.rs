@@ -709,9 +709,15 @@ pub fn extract_protocol_tag(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.starts_with("vless://") {
         if let Ok(url) = Url::parse(trimmed) {
-            let query: HashMap<String, String> = url.query_pairs().into_owned().collect();
-            let net = query.get("type").or_else(|| query.get("net")).map(|s| s.to_uppercase()).unwrap_or_else(|| "TCP".into());
-            let sec = query.get("security").map(|s| s.to_uppercase()).unwrap_or_else(|| "NONE".into());
+            let mut net = "TCP".to_string();
+            let mut sec = "NONE".to_string();
+            for (k, v) in url.query_pairs() {
+                if k == "type" || k == "net" {
+                    net = v.to_uppercase();
+                } else if k == "security" {
+                    sec = v.to_uppercase();
+                }
+            }
             if sec != "NONE" {
                 return format!("(VLESS + {} + {})", net, sec);
             }
@@ -722,8 +728,12 @@ pub fn extract_protocol_tag(raw: &str) -> String {
         "(VMESS + WS + TLS)".to_string()
     } else if trimmed.starts_with("trojan://") {
         if let Ok(url) = Url::parse(trimmed) {
-            let query: HashMap<String, String> = url.query_pairs().into_owned().collect();
-            let net = query.get("type").map(|s| s.to_uppercase()).unwrap_or_else(|| "TCP".into());
+            let mut net = "TCP".to_string();
+            for (k, v) in url.query_pairs() {
+                if k == "type" || k == "net" {
+                    net = v.to_uppercase();
+                }
+            }
             return format!("(TROJAN + {} + TLS)", net);
         }
         "(TROJAN)".to_string()

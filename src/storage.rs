@@ -91,7 +91,50 @@ pub fn load_data() -> AppData {
     default_data
 }
 
-pub fn save_data(data: &AppData) -> Result<PathBuf, String> {
+#[derive(Serialize)]
+pub struct AppDataRef<'a> {
+    pub v2ray_profiles: &'a [V2RayProfile],
+    pub active_profile_id: Option<&'a str>,
+    pub v2ray_uri_or_json: &'a str,
+    pub local_socks_port: &'a str,
+    pub enable_tun: bool,
+    pub enable_sysproxy: bool,
+    pub tunnel_mode: &'a str,
+    pub ssh_host: &'a str,
+    pub ssh_port: &'a str,
+    pub ssh_user: &'a str,
+    pub ssh_pass: &'a str,
+    pub proxy_ip: &'a str,
+    pub proxy_port: &'a str,
+    pub payload_text: &'a str,
+    pub bug_host: &'a str,
+    pub sni_host: &'a str,
+}
+
+impl AppData {
+    pub fn as_ref(&self) -> AppDataRef<'_> {
+        AppDataRef {
+            v2ray_profiles: &self.v2ray_profiles,
+            active_profile_id: self.active_profile_id.as_deref(),
+            v2ray_uri_or_json: &self.v2ray_uri_or_json,
+            local_socks_port: &self.local_socks_port,
+            enable_tun: self.enable_tun,
+            enable_sysproxy: self.enable_sysproxy,
+            tunnel_mode: &self.tunnel_mode,
+            ssh_host: &self.ssh_host,
+            ssh_port: &self.ssh_port,
+            ssh_user: &self.ssh_user,
+            ssh_pass: &self.ssh_pass,
+            proxy_ip: &self.proxy_ip,
+            proxy_port: &self.proxy_port,
+            payload_text: &self.payload_text,
+            bug_host: &self.bug_host,
+            sni_host: &self.sni_host,
+        }
+    }
+}
+
+pub fn save_state_ref(data: &AppDataRef<'_>) -> Result<PathBuf, String> {
     let path = get_config_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -101,6 +144,10 @@ pub fn save_data(data: &AppData) -> Result<PathBuf, String> {
     fs::write(&path, json_str)
         .map_err(|e| format!("Failed to write config to {}: {}", path.display(), e))?;
     Ok(path)
+}
+
+pub fn save_data(data: &AppData) -> Result<PathBuf, String> {
+    save_state_ref(&data.as_ref())
 }
 
 pub fn save_active_xray_json(xray_json: &str) -> Result<PathBuf, String> {
