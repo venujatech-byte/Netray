@@ -1,3 +1,5 @@
+#[path = "bootstrap_dns.rs"]
+mod bootstrap_dns;
 #[path = "latency.rs"]
 mod latency;
 use base64::prelude::*;
@@ -936,6 +938,10 @@ pub fn extract_node_address(raw: &str) -> String {
         }
     }
     "127.0.0.1:443".to_string()
+}
+
+pub async fn pin_proxy_dns(config: &mut Value) -> Result<(), String> {
+    bootstrap_dns::pin_proxy_address(config).await
 }
 
 pub async fn ping_profile(raw: &str) -> Result<u128, String> {

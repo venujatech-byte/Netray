@@ -379,6 +379,15 @@ async fn run_xray_engine(
         }
     };
 
+    let config_json = if cfg.enable_tun {
+        let mut config: serde_json::Value = serde_json::from_str(&config_json)?;
+        if let Err(error) = crate::v2ray::pin_proxy_dns(&mut config).await {
+            send_log(log_tx, "DNS", &error, LogLevel::Error).await;
+            return Err(error.into());
+        }
+        serde_json::to_string(&config)?
+    } else { config_json };
+
     // 3. Test & validate config with the core binary
     send_log(log_tx, "Xray", "Validating configuration with core...", LogLevel::Info).await;
     if let Err(e) = crate::v2ray::test_xray_config(&xray_bin, &config_json).await {

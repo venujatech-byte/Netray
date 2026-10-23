@@ -273,6 +273,15 @@ async fn run_xray_engine(
         cfg.enable_tun,
     )?;
 
+    let config_json = if cfg.enable_tun {
+        let mut config: serde_json::Value = serde_json::from_str(&config_json)?;
+        if let Err(error) = crate::v2ray::pin_proxy_dns(&mut config).await {
+            send_log(log_tx, "DNS", &error, LogLevel::Error).await;
+            return Err(error.into());
+        }
+        serde_json::to_string(&config)?
+    } else { config_json };
+
     // 3. Write temp config
     let config_dir = crate::storage::get_config_dir();
     let config_path = config_dir.join("active_xray.json");

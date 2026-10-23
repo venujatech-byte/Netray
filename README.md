@@ -78,3 +78,5 @@ The Linux build prefers X11/XWayland when `DISPLAY` is available. This works aro
 The logs page has an **Auto-scroll** checkbox. Uncheck it to read older entries without being moved to the bottom.
 
 **Ping** measures an HTTP response through the profile's primary proxy outbound using a short-lived, isolated Xray process. It requests `http://www.gstatic.com/generate_204` and waits for HTTP 204; the displayed time includes the proxy connection and remote response, excluding core startup. It is not ICMP latency. A blocked probe endpoint produces a failure even if other sites work. Configuration is passed through stdin, and the probe process is stopped after each measurement.
+
+For TUN startup, Netray resolves a hostname used by the proxy server through the system resolver and pins those IPs in Xray before the tunnel starts. This prevents Xray's DoH request from needing the proxy before it can connect to that same proxy; later DNS queries continue through the profile outbound. [Xray DNS requests follow routing rules](https://xtls.github.io/en/config/dns).
