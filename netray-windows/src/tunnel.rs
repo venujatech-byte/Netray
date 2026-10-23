@@ -105,11 +105,11 @@ async fn run_ssh_payload_engine(
 
     if use_ssl {
         send_log(log_tx, "SSL", format!("Initiating TLS handshake (SNI: {})...", cfg.sni_host), LogLevel::Info).await;
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let root_store = rustls::RootCertStore::empty();
         let client_config = rustls::ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();
+
         let connector = TlsConnector::from(Arc::new(client_config));
         let domain_str = if cfg.sni_host.is_empty() { cfg.ssh_host.clone() } else { cfg.sni_host.clone() };
         let server_name = ServerName::try_from(domain_str.as_str())?.to_owned();
@@ -200,12 +200,13 @@ async fn handle_socks5_client(
     sock.read_exact(&mut port_bytes).await?;
     let target_port = u16::from_be_bytes(port_bytes);
 
-    let mut channel = ssh.channel_open_direct_tcpip(
+    let channel = ssh.channel_open_direct_tcpip(
         &target_host,
         target_port as u32,
         "127.0.0.1",
         1080,
     ).await?;
+
 
     sock.write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x04, 0x38]).await?;
 
