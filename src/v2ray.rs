@@ -1,10 +1,9 @@
+#[path = "latency.rs"]
+mod latency;
 use base64::prelude::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
-use tokio::net::TcpStream;
-use tokio::time::{timeout, Duration};
 use url::Url;
 
 /// Locate the xray or v2ray binary on the local system
@@ -28,6 +27,7 @@ pub fn find_xray_binary() -> Result<PathBuf, String> {
         "/usr/bin/xray",
         "/bin/xray",
         "/opt/xray/xray",
+        "/opt/netray/xray",
         "/usr/local/bin/v2ray",
         "/usr/bin/v2ray",
         "/bin/v2ray",
@@ -249,11 +249,16 @@ fn configure_tun(config: &mut Value) -> Result<(), String> {
         .as_object_mut()
         .ok_or("Xray config must be a JSON object.")?
         .entry("dns")
-        .or_insert_with(|| json!({ "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"] }));
+        .or_insert_with(
+            || json!({ "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"] }),
+        );
     if !dns.is_object() {
         return Err("Xray DNS config must be an object for TUN mode.".to_owned());
     }
-    if dns.get("servers").is_some_and(|servers| !servers.is_array()) {
+    if dns
+        .get("servers")
+        .is_some_and(|servers| !servers.is_array())
+    {
         return Err("Xray DNS servers must be an array for TUN mode.".to_owned());
     }
     if dns["servers"].as_array().map_or(true, Vec::is_empty) {
@@ -272,7 +277,10 @@ fn configure_tun(config: &mut Value) -> Result<(), String> {
         .position(|outbound| outbound["tag"] == "proxy")
         .or_else(|| {
             outbounds.iter().position(|outbound| {
-                !matches!(outbound["protocol"].as_str(), Some("dns" | "freedom" | "blackhole"))
+                !matches!(
+                    outbound["protocol"].as_str(),
+                    Some("dns" | "freedom" | "blackhole")
+                )
             })
         })
         .unwrap_or(0);
@@ -306,12 +314,18 @@ fn configure_tun(config: &mut Value) -> Result<(), String> {
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .ok_or("Xray routing rules must be an array for TUN mode.")?;
-    rules.insert(0, json!({
-        "type": "field", "inboundTag": [tag], "port": 53, "outboundTag": dns_tag
-    }));
-    rules.insert(1, json!({
-        "type": "field", "inboundTag": [tag], "outboundTag": primary_tag
-    }));
+    rules.insert(
+        0,
+        json!({
+            "type": "field", "inboundTag": [tag], "port": 53, "outboundTag": dns_tag
+        }),
+    );
+    rules.insert(
+        1,
+        json!({
+            "type": "field", "inboundTag": [tag], "outboundTag": primary_tag
+        }),
+    );
     Ok(())
 }
 
@@ -926,51 +940,9 @@ pub fn extract_node_address(raw: &str) -> String {
 
 pub async fn ping_profile(raw: &str) -> Result<u128, String> {
     let normalized = parse_and_generate_xray_config(raw, 10808, 10809, false)?;
-    let config: Value =
+    let config =
         serde_json::from_str(&normalized).map_err(|e| format!("Invalid Xray config: {e}"))?;
-    let outbounds = config
-        .get("outbounds")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "No outbound server found in config.".to_string())?;
-    let server = outbounds
-        .iter()
-        .find_map(|outbound| {
-            let settings = outbound.get("settings")?;
-            settings
-                .get("vnext")
-                .and_then(Value::as_array)
-                .and_then(|items| items.first())
-                .or_else(|| {
-                    settings
-                        .get("servers")
-                        .and_then(Value::as_array)
-                        .and_then(|items| items.first())
-                })
-        })
-        .ok_or_else(|| "No remote server endpoint found in config.".to_string())?;
-    let host = server
-        .get("address")
-        .and_then(Value::as_str)
-        .filter(|host| !host.is_empty())
-        .ok_or_else(|| "Remote server address is missing.".to_string())?;
-    let port = server
-        .get("port")
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            server
-                .get("port")
-                .and_then(Value::as_str)
-                .and_then(|p| p.parse().ok())
-        })
-        .filter(|p| (1..=65535).contains(p))
-        .ok_or_else(|| "Remote server port is invalid.".to_string())? as u16;
-
-    let started = Instant::now();
-    match timeout(Duration::from_secs(5), TcpStream::connect((host, port))).await {
-        Ok(Ok(_)) => Ok(started.elapsed().as_millis()),
-        Ok(Err(error)) => Err(format!("TCP connection failed: {error}")),
-        Err(_) => Err("TCP connection timed out after 5 seconds.".to_string()),
-    }
+    latency::measure(&find_xray_binary()?, config).await
 }
 
 #[derive(Debug, Clone, Default)]

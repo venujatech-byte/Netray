@@ -451,9 +451,9 @@ impl NetrayApp {
                     self.ping_in_progress = None;
                     let (display, log, level) = match result {
                         Ok(ms) => (
-                            format!("TCP · {ms} ms"),
+                            format!("HTTP · {ms} ms"),
                             format!(
-                                "{}: TCP connection in {ms} ms",
+                                "{}: proxy response in {ms} ms",
                                 self.v2ray_profiles
                                     .iter()
                                     .find(|p| p.id == id)
