@@ -1,7 +1,4 @@
-#[path = "../src/storage.rs"]
-mod storage;
-
-use storage::{AppConfig, Profile, SshConfig, V2rayConfig};
+use netray_windows::storage::{AppData, V2RayProfile};
 
 #[test]
 fn test_windows_storage_roundtrip() {
@@ -9,29 +6,24 @@ fn test_windows_storage_roundtrip() {
     let _ = std::fs::create_dir_all(&temp_dir);
     let config_path = temp_dir.join("config.json");
 
-    let mut config = AppConfig::default();
-    config.profiles.push(Profile {
-        name: "Windows Direct SOCKS".to_string(),
-        remote_host: "104.16.0.1".to_string(),
-        remote_port: 443,
-        payload: "".to_string(),
-        sni: "cloudflare.com".to_string(),
-        enable_wintun: true,
-        enable_sysproxy: true,
-        ssh: SshConfig::default(),
-        v2ray: V2rayConfig::default(),
+    let mut config = AppData::default();
+    config.v2ray_profiles.push(V2RayProfile {
+        id: "test-node".to_string(),
+        name: "Windows Direct Node".to_string(),
+        config: "vless://test@104.16.0.1:443".to_string(),
+        created_at: "2026-10-23".to_string(),
     });
 
     let json = serde_json::to_string_pretty(&config).expect("Serialize config");
     std::fs::write(&config_path, json).expect("Write test config");
 
     let loaded_content = std::fs::read_to_string(&config_path).expect("Read test config");
-    let loaded: AppConfig = serde_json::from_str(&loaded_content).expect("Deserialize config");
+    let loaded: AppData = serde_json::from_str(&loaded_content).expect("Deserialize config");
 
-    assert_eq!(loaded.profiles.len(), 1);
-    assert_eq!(loaded.profiles[0].name, "Windows Direct SOCKS");
-    assert!(loaded.profiles[0].enable_wintun);
-    assert!(loaded.profiles[0].enable_sysproxy);
+    assert!(loaded.v2ray_profiles.len() >= 2);
+    assert_eq!(loaded.v2ray_profiles[1].name, "Windows Direct Node");
+    assert!(loaded.enable_tun);
+    assert!(loaded.enable_sysproxy);
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

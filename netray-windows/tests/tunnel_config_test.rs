@@ -1,24 +1,12 @@
-#[path = "../src/tunnel.rs"]
-mod tunnel;
-#[path = "../src/v2ray.rs"]
-mod v2ray;
-#[path = "../src/sysproxy.rs"]
-mod sysproxy;
-#[path = "../src/storage.rs"]
-mod storage;
-
-use storage::Profile;
+use netray_windows::storage::AppData;
 
 #[test]
 fn test_windows_tunnel_profile_initialization() {
-    let mut profile = Profile::default();
-    profile.name = "Test Windows Profile".to_string();
-    profile.remote_host = "127.0.0.1".to_string();
-    profile.remote_port = 1080;
-    profile.enable_wintun = false;
-    profile.enable_sysproxy = false;
+    let mut data = AppData::default();
+    data.enable_tun = true;
+    data.enable_sysproxy = true;
 
-    assert_eq!(profile.name, "Test Windows Profile");
-    assert!(!profile.enable_wintun);
-    assert!(!profile.enable_sysproxy);
+    assert!(data.enable_tun);
+    assert!(data.enable_sysproxy);
+    assert_eq!(data.local_socks_port, "10808");
 }
