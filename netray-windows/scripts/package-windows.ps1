@@ -29,7 +29,7 @@ try {
 Netray bundles the unmodified Xray-core $version executable from XTLS/Xray-core.
 License: Mozilla Public License 2.0; see the accompanying LICENSE file.
 Corresponding source: https://github.com/XTLS/Xray-core/tree/$version
-Dependency licenses and notices: https://github.com/XTLS/Xray-core/blob/$version/go.mod
+Upstream dependency list: https://github.com/XTLS/Xray-core/blob/$version/go.mod
 "@
 
     $archive = Join-Path (Split-Path $package -Parent) "netray-windows.zip"
