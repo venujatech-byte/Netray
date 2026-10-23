@@ -55,6 +55,12 @@ fn form_card_style(_theme: &Theme) -> container::Style {
 }
 
 pub fn main() -> iced::Result {
+    // shortcut: Iced 0.13's software renderer maps a helper window on Wayland; remove when upstream fixes it.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty()) {
+        std::env::remove_var("WAYLAND_DISPLAY");
+        std::env::remove_var("WAYLAND_SOCKET");
+    }
     iced::daemon("Netray", NetrayApp::update, NetrayApp::view)
         .subscription(NetrayApp::subscription)
         .theme(|_, _| Theme::Dark)
@@ -1115,7 +1121,7 @@ impl NetrayApp {
                         .center_x(Length::Fill)
                         .center_y(Length::Fill),
                 )
-                .width(36)
+                .width(32)
                 .height(32)
                 .padding(0)
                 .style(move |_, status| button::Style {
@@ -1123,11 +1129,11 @@ impl NetrayApp {
                         button::Status::Hovered | button::Status::Pressed => {
                             Some(if close { FAILURE_RED } else { SURFACE_CARD }.into())
                         }
-                        _ => None,
+                        _ => Some(Color::from_rgb(0.22, 0.23, 0.24).into()),
                     },
                     text_color: Color::WHITE,
                     border: iced::Border {
-                        radius: 6.0.into(),
+                        radius: 16.0.into(),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -1141,8 +1147,7 @@ impl NetrayApp {
             iced::widget::mouse_area(
                 container(text("Netray").size(14))
                     .padding([0, 10])
-                    .height(32)
-                    .center_y(Length::Fill)
+                    .center_y(32)
                     .width(Length::Fill)
             )
             .on_press(Message::DragWindow),
@@ -1160,8 +1165,9 @@ impl NetrayApp {
             ),
             window_control(icons::CLOSE, "Close", Message::RequestExit, true),
         ]
-        .spacing(4)
-        .padding(4)
+        .height(48)
+        .spacing(8)
+        .padding(8)
         .align_y(Alignment::Center);
         let content = column![titlebar, content].height(Length::Fill);
         if self.close_confirmation.is_some() {
