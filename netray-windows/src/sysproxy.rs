@@ -69,7 +69,7 @@ pub async fn disable_system_proxy() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
 
     #[test]
     fn test_proxy_format() {
