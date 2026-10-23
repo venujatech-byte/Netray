@@ -17,7 +17,7 @@ esac
 asset="Xray-$asset_arch.zip"
 base_url="https://github.com/XTLS/Xray-core/releases/download/$version"
 work=$(mktemp -d)
-package="dist/netray-linux-$asset_arch"
+package="$work/netray-linux-$asset_arch"
 trap 'rm -rf "$work"' EXIT
 
 cargo build --release
