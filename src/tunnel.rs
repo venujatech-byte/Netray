@@ -29,7 +29,7 @@ pub struct TunnelConfig {
     pub enable_sysproxy: bool,
 }
 
-// Minimal russh client handler (accepts server host keys like Netray)
+// Minimal russh client handler (accepts server host keys)
 struct SshClientHandler;
 
 #[async_trait]
