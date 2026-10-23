@@ -688,6 +688,7 @@ impl NetrayApp {
                 .padding(6)
                 .on_press(Message::SetViewMode(ViewMode::Logs)),
         ]
+        .spacing(6)
         .align_y(Alignment::Center)
         .padding(iced::Padding { top: 8.0, bottom: 8.0, left: 12.0, right: 12.0 });
 
@@ -734,60 +735,35 @@ impl NetrayApp {
                 let ping_result = self.ping_results.get(&p.id).cloned().unwrap_or_default();
                 let ping_color = if ping_result == "Failed" { FAILURE_RED } else { SUCCESS_GREEN };
 
-                container(
-                    row![
-                        // Left Accent Strip (Blue when active, gray when inactive)
-                        container(Space::with_width(1))
-                            .height(44)
-                            .style(move |_| container::Style {
-                                background: Some(strip_color.into()),
-                                border: iced::Border {
-                                    radius: 2.0.into(),
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            }),
-                        Space::with_width(10),
-                        // Main info column (Clickable to activate)
-                        button(
-                            column![
-                                text(p.name.clone()).size(14).color(Color::WHITE),
-                                Space::with_height(2),
-                                text(node_addr).size(13).color(TEXT_MUTED),
-                            ]
-                            .width(Length::Fill)
-                        )
-                        .padding(2)
+                container(row![
+                    container(Space::with_width(2))
+                        .height(76)
+                        .style(move |_| container::Style {
+                            background: Some(strip_color.into()),
+                            border: iced::Border { radius: 2.0.into(), ..Default::default() },
+                            ..Default::default()
+                        }),
+                    Space::with_width(12),
+                    column![
+                        button(column![
+                            text(p.name.clone()).size(15).color(Color::WHITE),
+                            text(node_addr).size(12).color(TEXT_MUTED),
+                        ].spacing(4).width(Length::Fill))
+                        .padding(0)
+                        .width(Length::Fill)
+                        .style(|_, _| button::Style { background: None, text_color: Color::WHITE, ..Default::default() })
                         .on_press(Message::SelectProfile(p_id_1)),
-                        // Action buttons on right (Share, Edit, Delete) & Protocol tag
-                        column![
-                            row![
-                                button(ping_label)
-                                    .padding(5)
-                                    .on_press_maybe(ping_press),
-                                button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
-                                    .padding(4)
-                                    .on_press(Message::ShareProfile(p_cfg_1)),
-                                button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED))
-                                    .padding(4)
-                                    .on_press(Message::EditProfile(p_id_2)),
-                                button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED))
-                                    .padding(4)
-                                    .on_press(Message::DeleteProfile(p_id_3)),
-                            ]
-                            .spacing(6),
-                            Space::with_height(4),
-                            row![
-                                text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
-                                Space::with_width(6),
-                                text(ping_result).size(11).color(ping_color),
-                            ],
-                        ]
-                        .align_x(Alignment::End),
-                    ]
-                    .align_y(Alignment::Center)
-                    .padding(iced::Padding { top: 8.0, bottom: 8.0, left: 0.0, right: 12.0 })
-                )
+                        row![
+                            text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
+                            text(ping_result).size(11).color(ping_color),
+                            Space::with_width(Length::Fill),
+                            button(ping_label).padding(6).style(|_, _| button::Style { background: Some(ACCENT_BLUE.into()), text_color: Color::WHITE, border: iced::Border { radius: 6.0.into(), ..Default::default() }, ..Default::default() }).on_press_maybe(ping_press),
+                            button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::ShareProfile(p_cfg_1)),
+                            button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::EditProfile(p_id_2)),
+                            button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED)).padding(6).style(|_, _| button::Style { background: None, text_color: TEXT_MUTED, ..Default::default() }).on_press(Message::DeleteProfile(p_id_3)),
+                        ].spacing(4).align_y(Alignment::Center),
+                    ].spacing(10).width(Length::Fill),
+                ].align_y(Alignment::Center).padding(12))
                 .width(Length::Fill)
                 .style(form_card_style)
                 .into()
