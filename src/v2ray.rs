@@ -179,7 +179,7 @@ fn assemble_xray_config(primary_outbound: Value, socks_port: u16, http_port: u16
 
     json!({
         "log": {
-            "loglevel": "info"
+            "loglevel": "warning"
         },
         "inbounds": inbounds,
         "outbounds": [
@@ -204,7 +204,7 @@ fn handle_json_config(raw_json: &str, socks_port: u16, http_port: u16, enable_tu
     // If it already has inbounds and outbounds, ensure loglevel is present
     if parsed.get("inbounds").is_some() && parsed.get("outbounds").is_some() {
         if parsed.get("log").is_none() {
-            parsed["log"] = json!({ "loglevel": "info" });
+            parsed["log"] = json!({ "loglevel": "warning" });
         }
         return serde_json::to_string_pretty(&parsed)
             .map_err(|e| format!("Serialization error: {}", e));
@@ -246,39 +246,8 @@ fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
 
     let encryption = query.get("encryption").map(|s| s.as_str()).unwrap_or("none");
     let flow = query.get("flow").cloned().unwrap_or_default();
-    let network = query.get("type").or_else(|| query.get("net")).map(|s| s.as_str()).unwrap_or("tcp");
-    let security = query.get("security").map(|s| s.as_str()).unwrap_or("none");
-    let sni = query
-        .get("sni")
-        .or_else(|| query.get("peer"))
-        .cloned()
-        .unwrap_or_else(|| host.to_string());
-    let path = query.get("path").cloned().unwrap_or_else(|| "/".to_string());
-    let header_host = query.get("host").cloned().unwrap_or_else(|| sni.clone());
-    let service_name = query.get("serviceName").cloned().unwrap_or_default();
-    let header_type = query.get("headerType").cloned().unwrap_or_else(|| "none".to_string());
-    let fp = query.get("fp").cloned().unwrap_or_else(|| "chrome".to_string());
-    let pbk = query.get("pbk").cloned().unwrap_or_default();
-    let sid = query.get("sid").cloned().unwrap_or_default();
-
-    let vcn = query
-        .get("vcn")
-        .or_else(|| query.get("verifyPeerCertByName"))
-        .cloned()
-        .or_else(|| {
-            if !sni.is_empty() && sni != host && host.parse::<std::net::IpAddr>().is_err() {
-                Some(host.to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default();
-
-    let pinned_cert = query
-        .get("pcs")
-        .or_else(|| query.get("pinnedPeerCertSha256"))
-        .cloned()
-        .unwrap_or_default();
+    let pbk = query.get("pbk").map(|s| s.as_str()).unwrap_or_default();
+    let sid = query.get("sid").map(|s| s.as_str()).unwrap_or_default();
 
     let mut user_obj = json!({
         "id": uuid,
@@ -288,20 +257,7 @@ fn parse_vless_uri(uri_str: &str) -> Result<Value, String> {
         user_obj["flow"] = json!(flow);
     }
 
-    let stream_settings = build_stream_settings(
-        network,
-        security,
-        &sni,
-        &header_host,
-        &path,
-        &service_name,
-        &header_type,
-        &fp,
-        &pbk,
-        &sid,
-        &vcn,
-        &pinned_cert,
-    )?;
+    let stream_settings = extract_stream_settings(&query, host, "none", pbk, sid)?;
 
     Ok(json!({
         "tag": "proxy",
@@ -457,52 +413,7 @@ fn parse_trojan_uri(uri_str: &str) -> Result<Value, String> {
 
     let query: HashMap<String, String> = url.query_pairs().into_owned().collect();
 
-    let network = query.get("type").or_else(|| query.get("net")).map(|s| s.as_str()).unwrap_or("tcp");
-    let security = query.get("security").map(|s| s.as_str()).unwrap_or("tls");
-    let sni = query
-        .get("sni")
-        .or_else(|| query.get("peer"))
-        .cloned()
-        .unwrap_or_else(|| host.to_string());
-    let path = query.get("path").cloned().unwrap_or_else(|| "/".to_string());
-    let header_host = query.get("host").cloned().unwrap_or_else(|| sni.clone());
-    let service_name = query.get("serviceName").cloned().unwrap_or_default();
-    let header_type = query.get("headerType").cloned().unwrap_or_else(|| "none".to_string());
-    let fp = query.get("fp").cloned().unwrap_or_else(|| "chrome".to_string());
-
-    let vcn = query
-        .get("vcn")
-        .or_else(|| query.get("verifyPeerCertByName"))
-        .cloned()
-        .or_else(|| {
-            if !sni.is_empty() && sni != host && host.parse::<std::net::IpAddr>().is_err() {
-                Some(host.to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default();
-
-    let pinned_cert = query
-        .get("pcs")
-        .or_else(|| query.get("pinnedPeerCertSha256"))
-        .cloned()
-        .unwrap_or_default();
-
-    let stream_settings = build_stream_settings(
-        network,
-        security,
-        &sni,
-        &header_host,
-        &path,
-        &service_name,
-        &header_type,
-        &fp,
-        "",
-        "",
-        &vcn,
-        &pinned_cert,
-    )?;
+    let stream_settings = extract_stream_settings(&query, host, "tls", "", "")?;
 
     Ok(json!({
         "tag": "proxy",
@@ -567,6 +478,57 @@ fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
             ]
         }
     }))
+}
+
+fn extract_stream_settings(
+    query: &HashMap<String, String>,
+    host: &str,
+    default_security: &str,
+    pbk: &str,
+    sid: &str,
+) -> Result<Value, String> {
+    let network = query.get("type").or_else(|| query.get("net")).map(|s| s.as_str()).unwrap_or("tcp");
+    let security = query.get("security").map(|s| s.as_str()).unwrap_or(default_security);
+    let sni = query.get("sni").or_else(|| query.get("peer")).cloned().unwrap_or_else(|| host.to_string());
+    let path = query.get("path").cloned().unwrap_or_else(|| "/".to_string());
+    let header_host = query.get("host").cloned().unwrap_or_else(|| sni.clone());
+    let service_name = query.get("serviceName").cloned().unwrap_or_default();
+    let header_type = query.get("headerType").cloned().unwrap_or_else(|| "none".to_string());
+    let fp = query.get("fp").cloned().unwrap_or_else(|| "chrome".to_string());
+
+    let vcn = query
+        .get("vcn")
+        .or_else(|| query.get("verifyPeerCertByName"))
+        .cloned()
+        .or_else(|| {
+            if !sni.is_empty() && sni != host && host.parse::<std::net::IpAddr>().is_err() {
+                Some(host.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    let pinned_cert = query
+        .get("pcs")
+        .or_else(|| query.get("pinnedPeerCertSha256"))
+        .cloned()
+        .unwrap_or_default();
+
+    build_stream_settings(
+        network,
+        security,
+        &sni,
+        &header_host,
+        &path,
+        &service_name,
+        &header_type,
+        &fp,
+        pbk,
+        sid,
+        &vcn,
+        &pinned_cert,
+    )
 }
 
 /// Helper to build streamSettings JSON for transports (ws, tcp, grpc, h2) and security (tls, reality, none)
