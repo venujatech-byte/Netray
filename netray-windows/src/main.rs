@@ -15,6 +15,7 @@ use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon as TrayIconImage, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tunnel::{run_real_tunnel_worker, TunnelConfig};
 
@@ -57,7 +58,7 @@ pub fn main() -> iced::Result {
         .run_with(NetrayApp::new)
 }
 
-fn create_tray_icon() -> Result<TrayIcon, Box<dyn std::error::Error>> {
+fn create_tray_icon() -> Result<(TrayIcon, MenuItem), Box<dyn std::error::Error>> {
     let decoder = png::Decoder::new(std::io::Cursor::new(include_bytes!(
         "../../packaging/netray-tray.png"
     )));
@@ -74,10 +75,16 @@ fn create_tray_icon() -> Result<TrayIcon, Box<dyn std::error::Error>> {
         info.width,
         info.height,
     )?;
-    Ok(TrayIconBuilder::new()
+    let show = MenuItem::with_id("show", "Show Netray", true, None);
+    let connect = MenuItem::with_id("connect", "Connect", true, None);
+    let exit = MenuItem::with_id("exit", "Exit", true, None);
+    let menu = Menu::with_items(&[&show, &connect, &PredefinedMenuItem::separator(), &exit])?;
+    let tray = TrayIconBuilder::new()
         .with_icon(icon)
+        .with_menu(Box::new(menu))
         .with_tooltip("Netray")
-        .build()?)
+        .build()?;
+    Ok((tray, connect))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,6 +185,7 @@ pub struct NetrayApp {
     hidden_to_tray: bool,
     exit_after_stop: bool,
     tray_icon: Option<TrayIcon>,
+    tray_connect_item: Option<MenuItem>,
     worker_active: bool,
 }
 
@@ -303,6 +311,7 @@ impl NetrayApp {
             hidden_to_tray: false,
             exit_after_stop: false,
             tray_icon: None,
+            tray_connect_item: None,
             worker_active: false,
         };
 
@@ -760,13 +769,20 @@ impl NetrayApp {
                 self.window_id = Some(id);
                 if self.tray_icon.is_none() {
                     match create_tray_icon() {
-                        Ok(icon) => self.tray_icon = Some(icon),
+                        Ok((icon, connect)) => {
+                            self.tray_icon = Some(icon);
+                            self.tray_connect_item = Some(connect);
+                        }
                         Err(error) => self.push_log("Tray", format!("System tray unavailable: {error}"), LogLevel::Warn),
                     }
                 }
                 Task::none()
             }
             Message::WindowTick => {
+                if let Some(item) = &self.tray_connect_item {
+                    item.set_text(if self.is_running { "Disconnect" } else { "Connect" });
+                    item.set_enabled(self.is_running || !self.worker_active);
+                }
                 if let Ok(event) = TrayIconEvent::receiver().try_recv() {
                     if matches!(
                         event,
@@ -781,6 +797,31 @@ impl NetrayApp {
                                 .chain(iced::window::minimize(id, false))
                                 .chain(iced::window::gain_focus(id));
                         }
+                    }
+                }
+                while let Ok(event) = MenuEvent::receiver().try_recv() {
+                    match event.id().as_ref() {
+                        "show" => {
+                            self.hidden_to_tray = false;
+                            if let Some(id) = self.window_id {
+                                return iced::window::change_mode(id, iced::window::Mode::Windowed)
+                                    .chain(iced::window::minimize(id, false))
+                                    .chain(iced::window::gain_focus(id));
+                            }
+                        }
+                        "connect" if self.is_running || !self.worker_active => {
+                            return self.update(Message::ToggleTunnel);
+                        }
+                        "exit" => {
+                            if let Some(id) = self.window_id {
+                                self.hidden_to_tray = false;
+                                self.close_confirmation = Some(id);
+                                return iced::window::change_mode(id, iced::window::Mode::Windowed)
+                                    .chain(iced::window::minimize(id, false))
+                                    .chain(iced::window::gain_focus(id));
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 if self.hidden_to_tray {
@@ -822,6 +863,9 @@ impl NetrayApp {
                 Task::none()
             }
             Message::ToggleTunnel => {
+                if !self.is_running && self.worker_active {
+                    return Task::none();
+                }
                 if self.is_running {
                     if let Some(stop_tx) = self.stop_signal.take() {
                         let _ = stop_tx.send(());

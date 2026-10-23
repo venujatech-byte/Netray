@@ -14,7 +14,7 @@ url = "2.5"
 base64 = "0.22"
 percent-encoding = "2.3"
 png = "0.18"
-tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
+tray-icon = { version = "0.25.1", default-features = false, features = ["libappindicator"] }
 
 # Networking: SSH, TLS/SNI & Async Traits
 russh = "0.45"
