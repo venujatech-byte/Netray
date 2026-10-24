@@ -1593,4 +1593,46 @@ mod tests {
         assert!(generated_uri.contains("sni=example.com"));
         assert_eq!(extract_node_name(&generated_uri), "Sample-Node");
     }
+
+    #[test]
+    fn test_whitelist_domain_and_ip_parsing() {
+        let input = "https://mywork.com/login, *.internal.net, 192.168.1.1, 10.0.0.0/8, geoip:private\nexample.com";
+        let (domains, ips) = parse_whitelist_domains_and_ips(input);
+        assert!(domains.contains(&"domain:mywork.com".to_string()));
+        assert!(domains.contains(&"domain:internal.net".to_string()));
+        assert!(domains.contains(&"domain:example.com".to_string()));
+        assert!(ips.contains(&"192.168.1.1".to_string()));
+        assert!(ips.contains(&"10.0.0.0/8".to_string()));
+        assert!(ips.contains(&"geoip:private".to_string()));
+    }
+
+    #[test]
+    fn test_whitelist_routing_rules_proxy_mode() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=tcp#TestNode";
+        let config_str = parse_and_generate_xray_config_with_whitelist(
+            uri,
+            10808,
+            10809,
+            false,
+            "",
+            "https://bypass.example.org, 10.0.0.1",
+        )
+        .expect("Should generate config");
+        let val: Value = serde_json::from_str(&config_str).unwrap();
+
+        assert_eq!(val["routing"]["domainStrategy"], "IPIfNonMatch");
+        let rules = val["routing"]["rules"].as_array().unwrap();
+        assert!(rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["domain"].as_array().map_or(false, |d| {
+                    d.iter().any(|item| item == "domain:bypass.example.org")
+                })
+        }));
+        assert!(rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["ip"].as_array().map_or(false, |i| {
+                    i.iter().any(|item| item == "10.0.0.1")
+                })
+        }));
+    }
 }
