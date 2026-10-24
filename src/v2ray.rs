@@ -240,6 +240,22 @@ pub fn build_whitelist_domain_and_ip_rules(whitelist_urls: &str) -> Vec<Value> {
         }));
     }
 
+/// Builds routing rules targeting direct outbound for whitelisted applications, domains, URLs, and IPs
+pub fn build_whitelist_routing_rules(
+    whitelist_apps: &str,
+    whitelist_urls: &str,
+) -> Vec<Value> {
+    let mut rules = build_whitelist_domain_and_ip_rules(whitelist_urls);
+    let processes = parse_whitelist_processes(whitelist_apps);
+
+    if !processes.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "process": processes
+        }));
+    }
+
     rules
 }
 
