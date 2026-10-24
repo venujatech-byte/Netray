@@ -2,6 +2,7 @@
 //!
 //! Enumerates all supported node configuration types matching modern proxy cores.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -52,6 +53,30 @@ impl ProfileType {
             ProfileType::Ssh | ProfileType::DnsttSsh => BadgeKind::Native,
 
             ProfileType::Hysteria2 => BadgeKind::New,
+        }
+    }
+
+    /// Generates a valid starting profile template `(remarks, config)` for the protocol
+    pub fn generate_template(&self) -> (String, String) {
+        match self {
+            ProfileType::VMess => {
+                let vmess_json = serde_json::json!({
+                    "v": "2",
+                    "ps": "New VMess Node",
+                    "add": "127.0.0.1",
+                    "port": 443,
+                    "id": "b831381d-6324-4d53-ad4f-8cda48b30811",
+                    "aid": 0,
+                    "net": "ws",
+                    "type": "none",
+                    "host": "example.com",
+                    "path": "/vmess",
+                    "tls": "tls"
+                });
+                let encoded = base64::prelude::BASE64_STANDARD.encode(vmess_json.to_string().as_bytes());
+                ("New VMess Node".to_string(), format!("vmess://{encoded}"))
+            }
+            _ => (format!("New {}", self.title()), String::new()),
         }
     }
 
