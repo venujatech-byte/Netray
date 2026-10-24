@@ -108,6 +108,87 @@ pub fn parse_and_generate_xray_config(
         .map_err(|e| format!("Failed to serialize Xray config: {}", e))
 }
 
+/// Extracts clean domain and IP rule matchers from user-specified URLs and domains.
+/// Supports full URLs (e.g. `https://mywork.com/login`), wildcards (`*.internal.net`),
+/// standard domains (`github.com`), IP addresses (`192.168.1.1`), and CIDRs (`10.0.0.0/8`).
+pub fn parse_whitelist_domains_and_ips(raw: &str) -> (Vec<String>, Vec<String>) {
+    let mut domains = Vec::new();
+    let mut ips = Vec::new();
+
+    for token in raw.split(|c| c == ',' || c == '\n' || c == '\r') {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Case 1: Full URL (http://... or https://...)
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            if let Ok(parsed_url) = url::Url::parse(trimmed) {
+                if let Some(host) = parsed_url.host_str() {
+                    let host_clean = host.trim_start_matches('[').trim_end_matches(']');
+                    if host_clean.parse::<std::net::IpAddr>().is_ok() {
+                        if !ips.contains(&host_clean.to_string()) {
+                            ips.push(host_clean.to_string());
+                        }
+                    } else if !domains.iter().any(|d| d == host_clean || d == &format!("domain:{host_clean}")) {
+                        domains.push(format!("domain:{host_clean}"));
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Case 2: Direct IP address or CIDR
+        if trimmed.parse::<std::net::IpAddr>().is_ok()
+            || (trimmed.contains('/')
+                && trimmed
+                    .split('/')
+                    .next()
+                    .and_then(|ip| ip.parse::<std::net::IpAddr>().ok())
+                    .is_some())
+        {
+            if !ips.contains(&trimmed.to_string()) {
+                ips.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        // Case 3: GeoIP or special Xray IP matcher
+        if trimmed.starts_with("geoip:") {
+            if !ips.contains(&trimmed.to_string()) {
+                ips.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        // Case 4: Xray domain match prefixes (domain:, full:, regexp:, keyword:, geosite:)
+        if trimmed.starts_with("domain:")
+            || trimmed.starts_with("full:")
+            || trimmed.starts_with("regexp:")
+            || trimmed.starts_with("keyword:")
+            || trimmed.starts_with("geosite:")
+        {
+            if !domains.contains(&trimmed.to_string()) {
+                domains.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        // Case 5: Wildcard domain (*.example.com -> domain:example.com)
+        let domain_clean = if let Some(stripped) = trimmed.strip_prefix("*.") {
+            format!("domain:{stripped}")
+        } else {
+            format!("domain:{trimmed}")
+        };
+
+        if !domains.contains(&domain_clean) {
+            domains.push(domain_clean);
+        }
+    }
+
+    (domains, ips)
+}
+
 /// Extract human-readable node name or remark from link
 pub fn extract_node_name(raw_input: &str) -> String {
     let trimmed = raw_input.trim();
