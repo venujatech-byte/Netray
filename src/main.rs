@@ -2021,7 +2021,7 @@ impl NetrayApp {
                 .padding(6)
                 .on_press(Message::SetViewMode(ViewMode::Profiles)),
             Space::with_width(12),
-            text("SSH & Payload Injector").size(20).color(Color::WHITE),
+            text("Settings & Routing").size(20).color(Color::WHITE),
         ]
         .align_y(Alignment::Center)
         .padding(iced::Padding {
@@ -2031,8 +2031,39 @@ impl NetrayApp {
             right: 12.0,
         });
 
+        let whitelist_card = container(
+            column![
+                text("Bypass Whitelist (Split Tunneling)").size(15).color(Color::WHITE),
+                text("Traffic from these applications and URLs/domains will bypass the proxy tunnel and connect directly. Active in both TUN and System Proxy modes.")
+                    .size(12)
+                    .color(TEXT_MUTED),
+                Space::with_height(10),
+                text("Whitelist Applications (Processes):").size(13).color(ACCENT_BLUE_LIGHT),
+                text_input("e.g. curl, firefox, chrome.exe, discord", &self.whitelist_apps)
+                    .on_input(Message::WhitelistAppsChanged)
+                    .padding(8),
+                text("Comma or newline-separated executable names (e.g. curl, chrome.exe).")
+                    .size(11)
+                    .color(TEXT_MUTED),
+                Space::with_height(8),
+                text("Whitelist URLs & Domains:").size(13).color(ACCENT_BLUE_LIGHT),
+                text_input("e.g. https://mywork.com, *.internal.net, 192.168.1.1, 10.0.0.0/8", &self.whitelist_urls)
+                    .on_input(Message::WhitelistUrlsChanged)
+                    .padding(8),
+                text("Comma or newline-separated URLs, domains, wildcards (*.site.com), or IP CIDRs.")
+                    .size(11)
+                    .color(TEXT_MUTED),
+            ]
+            .spacing(4)
+        )
+        .padding(14)
+        .style(form_card_style)
+        .width(Length::Fill);
+
         let content = scrollable(
             column![
+                whitelist_card,
+                Space::with_height(14),
                 text("Tunneling Mode:").size(14).color(TEXT_MUTED),
                 pick_list(
                     [
