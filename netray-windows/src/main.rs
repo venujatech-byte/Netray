@@ -213,6 +213,8 @@ pub struct NetrayApp {
     pub selected_app_preset: Option<apps::AppPreset>,
     pub public_ip: Option<String>,
     pub is_checking_ip: bool,
+    pub instant_import: bool,
+    pub clipboard_import_candidate: Option<String>,
 
     pub logs: Vec<LogEntry>,
     auto_scroll_logs: bool,
@@ -356,6 +358,8 @@ impl NetrayApp {
             selected_app_preset: None,
             public_ip: None,
             is_checking_ip: false,
+            instant_import: saved.instant_import,
+            clipboard_import_candidate: None,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
@@ -399,6 +403,7 @@ impl NetrayApp {
             sni_host: &self.sni_host,
             whitelist_apps: &self.whitelist_apps,
             whitelist_urls: &self.whitelist_urls,
+            instant_import: self.instant_import,
         };
         storage::save_state_ref(&app_ref)
     }

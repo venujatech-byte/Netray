@@ -32,6 +32,8 @@ pub struct AppData {
     pub whitelist_apps: String,
     #[serde(default)]
     pub whitelist_urls: String,
+    #[serde(default)]
+    pub instant_import: bool,
 }
 
 impl Default for AppData {
@@ -63,6 +65,7 @@ impl Default for AppData {
             sni_host: "cdn.bug-example.com".to_string(),
             whitelist_apps: "".to_string(),
             whitelist_urls: "".to_string(),
+            instant_import: false,
         }
     }
 }
@@ -128,6 +131,7 @@ pub struct AppDataRef<'a> {
     pub sni_host: &'a str,
     pub whitelist_apps: &'a str,
     pub whitelist_urls: &'a str,
+    pub instant_import: bool,
 }
 
 impl AppData {
@@ -151,6 +155,7 @@ impl AppData {
             sni_host: &self.sni_host,
             whitelist_apps: &self.whitelist_apps,
             whitelist_urls: &self.whitelist_urls,
+            instant_import: self.instant_import,
         }
     }
 }
