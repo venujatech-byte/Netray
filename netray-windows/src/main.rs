@@ -207,6 +207,8 @@ pub struct NetrayApp {
     pub enable_sysproxy: bool,
     pub whitelist_apps: String,
     pub whitelist_urls: String,
+    pub available_apps: Vec<apps::AppPreset>,
+    pub selected_app_preset: Option<apps::AppPreset>,
 
     pub logs: Vec<LogEntry>,
     auto_scroll_logs: bool,
@@ -273,6 +275,10 @@ pub enum Message {
     ToggleSysProxy(bool),
     WhitelistAppsChanged(String),
     WhitelistUrlsChanged(String),
+    PickAppSelected(apps::AppPreset),
+    BrowseAppExecutable,
+    AppExecutablePicked(Option<String>),
+    RemoveWhitelistApp(String),
 
     LoggerReady(mpsc::Sender<LogEntry>),
     NewLog(LogEntry),
@@ -336,6 +342,8 @@ impl NetrayApp {
             enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
             whitelist_apps: saved.whitelist_apps,
             whitelist_urls: saved.whitelist_urls,
+            available_apps: apps::get_curated_windows_apps(),
+            selected_app_preset: None,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
@@ -756,6 +764,27 @@ impl NetrayApp {
             }
             Message::WhitelistUrlsChanged(val) => {
                 self.whitelist_urls = val;
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::PickAppSelected(preset) => {
+                self.whitelist_apps = apps::add_app_to_whitelist(&self.whitelist_apps, &preset.executable);
+                self.selected_app_preset = None;
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::BrowseAppExecutable => {
+                Task::perform(apps::pick_executable_file(), Message::AppExecutablePicked)
+            }
+            Message::AppExecutablePicked(maybe_bin) => {
+                if let Some(bin) = maybe_bin {
+                    self.whitelist_apps = apps::add_app_to_whitelist(&self.whitelist_apps, &bin);
+                    let _ = self.save_current_state();
+                }
+                Task::none()
+            }
+            Message::RemoveWhitelistApp(app_name) => {
+                self.whitelist_apps = apps::remove_app_from_whitelist(&self.whitelist_apps, &app_name);
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -1854,6 +1883,82 @@ impl NetrayApp {
             right: 12.0,
         });
 
+        let chips = apps::extract_app_chips(&self.whitelist_apps);
+        let mut chips_col = column![].spacing(6);
+        for chunk in chips.chunks(3) {
+            let mut r = row![].spacing(6);
+            for app in chunk {
+                let app_name = app.clone();
+                let chip = container(
+                    row![
+                        text(app.clone()).size(12).color(Color::WHITE),
+                        Space::with_width(4),
+                        button(icons::lucide_icon(icons::CLOSE, 10, Color::from_rgb(0.85, 0.85, 0.85)))
+                            .padding(2)
+                            .style(|_, _| button::Style {
+                                background: None,
+                                ..Default::default()
+                            })
+                            .on_press(Message::RemoveWhitelistApp(app_name)),
+                    ]
+                    .align_y(Alignment::Center)
+                )
+                .padding(iced::Padding {
+                    top: 3.0,
+                    bottom: 3.0,
+                    left: 8.0,
+                    right: 4.0,
+                })
+                .style(|_| container::Style {
+                    background: Some(Color::from_rgba(0.24, 0.58, 1.0, 0.18).into()),
+                    border: iced::Border {
+                        radius: 12.0.into(),
+                        width: 1.0,
+                        color: Color::from_rgba(0.24, 0.58, 1.0, 0.45),
+                    },
+                    ..Default::default()
+                });
+                r = r.push(chip);
+            }
+            chips_col = chips_col.push(r);
+        }
+
+        let app_picker_row = row![
+            pick_list(
+                self.available_apps.clone(),
+                self.selected_app_preset.clone(),
+                Message::PickAppSelected,
+            )
+            .placeholder("Choose app to whitelist...")
+            .width(Length::FillPortion(3)),
+            Space::with_width(8),
+            button(
+                row![
+                    icons::lucide_icon(icons::FILE_PLUS, 15, Color::WHITE),
+                    Space::with_width(4),
+                    text("Browse...").size(12).color(Color::WHITE),
+                ]
+                .align_y(Alignment::Center)
+            )
+            .padding(iced::Padding {
+                top: 6.0,
+                bottom: 6.0,
+                left: 10.0,
+                right: 10.0,
+            })
+            .style(|_, _| button::Style {
+                background: Some(ACCENT_BLUE.into()),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .on_press(Message::BrowseAppExecutable),
+        ]
+        .align_y(Alignment::Center)
+        .width(Length::Fill);
+
         let whitelist_card = container(
             column![
                 text("Bypass Whitelist (Split Tunneling)").size(15).color(Color::WHITE),
@@ -1861,12 +1966,14 @@ impl NetrayApp {
                     .size(12)
                     .color(TEXT_MUTED),
                 Space::with_height(10),
-                text("Whitelist Applications (Processes):").size(13).color(ACCENT_BLUE_LIGHT),
-                text_input("e.g. curl, firefox, chrome.exe, discord.exe", &self.whitelist_apps)
+                text("Whitelist Applications:").size(13).color(ACCENT_BLUE_LIGHT),
+                app_picker_row,
+                chips_col,
+                text_input("e.g. curl.exe, chrome.exe, discord.exe", &self.whitelist_apps)
                     .on_input(Message::WhitelistAppsChanged)
                     .padding(8)
                     .width(Length::Fill),
-                text("Comma or newline-separated executable names (e.g. chrome.exe, discord.exe).")
+                text("Select from catalog, browse .exe, or enter comma/newline-separated names.")
                     .size(11)
                     .color(TEXT_MUTED),
                 Space::with_height(8),
@@ -1879,7 +1986,7 @@ impl NetrayApp {
                     .size(11)
                     .color(TEXT_MUTED),
             ]
-            .spacing(4)
+            .spacing(6)
             .width(Length::Fill)
         )
         .padding(14)
