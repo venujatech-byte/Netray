@@ -1751,4 +1751,20 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_parse_ifconfig_output() {
+        assert_eq!(
+            parse_ifconfig_output("13.214.47.207\n"),
+            Ok("13.214.47.207".to_string())
+        );
+        assert_eq!(
+            parse_ifconfig_output("2606:4700:4700::1111\n"),
+            Ok("2606:4700:4700::1111".to_string())
+        );
+        assert!(parse_ifconfig_output("").is_err());
+        assert!(parse_ifconfig_output("   \n\t").is_err());
+        assert!(parse_ifconfig_output("<html>502 Bad Gateway</html>").is_err());
+    }
 }
+
