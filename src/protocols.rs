@@ -93,6 +93,10 @@ impl ProfileType {
                 let encoded = base64::prelude::BASE64_STANDARD.encode(ssr_raw.as_bytes());
                 ("New ShadowsocksR Node".to_string(), format!("ssr://{encoded}"))
             }
+            ProfileType::Shadowsocks2022 => (
+                "New Shadowsocks2022 Node".to_string(),
+                "ss://2022-blake3-aes-128-gcm:7sN6q9U1jB3V0vYw8Z1A2Q==@127.0.0.1:8388#New-Shadowsocks2022-Node".to_string(),
+            ),
             _ => (format!("New {}", self.title()), String::new()),
         }
     }
