@@ -149,8 +149,8 @@ pub fn parse_whitelist_domains_and_ips(raw: &str) -> (Vec<String>, Vec<String>) 
     let mut domains = Vec::new();
     let mut ips = Vec::new();
 
-    for token in raw.split(|c| c == ',' || c == '\n' || c == '\r') {
-        let trimmed = token.trim();
+    for token in raw.split(|c| c == ',' || c == ';' || c == '\n' || c == '\r' || c == '\t') {
+        let trimmed = token.trim().trim_matches(&['"', '\'', '`'][..]).trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -159,12 +159,12 @@ pub fn parse_whitelist_domains_and_ips(raw: &str) -> (Vec<String>, Vec<String>) 
         if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
             if let Ok(parsed_url) = url::Url::parse(trimmed) {
                 if let Some(host) = parsed_url.host_str() {
-                    let host_clean = host.trim_start_matches('[').trim_end_matches(']');
+                    let host_clean = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
                     if host_clean.parse::<std::net::IpAddr>().is_ok() {
-                        if !ips.contains(&host_clean.to_string()) {
-                            ips.push(host_clean.to_string());
+                        if !ips.contains(&host_clean) {
+                            ips.push(host_clean);
                         }
-                    } else if !domains.iter().any(|d| d == host_clean || d == &format!("domain:{host_clean}")) {
+                    } else if !domains.iter().any(|d| d == &host_clean || d == &format!("domain:{host_clean}")) {
                         domains.push(format!("domain:{host_clean}"));
                     }
                     continue;
@@ -202,17 +202,18 @@ pub fn parse_whitelist_domains_and_ips(raw: &str) -> (Vec<String>, Vec<String>) 
             || trimmed.starts_with("keyword:")
             || trimmed.starts_with("geosite:")
         {
-            if !domains.contains(&trimmed.to_string()) {
-                domains.push(trimmed.to_string());
+            let normalized = trimmed.to_ascii_lowercase();
+            if !domains.contains(&normalized) {
+                domains.push(normalized);
             }
             continue;
         }
 
         // Case 5: Wildcard domain (*.example.com -> domain:example.com)
         let domain_clean = if let Some(stripped) = trimmed.strip_prefix("*.") {
-            format!("domain:{stripped}")
+            format!("domain:{}", stripped.to_ascii_lowercase())
         } else {
-            format!("domain:{trimmed}")
+            format!("domain:{}", trimmed.to_ascii_lowercase())
         };
 
         if !domains.contains(&domain_clean) {
@@ -225,12 +226,12 @@ pub fn parse_whitelist_domains_and_ips(raw: &str) -> (Vec<String>, Vec<String>) 
 
 /// Extracts clean process executable names from user-specified app list.
 /// Handles file paths (e.g. `/usr/bin/curl` -> `curl`, `C:\...\app.exe` -> `app.exe`),
-/// whitespace, commas, and newlines.
+/// whitespace, commas, semicolons, quotes, and newlines.
 pub fn parse_whitelist_processes(raw: &str) -> Vec<String> {
     let mut processes = Vec::new();
 
-    for token in raw.split(|c| c == ',' || c == '\n' || c == '\r') {
-        let trimmed = token.trim();
+    for token in raw.split(|c| c == ',' || c == ';' || c == '\n' || c == '\r' || c == '\t') {
+        let trimmed = token.trim().trim_matches(&['"', '\'', '`'][..]).trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -1596,14 +1597,18 @@ mod tests {
 
     #[test]
     fn test_whitelist_domain_and_ip_parsing() {
-        let input = "https://mywork.com/login, *.internal.net, 192.168.1.1, 10.0.0.0/8, geoip:private\nexample.com";
+        let input = "https://MyWork.com/login; \"*.internal.net\"\t'192.168.1.1', 10.0.0.0/8; geoip:private\n`EXAMPLE.ORG`";
         let (domains, ips) = parse_whitelist_domains_and_ips(input);
         assert!(domains.contains(&"domain:mywork.com".to_string()));
         assert!(domains.contains(&"domain:internal.net".to_string()));
-        assert!(domains.contains(&"domain:example.com".to_string()));
+        assert!(domains.contains(&"domain:example.org".to_string()));
         assert!(ips.contains(&"192.168.1.1".to_string()));
         assert!(ips.contains(&"10.0.0.0/8".to_string()));
         assert!(ips.contains(&"geoip:private".to_string()));
+
+        let proc_input = "\"curl\"; '/usr/bin/firefox'\t`discord.exe`\nslack";
+        let procs = parse_whitelist_processes(proc_input);
+        assert_eq!(procs, vec!["curl", "firefox", "discord.exe", "slack"]);
     }
 
     #[test]
