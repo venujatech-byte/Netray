@@ -88,6 +88,11 @@ impl ProfileType {
                 "New Trojan Node".to_string(),
                 "trojan://password123@127.0.0.1:443?security=tls&sni=example.com#New-Trojan-Node".to_string(),
             ),
+            ProfileType::ShadowsocksR => {
+                let ssr_raw = "127.0.0.1:8388:origin:aes-256-cfb:plain:cGFzc3dvcmQxMjM=/?remarks=TmV3LVNTUi1Ob2Rl";
+                let encoded = base64::prelude::BASE64_STANDARD.encode(ssr_raw.as_bytes());
+                ("New ShadowsocksR Node".to_string(), format!("ssr://{encoded}"))
+            }
             _ => (format!("New {}", self.title()), String::new()),
         }
     }
