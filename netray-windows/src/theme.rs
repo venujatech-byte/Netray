@@ -20,8 +20,37 @@ impl EffectiveTheme {
     }
 }
 
-/// Detects whether the host desktop environment is currently in dark mode.
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static CACHED_IS_DARK: AtomicBool = AtomicBool::new(true);
+static LAST_CHECK_SECS: AtomicU64 = AtomicU64::new(0);
+
+/// Detects whether the host desktop environment is currently in dark mode, cached to prevent lag.
 pub fn detect_system_is_dark() -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST_CHECK_SECS.load(Ordering::Relaxed);
+
+    // Fast memory read if checked within last 10 seconds (avoids spawning processes on frame redraws)
+    if last != 0 && now.saturating_sub(last) < 10 {
+        return CACHED_IS_DARK.load(Ordering::Relaxed);
+    }
+
+    let is_dark = query_system_is_dark_uncached();
+    CACHED_IS_DARK.store(is_dark, Ordering::Relaxed);
+    LAST_CHECK_SECS.store(now, Ordering::Relaxed);
+    is_dark
+}
+
+/// Force invalidate the cached theme (e.g. when user changes settings)
+pub fn invalidate_system_theme_cache() {
+    LAST_CHECK_SECS.store(0, Ordering::Relaxed);
+}
+
+fn query_system_is_dark_uncached() -> bool {
     #[cfg(target_os = "windows")]
     {
         // Check Windows registry for system theme preference
@@ -114,5 +143,15 @@ mod tests {
     fn test_windows_effective_theme_to_iced() {
         assert_eq!(EffectiveTheme::Dark.to_iced_theme(), Theme::Dark);
         assert_eq!(EffectiveTheme::Light.to_iced_theme(), Theme::Light);
+    }
+
+    #[test]
+    fn test_windows_system_theme_caching() {
+        let first = detect_system_is_dark();
+        let second = detect_system_is_dark();
+        assert_eq!(first, second);
+        invalidate_system_theme_cache();
+        let third = detect_system_is_dark();
+        assert_eq!(first, third);
     }
 }

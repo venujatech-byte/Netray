@@ -1282,6 +1282,7 @@ impl NetrayApp {
                 }
             }
             Message::ThemePreferenceChanged(pref) => {
+                theme::invalidate_system_theme_cache();
                 self.theme_preference = pref;
                 self.push_log(
                     "SYSTEM",
@@ -1585,11 +1586,6 @@ impl NetrayApp {
                 width: 1.0,
                 color: Color::from_rgb(0.24, 0.27, 0.35),
             },
-            shadow: iced::Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
-                offset: iced::Vector::new(0.0, 8.0),
-                blur_radius: 24.0,
-            },
             ..Default::default()
         })
         .width(Length::Fixed(400.0));
@@ -1785,11 +1781,6 @@ impl NetrayApp {
                 width: 1.0,
                 color: Color::from_rgb(0.24, 0.27, 0.35),
             },
-            shadow: iced::Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.55),
-                offset: iced::Vector::new(0.0, 8.0),
-                blur_radius: 24.0,
-            },
             ..Default::default()
         })
         .width(Length::Fixed(360.0));
@@ -1898,14 +1889,9 @@ impl NetrayApp {
         .style(|_| container::Style {
             background: Some(Color::from_rgb(0.16, 0.17, 0.19).into()),
             border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
                 width: 1.0,
                 radius: 12.0.into(),
-            },
-            shadow: iced::Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
-                offset: iced::Vector::new(0.0, 8.0),
-                blur_radius: 24.0,
             },
             ..Default::default()
         });
