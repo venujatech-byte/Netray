@@ -1704,5 +1704,134 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_windows_generate_share_link_preserves_existing_uris() {
+        let uri = "vless://win-uuid@1.1.1.1:443?security=tls#ExistingWinNode";
+        let link = generate_share_link(uri, "ExistingWinNode");
+        assert_eq!(link, uri);
+
+        let uri_no_frag = "vless://win-uuid@1.1.1.1:443?security=tls";
+        let link_added = generate_share_link(uri_no_frag, "AddedWinRemark");
+        assert!(link_added.ends_with("#AddedWinRemark"));
+    }
+
+    #[test]
+    fn test_windows_generate_share_link_from_raw_json_vless() {
+        let json_config = r#"{
+            "outbounds": [{
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [{
+                        "address": "fast.winnode.com",
+                        "port": 443,
+                        "users": [{
+                            "id": "11111111-2222-3333-4444-555555555555",
+                            "flow": "xtls-rprx-vision"
+                        }]
+                    }]
+                },
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "serverName": "reality.win.com",
+                        "publicKey": "winpbk",
+                        "shortId": "winsid"
+                    }
+                }
+            }]
+        }"#;
+
+        let link = generate_share_link(json_config, "WinGeneratedVLess");
+        assert!(link.starts_with("vless://11111111-2222-3333-4444-555555555555@fast.winnode.com:443?"));
+        assert!(link.contains("security=reality"));
+        assert!(link.contains("sni=reality.win.com"));
+        assert!(link.contains("pbk=winpbk"));
+        assert!(link.contains("sid=winsid"));
+        assert!(link.contains("flow=xtls-rprx-vision"));
+        assert!(link.ends_with("#WinGeneratedVLess"));
+    }
+
+    #[test]
+    fn test_windows_generate_share_link_from_raw_json_vmess() {
+        let json_config = r#"{
+            "outbounds": [{
+                "protocol": "vmess",
+                "settings": {
+                    "vnext": [{
+                        "address": "vmess.win.net",
+                        "port": 8443,
+                        "users": [{
+                            "id": "aaaa-bbbb-cccc-dddd",
+                            "alterId": 0
+                        }]
+                    }]
+                },
+                "streamSettings": {
+                    "network": "ws",
+                    "security": "tls",
+                    "wsSettings": {
+                        "path": "/winws"
+                    }
+                }
+            }]
+        }"#;
+
+        let link = generate_share_link(json_config, "WinGeneratedVMess");
+        assert!(link.starts_with("vmess://"));
+        let b64 = link.trim_start_matches("vmess://");
+        let decoded = BASE64_STANDARD.decode(b64).expect("Valid base64");
+        let val: Value = serde_json::from_slice(&decoded).expect("Valid json");
+        assert_eq!(val["ps"], "WinGeneratedVMess");
+        assert_eq!(val["add"], "vmess.win.net");
+        assert_eq!(val["port"], 8443);
+        assert_eq!(val["id"], "aaaa-bbbb-cccc-dddd");
+        assert_eq!(val["net"], "ws");
+        assert_eq!(val["path"], "/winws");
+    }
+
+    #[test]
+    fn test_windows_generate_share_link_from_raw_json_trojan_and_shadowsocks() {
+        let trojan_json = r#"{
+            "outbounds": [{
+                "protocol": "trojan",
+                "settings": {
+                    "servers": [{
+                        "address": "trojan.winhost.com",
+                        "port": 443,
+                        "password": "winsecretpassword"
+                    }]
+                },
+                "streamSettings": {
+                    "tlsSettings": {
+                        "serverName": "trojan.winhost.com"
+                    }
+                }
+            }]
+        }"#;
+        let trojan_link = generate_share_link(trojan_json, "WinTrojanNode");
+        assert!(trojan_link.starts_with("trojan://winsecretpassword@trojan.winhost.com:443?"));
+        assert!(trojan_link.contains("sni=trojan.winhost.com"));
+        assert!(trojan_link.ends_with("#WinTrojanNode"));
+
+        let ss_json = r#"{
+            "outbounds": [{
+                "protocol": "shadowsocks",
+                "settings": {
+                    "servers": [{
+                        "address": "ss.winserver.org",
+                        "port": 9000,
+                        "method": "aes-128-gcm",
+                        "password": "winsspassword"
+                    }]
+                }
+            }]
+        }"#;
+        let ss_link = generate_share_link(ss_json, "WinSSNode");
+        assert!(ss_link.starts_with("ss://"));
+        assert!(ss_link.contains("@ss.winserver.org:9000"));
+        assert!(ss_link.ends_with("#WinSSNode"));
+    }
 }
 
