@@ -3205,4 +3205,29 @@ mod performance_tests {
         let _ = app.update(Message::ToggleInstantImport(false));
         assert!(!app.instant_import);
     }
+
+    #[test]
+    fn test_share_modal_open_copy_and_close_flow() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let profile_id = app.v2ray_profiles[0].id.clone();
+        assert!(app.share_modal.is_none());
+
+        let _ = app.update(Message::ShareProfile(profile_id.clone()));
+        assert!(app.share_modal.is_some());
+        let modal = app.share_modal.as_ref().unwrap();
+        assert_eq!(modal.profile_id, profile_id);
+        assert!(!modal.link.is_empty());
+        assert!(!modal.qr_svg.is_empty());
+        assert!(!modal.is_protected);
+        assert!(!modal.copied);
+
+        let _ = app.update(Message::ToggleShareProtect);
+        assert!(app.share_modal.as_ref().unwrap().is_protected);
+
+        let _ = app.update(Message::CopyShareLink);
+        assert!(app.share_modal.as_ref().unwrap().copied);
+
+        let _ = app.update(Message::CloseShareModal);
+        assert!(app.share_modal.is_none());
+    }
 }
