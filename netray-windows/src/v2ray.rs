@@ -329,6 +329,47 @@ pub async fn ping_profile(raw: &str) -> Result<u128, String> {
     latency::measure(&find_xray_binary()?, config).await
 }
 
+/// Queries the current external public IP address using `curl ifconfig.me`
+pub async fn check_public_ip() -> Result<String, String> {
+    tokio::task::spawn_blocking(|| {
+        let output = std::process::Command::new("curl")
+            .args(["-s", "-m", "5", "https://ifconfig.me"])
+            .output()
+            .or_else(|_| {
+                std::process::Command::new("curl")
+                    .args(["-s", "-m", "5", "http://ifconfig.me"])
+                    .output()
+            })
+            .map_err(|e| format!("curl execution failed: {e}"))?;
+
+        if !output.status.success() {
+            return Err(format!("curl exited with code {:?}", output.status.code()));
+        }
+
+        let raw = String::from_utf8_lossy(&output.stdout);
+        parse_ifconfig_output(&raw)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task execution error: {e}")))
+}
+
+/// Parses and validates the IP address returned by ifconfig.me
+pub fn parse_ifconfig_output(raw: &str) -> Result<String, String> {
+    let clean = raw.trim();
+    if clean.is_empty() {
+        return Err("Empty response from ifconfig.me".to_string());
+    }
+    // Validate if it is a valid IPv4 or IPv6 address
+    if clean.parse::<std::net::IpAddr>().is_ok() {
+        Ok(clean.to_string())
+    } else if clean.len() <= 45 && !clean.contains('\n') && !clean.contains(' ') {
+        Ok(clean.to_string())
+    } else {
+        Err(format!("Invalid IP format received: {clean}"))
+    }
+}
+
+
 #[derive(Debug, Clone, Default)]
 pub struct NodeEditState {
     pub id: String,
