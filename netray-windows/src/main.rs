@@ -178,6 +178,16 @@ pub async fn send_log(
         .await;
 }
 
+#[derive(Debug, Clone)]
+pub struct ShareModalState {
+    pub profile_id: String,
+    pub profile_name: String,
+    pub link: String,
+    pub qr_svg: Vec<u8>,
+    pub is_protected: bool,
+    pub copied: bool,
+}
+
 pub struct NetrayApp {
     pub view_mode: ViewMode,
     pub is_running: bool,
@@ -218,6 +228,7 @@ pub struct NetrayApp {
     pub is_checking_ip: bool,
     pub instant_import: bool,
     pub clipboard_import_candidate: Option<String>,
+    pub share_modal: Option<ShareModalState>,
 
     pub logs: Vec<LogEntry>,
     auto_scroll_logs: bool,
@@ -367,6 +378,7 @@ impl NetrayApp {
             is_checking_ip: false,
             instant_import: saved.instant_import,
             clipboard_import_candidate: None,
+            share_modal: None,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
