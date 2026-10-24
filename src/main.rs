@@ -304,6 +304,8 @@ pub enum Message {
     ClipboardImported(Option<String>),
     ToggleTunMode(bool),
     ToggleSysProxy(bool),
+    WhitelistAppsChanged(String),
+    WhitelistUrlsChanged(String),
 
     // Real-time Logger Events
     LoggerReady(mpsc::Sender<LogEntry>),
@@ -896,6 +898,16 @@ impl NetrayApp {
                 if v {
                     self.enable_tun = false;
                 }
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::WhitelistAppsChanged(val) => {
+                self.whitelist_apps = val;
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::WhitelistUrlsChanged(val) => {
+                self.whitelist_urls = val;
                 let _ = self.save_current_state();
                 Task::none()
             }
