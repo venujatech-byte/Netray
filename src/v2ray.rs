@@ -127,6 +127,8 @@ pub fn parse_and_generate_xray_config_with_whitelist(
         parse_socks_uri(trimmed)?
     } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
         parse_wireguard_uri(trimmed)?
+    } else if trimmed.starts_with("hy2://") || trimmed.starts_with("hysteria2://") {
+        parse_hysteria2_uri(trimmed)?
     } else {
         return Err(format!(
             "Unsupported configuration scheme: '{}'. Expected vless://, vmess://, trojan://, ss:// or JSON.",
@@ -1019,6 +1021,50 @@ fn parse_wireguard_uri(uri_str: &str) -> Result<Value, String> {
     }))
 }
 
+/// Parse Hysteria2 URI: hy2://password@host:port/?insecure=1&sni=example.com#Name
+fn parse_hysteria2_uri(uri_str: &str) -> Result<Value, String> {
+    let clean_uri = if let Some(stripped) = uri_str.strip_prefix("hy2://") {
+        format!("hysteria2://{}", stripped)
+    } else {
+        uri_str.to_string()
+    };
+    let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid Hysteria2 URL: {}", e))?;
+    let password = url.username();
+    let host = url.host_str().ok_or("Hysteria2 URL missing host")?;
+    let port = url.port().unwrap_or(443);
+
+    let mut sni = host.to_string();
+    let mut insecure = false;
+    for (k, v) in url.query_pairs() {
+        if k == "sni" {
+            sni = v.to_string();
+        } else if k == "insecure" && (v == "1" || v == "true") {
+            insecure = true;
+        }
+    }
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "hysteria2",
+        "settings": {
+            "servers": [
+                {
+                    "address": host,
+                    "port": port,
+                    "password": password
+                }
+            ]
+        },
+        "streamSettings": {
+            "network": "udp",
+            "security": "tls",
+            "tlsSettings": {
+                "serverName": sni,
+                "allowInsecure": insecure
+            }
+        }
+    }))
+}
 
 fn extract_stream_settings(
     query: &HashMap<String, String>,
@@ -1307,6 +1353,8 @@ pub fn extract_protocol_tag(raw: &str) -> String {
         "(SOCKS5)".to_string()
     } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
         "(WIREGUARD)".to_string()
+    } else if trimmed.starts_with("hy2://") || trimmed.starts_with("hysteria2://") {
+        "(HYSTERIA2)".to_string()
     } else {
         "(CUSTOM JSON)".to_string()
     }
