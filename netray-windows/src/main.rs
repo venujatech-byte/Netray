@@ -2683,4 +2683,58 @@ mod performance_tests {
             assert!(!app.show_add_menu);
         }
     }
+
+    #[test]
+    fn test_windows_clipboard_import_confirmation_flow() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.instant_import = false;
+        let sample_link = "vless://00000000-0000-0000-0000-000000000000@1.2.3.4:443?type=tcp#WinConfirmedNode";
+        let initial_count = app.v2ray_profiles.len();
+
+        let _ = app.update_message(Message::ClipboardImported(Some(sample_link.to_string())));
+        assert_eq!(app.clipboard_import_candidate, Some(sample_link.to_string()));
+        assert_eq!(app.v2ray_profiles.len(), initial_count);
+
+        let _ = app.update_message(Message::ConfirmClipboardImport);
+        assert_eq!(app.clipboard_import_candidate, None);
+        assert_eq!(app.v2ray_profiles.len(), initial_count + 1);
+        let top = &app.v2ray_profiles[0];
+        assert_eq!(top.name, "WinConfirmedNode");
+        assert_eq!(top.config, sample_link);
+        assert_eq!(app.active_profile_id, Some(top.id.clone()));
+    }
+
+    #[test]
+    fn test_windows_clipboard_import_cancel_flow() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.instant_import = false;
+        let sample_link = "trojan://secret@9.9.9.9:443#WinCancelledNode";
+        let initial_count = app.v2ray_profiles.len();
+
+        let _ = app.update_message(Message::ClipboardImported(Some(sample_link.to_string())));
+        assert_eq!(app.clipboard_import_candidate, Some(sample_link.to_string()));
+        assert_eq!(app.v2ray_profiles.len(), initial_count);
+
+        let _ = app.update_message(Message::CancelClipboardImport);
+        assert_eq!(app.clipboard_import_candidate, None);
+        assert_eq!(app.v2ray_profiles.len(), initial_count);
+    }
+
+    #[test]
+    fn test_windows_clipboard_instant_import_toggle() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let _ = app.update_message(Message::ToggleInstantImport(true));
+        assert!(app.instant_import);
+
+        let sample_link = "ss://YWVzLTEyOC1nY206cGFzcw@8.8.8.8:8388#WinInstantNode";
+        let initial_count = app.v2ray_profiles.len();
+
+        let _ = app.update_message(Message::ClipboardImported(Some(sample_link.to_string())));
+        assert_eq!(app.clipboard_import_candidate, None);
+        assert_eq!(app.v2ray_profiles.len(), initial_count + 1);
+        assert_eq!(app.v2ray_profiles[0].name, "WinInstantNode");
+
+        let _ = app.update_message(Message::ToggleInstantImport(false));
+        assert!(!app.instant_import);
+    }
 }
