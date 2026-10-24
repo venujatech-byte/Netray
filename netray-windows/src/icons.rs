@@ -26,6 +26,9 @@ pub const SQUARE: &[u8] = lucide_svg!(r#"<rect width="16" height="16" x="4" y="4
 pub const CHECK: &[u8] = lucide_svg!(r#"<path d="M20 6 9 17l-5-5"/>"#);
 pub const CLOSE: &[u8] = lucide_svg!(r#"<path d="M18 6 6 18"/><path d="m6 6 12 12"/>"#);
 pub const BACK: &[u8] = lucide_svg!(r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#);
+pub const COPY: &[u8] = lucide_svg!(r#"<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>"#);
+pub const INFO: &[u8] = lucide_svg!(r#"<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>"#);
+pub const LOCK: &[u8] = lucide_svg!(r#"<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#);
 
 /// Renders a Lucide vector icon with zero runtime string/memory allocations
 pub fn lucide_icon(svg_bytes: &'static [u8], size: u16, color: Color) -> Svg<'static, Theme> {
