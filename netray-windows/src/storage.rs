@@ -28,6 +28,10 @@ pub struct AppData {
     pub payload_text: String,
     pub bug_host: String,
     pub sni_host: String,
+    #[serde(default)]
+    pub whitelist_apps: String,
+    #[serde(default)]
+    pub whitelist_urls: String,
 }
 
 impl Default for AppData {
@@ -57,6 +61,8 @@ impl Default for AppData {
             payload_text: "GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]".to_string(),
             bug_host: "cdn.bug-example.com".to_string(),
             sni_host: "cdn.bug-example.com".to_string(),
+            whitelist_apps: "".to_string(),
+            whitelist_urls: "".to_string(),
         }
     }
 }
@@ -120,6 +126,8 @@ pub struct AppDataRef<'a> {
     pub payload_text: &'a str,
     pub bug_host: &'a str,
     pub sni_host: &'a str,
+    pub whitelist_apps: &'a str,
+    pub whitelist_urls: &'a str,
 }
 
 impl AppData {
@@ -141,6 +149,8 @@ impl AppData {
             payload_text: &self.payload_text,
             bug_host: &self.bug_host,
             sni_host: &self.sni_host,
+            whitelist_apps: &self.whitelist_apps,
+            whitelist_urls: &self.whitelist_urls,
         }
     }
 }
