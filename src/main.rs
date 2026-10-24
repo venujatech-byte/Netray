@@ -227,6 +227,8 @@ pub struct NetrayApp {
     // TUN & System Routing Mode
     pub enable_tun: bool,
     pub enable_sysproxy: bool,
+    pub whitelist_apps: String,
+    pub whitelist_urls: String,
 
     // Real-time Logs & Background Worker Control
     pub logs: Vec<LogEntry>,
@@ -368,6 +370,8 @@ impl NetrayApp {
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
+            whitelist_apps: saved.whitelist_apps,
+            whitelist_urls: saved.whitelist_urls,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
@@ -420,6 +424,8 @@ impl NetrayApp {
             payload_text: &self.payload_text,
             bug_host: &self.bug_host,
             sni_host: &self.sni_host,
+            whitelist_apps: &self.whitelist_apps,
+            whitelist_urls: &self.whitelist_urls,
         };
         storage::save_state_ref(&app_ref)
     }
