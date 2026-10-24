@@ -219,6 +219,30 @@ pub fn parse_whitelist_processes(raw: &str) -> Vec<String> {
     processes
 }
 
+/// Builds routing rules targeting direct outbound for whitelisted domains, URLs, and IPs
+pub fn build_whitelist_domain_and_ip_rules(whitelist_urls: &str) -> Vec<Value> {
+    let mut rules = Vec::new();
+    let (domains, ips) = parse_whitelist_domains_and_ips(whitelist_urls);
+
+    if !domains.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "domain": domains
+        }));
+    }
+
+    if !ips.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "ip": ips
+        }));
+    }
+
+    rules
+}
+
 /// Extract human-readable node name or remark from link
 pub fn extract_node_name(raw_input: &str) -> String {
     let trimmed = raw_input.trim();
