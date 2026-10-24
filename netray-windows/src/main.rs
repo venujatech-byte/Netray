@@ -1363,6 +1363,18 @@ impl NetrayApp {
             base_content
         };
 
+        let base_content = if self.share_modal.is_some() {
+            iced::widget::stack![
+                base_content,
+                self.view_share_modal(),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            base_content
+        };
+
         if self.close_confirmation.is_some() {
             let dialog = container(
                 column![
@@ -1505,6 +1517,206 @@ impl NetrayApp {
             .center_y(Length::Fill)
             .style(|_| container::Style {
                 background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.62).into()),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn view_share_modal(&self) -> Element<'_, Message> {
+        let Some(modal) = &self.share_modal else {
+            return Space::with_width(0).into();
+        };
+
+        // 1. QR Code container (crisp white background with quiet zone)
+        let qr_box = container(
+            iced::widget::svg(iced::widget::svg::Handle::from_memory(modal.qr_svg.clone()))
+                .width(Length::Fixed(240.0))
+                .height(Length::Fixed(240.0)),
+        )
+        .padding(14)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::WHITE.into()),
+            border: iced::Border {
+                radius: 12.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.85, 0.88, 0.92),
+            },
+            ..Default::default()
+        });
+
+        // 2. Info note row
+        let info_row = row![
+            icons::lucide_icon(icons::INFO, 16, TEXT_MUTED),
+            text("Consider using file export if configuration too complex")
+                .size(12)
+                .color(TEXT_MUTED),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+        // 3. Subtle divider
+        let divider = container(Space::with_height(1))
+            .width(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(Color::from_rgb(0.24, 0.27, 0.35).into()),
+                ..Default::default()
+            });
+
+        // 4. Link preview box with copy button
+        let link_text = if modal.link.len() > 38 {
+            format!("{}...", &modal.link[..38])
+        } else {
+            modal.link.clone()
+        };
+
+        let copy_btn = button(
+            container(icons::lucide_icon(
+                if modal.copied { icons::CHECK } else { icons::COPY },
+                18,
+                if modal.copied { SUCCESS_GREEN } else { TEXT_MUTED },
+            ))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+        )
+        .width(36)
+        .height(36)
+        .padding(0)
+        .style(|_, status| button::Style {
+            background: match status {
+                button::Status::Hovered | button::Status::Pressed => {
+                    Some(Color::from_rgba(1.0, 1.0, 1.0, 0.08).into())
+                }
+                _ => None,
+            },
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .on_press(Message::CopyShareLink);
+
+        let link_card = container(
+            row![
+                icons::lucide_icon(icons::LINK, 18, TEXT_MUTED),
+                column![
+                    text("Link").size(11).color(TEXT_MUTED),
+                    text(link_text).size(12).color(Color::WHITE),
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+                copy_btn,
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgb(0.10, 0.11, 0.14).into()),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.20, 0.22, 0.28),
+            },
+            ..Default::default()
+        });
+
+        // 5. Bottom buttons / pills
+        let protect_btn = button(
+            row![
+                icons::lucide_icon(
+                    icons::LOCK,
+                    14,
+                    if modal.is_protected { ACCENT_BLUE_LIGHT } else { TEXT_MUTED },
+                ),
+                text("Protect")
+                    .size(12)
+                    .color(if modal.is_protected { ACCENT_BLUE_LIGHT } else { Color::WHITE }),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .padding([6, 14])
+        .style(move |_, status| button::Style {
+            background: match status {
+                button::Status::Hovered | button::Status::Pressed => {
+                    Some(Color::from_rgba(1.0, 1.0, 1.0, 0.12).into())
+                }
+                _ => Some(Color::from_rgb(0.20, 0.22, 0.27).into()),
+            },
+            border: iced::Border {
+                radius: 16.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .on_press(Message::ToggleShareProtect);
+
+        let standard_pill = container(
+            text("Standard")
+                .size(12)
+                .color(CORAL_ACCENT),
+        )
+        .padding([6, 14])
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.98, 0.52, 0.48, 0.16).into()),
+            border: iced::Border {
+                radius: 16.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let bottom_row = row![
+            Space::with_width(Length::Fill),
+            protect_btn,
+            standard_pill,
+            button(text("Close").size(12).color(TEXT_MUTED))
+                .padding([6, 12])
+                .style(|_, _| button::Style::default())
+                .on_press(Message::CloseShareModal),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+        // 6. Overall dialog
+        let dialog = container(
+            column![
+                qr_box,
+                info_row,
+                divider,
+                link_card,
+                bottom_row,
+            ]
+            .spacing(14)
+            .padding(18),
+        )
+        .style(|_| container::Style {
+            background: Some(Color::from_rgb(0.14, 0.16, 0.20).into()),
+            border: iced::Border {
+                radius: 16.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.24, 0.27, 0.35),
+            },
+            shadow: iced::Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.55),
+                offset: iced::Vector::new(0.0, 8.0),
+                blur_radius: 24.0,
+            },
+            ..Default::default()
+        })
+        .width(Length::Fixed(360.0));
+
+        container(dialog)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
                 ..Default::default()
             })
             .into()
