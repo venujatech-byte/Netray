@@ -209,6 +209,8 @@ pub struct NetrayApp {
     pub whitelist_urls: String,
     pub available_apps: Vec<apps::AppPreset>,
     pub selected_app_preset: Option<apps::AppPreset>,
+    pub public_ip: Option<String>,
+    pub is_checking_ip: bool,
 
     pub logs: Vec<LogEntry>,
     auto_scroll_logs: bool,
@@ -279,6 +281,8 @@ pub enum Message {
     BrowseAppExecutable,
     AppExecutablePicked(Option<String>),
     RemoveWhitelistApp(String),
+    CheckPublicIp,
+    PublicIpChecked(Result<String, String>),
 
     LoggerReady(mpsc::Sender<LogEntry>),
     NewLog(LogEntry),
@@ -344,6 +348,8 @@ impl NetrayApp {
             whitelist_urls: saved.whitelist_urls,
             available_apps: apps::get_curated_windows_apps(),
             selected_app_preset: None,
+            public_ip: None,
+            is_checking_ip: false,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
@@ -786,6 +792,18 @@ impl NetrayApp {
             Message::RemoveWhitelistApp(app_name) => {
                 self.whitelist_apps = apps::remove_app_from_whitelist(&self.whitelist_apps, &app_name);
                 let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::CheckPublicIp => {
+                self.is_checking_ip = true;
+                Task::perform(v2ray::check_public_ip(), Message::PublicIpChecked)
+            }
+            Message::PublicIpChecked(res) => {
+                self.is_checking_ip = false;
+                match res {
+                    Ok(ip) => self.public_ip = Some(ip),
+                    Err(e) => self.public_ip = Some(e),
+                }
                 Task::none()
             }
             Message::PayloadChanged(v) => {
@@ -1993,8 +2011,65 @@ impl NetrayApp {
         .style(form_card_style)
         .width(Length::Fill);
 
+        let ip_text = if self.is_checking_ip {
+            text("Checking ifconfig.me...").size(13).color(TEXT_MUTED)
+        } else if let Some(ip) = &self.public_ip {
+            let color = if ip.starts_with("Error") || ip.starts_with("Failed") || ip.starts_with("curl exited") {
+                FAILURE_RED
+            } else {
+                SUCCESS_GREEN
+            };
+            text(ip.clone()).size(14).color(color)
+        } else {
+            text("Click to check current public IP").size(13).color(TEXT_MUTED)
+        };
+
+        let ip_card = container(
+            row![
+                column![
+                    text("Public IP Address (Exit Node)").size(14).color(Color::WHITE),
+                    Space::with_height(2),
+                    ip_text,
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+                button(
+                    row![
+                        icons::lucide_icon(icons::ACTIVITY, 14, Color::WHITE),
+                        Space::with_width(4),
+                        text(if self.is_checking_ip { "Checking..." } else { "Check IP" })
+                            .size(12)
+                            .color(Color::WHITE),
+                    ]
+                    .align_y(Alignment::Center)
+                )
+                .padding(iced::Padding {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 10.0,
+                    right: 10.0,
+                })
+                .style(|_, _| button::Style {
+                    background: Some(ACCENT_BLUE.into()),
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .on_press_maybe(if self.is_checking_ip { None } else { Some(Message::CheckPublicIp) }),
+            ]
+            .align_y(Alignment::Center)
+            .width(Length::Fill)
+        )
+        .padding(12)
+        .style(form_card_style)
+        .width(Length::Fill);
+
         let content = scrollable(
             column![
+                ip_card,
+                Space::with_height(12),
                 whitelist_card,
                 Space::with_height(14),
                 text("Tunneling Mode:").size(14).color(TEXT_MUTED),
