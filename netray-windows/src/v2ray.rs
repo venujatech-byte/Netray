@@ -283,6 +283,8 @@ pub fn extract_protocol_tag(raw: &str) -> String {
         "(WIREGUARD)".to_string()
     } else if trimmed.starts_with("hy2://") || trimmed.starts_with("hysteria2://") {
         "(HYSTERIA2)".to_string()
+    } else if trimmed.starts_with("ssr://") {
+        "(SHADOWSOCKSR)".to_string()
     } else {
         "(CUSTOM JSON)".to_string()
     }
@@ -585,9 +587,11 @@ pub fn parse_and_generate_xray_config_with_whitelist(
         parse_wireguard_uri(trimmed)?
     } else if trimmed.starts_with("hy2://") || trimmed.starts_with("hysteria2://") {
         parse_hysteria2_uri(trimmed)?
+    } else if trimmed.starts_with("ssr://") {
+        parse_shadowsocksr_uri(trimmed)?
     } else {
         return Err(
-            "Unsupported format. Please provide a VLESS, VMess, Trojan, Shadowsocks, Socks, WireGuard, Hysteria2 link, or JSON."
+            "Unsupported format. Please provide a VLESS, VMess, Trojan, Shadowsocks, ShadowsocksR, Socks, WireGuard, Hysteria2 link, or JSON."
                 .into(),
         );
     };
@@ -1024,6 +1028,58 @@ fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
         let (h, p_str) = host_port.split_once(':').ok_or("Missing host:port")?;
         let p = p_str.parse::<u16>().map_err(|_| "Invalid port")?;
         (m.to_string(), pass.to_string(), h.to_string(), p)
+    };
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "shadowsocks",
+        "settings": {
+            "servers": [
+                {
+                    "address": host,
+                    "port": port,
+                    "method": method,
+                    "password": password
+                }
+            ]
+        }
+    }))
+}
+
+/// Parse ShadowsocksR URI: ssr://base64
+fn parse_shadowsocksr_uri(uri_str: &str) -> Result<Value, String> {
+    let body = uri_str.trim_start_matches("ssr://").trim();
+    let decoded_str = if let Ok(bytes) = BASE64_URL_SAFE
+        .decode(body)
+        .or_else(|_| BASE64_STANDARD.decode(body))
+        .or_else(|_| BASE64_STANDARD_NO_PAD.decode(body))
+    {
+        String::from_utf8_lossy(&bytes).to_string()
+    } else {
+        body.to_string()
+    };
+
+    let (main_part, _query) = decoded_str.split_once("/?").unwrap_or((&decoded_str, ""));
+    let parts: Vec<&str> = main_part.split(':').collect();
+    if parts.len() < 6 {
+        return Err("Invalid SSR format: expected host:port:protocol:method:obfs:password".to_string());
+    }
+
+    let host = parts[0];
+    let port = parts[1].parse::<u16>().map_err(|_| "Invalid SSR port")?;
+    let _protocol = parts[2];
+    let method = parts[3];
+    let _obfs = parts[4];
+    let raw_pass = parts[5];
+
+    let password = if let Ok(bytes) = BASE64_URL_SAFE
+        .decode(raw_pass)
+        .or_else(|_| BASE64_STANDARD.decode(raw_pass))
+        .or_else(|_| BASE64_STANDARD_NO_PAD.decode(raw_pass))
+    {
+        String::from_utf8_lossy(&bytes).to_string()
+    } else {
+        raw_pass.to_string()
     };
 
     Ok(json!({
