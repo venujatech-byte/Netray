@@ -713,9 +713,11 @@ impl NetrayApp {
                     format!("Added new {} profile '{}'.", proto.title(), profile.name),
                     LogLevel::Info,
                 );
-                self.v2ray_profiles.push(profile);
                 self.active_profile_id = Some(id);
                 self.v2ray_uri_or_json = config;
+                self.node_edit_state =
+                    v2ray::NodeEditState::from_profile(&profile.id, &profile.name, &profile.config);
+                self.v2ray_profiles.push(profile);
                 let _ = self.save_current_state();
                 Task::none()
             }
