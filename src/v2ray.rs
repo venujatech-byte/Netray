@@ -189,6 +189,36 @@ pub fn parse_whitelist_domains_and_ips(raw: &str) -> (Vec<String>, Vec<String>) 
     (domains, ips)
 }
 
+/// Extracts clean process executable names from user-specified app list.
+/// Handles file paths (e.g. `/usr/bin/curl` -> `curl`, `C:\...\app.exe` -> `app.exe`),
+/// whitespace, commas, and newlines.
+pub fn parse_whitelist_processes(raw: &str) -> Vec<String> {
+    let mut processes = Vec::new();
+
+    for token in raw.split(|c| c == ',' || c == '\n' || c == '\r') {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Strip file path components if user entered a full path
+        let file_name = if let Some((_, name)) = trimmed.rsplit_once('/') {
+            name
+        } else if let Some((_, name)) = trimmed.rsplit_once('\\') {
+            name
+        } else {
+            trimmed
+        };
+
+        let file_name = file_name.trim();
+        if !file_name.is_empty() && !processes.contains(&file_name.to_string()) {
+            processes.push(file_name.to_string());
+        }
+    }
+
+    processes
+}
+
 /// Extract human-readable node name or remark from link
 pub fn extract_node_name(raw_input: &str) -> String {
     let trimmed = raw_input.trim();
