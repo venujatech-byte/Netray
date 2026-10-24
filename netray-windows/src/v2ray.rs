@@ -1165,4 +1165,62 @@ mod tests {
         assert_eq!(extract_node_address(uri), "example.com:443");
         assert_eq!(extract_protocol_tag(uri), "(VLESS + TCP + TLS)");
     }
+
+    #[test]
+    fn test_windows_whitelist_routing_proxy_and_tun() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=tcp#WinNode";
+        
+        // Test Proxy Mode
+        let proxy_cfg = parse_and_generate_xray_config_with_whitelist(
+            uri,
+            10808,
+            10809,
+            false,
+            "discord.exe, steam.exe",
+            "https://office.com, 10.0.0.5",
+        )
+        .expect("Must generate Windows proxy config");
+        let proxy_val: Value = serde_json::from_str(&proxy_cfg).unwrap();
+        assert_eq!(proxy_val["routing"]["domainStrategy"], "IPIfNonMatch");
+        let proxy_rules = proxy_val["routing"]["rules"].as_array().unwrap();
+        assert!(proxy_rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["process"].as_array().map_or(false, |p| {
+                    p.iter().any(|item| item == "discord.exe")
+                })
+        }));
+        assert!(proxy_rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["domain"].as_array().map_or(false, |d| {
+                    d.iter().any(|item| item == "domain:office.com")
+                })
+        }));
+
+        // Test TUN Mode
+        let tun_cfg = parse_and_generate_xray_config_with_whitelist(
+            uri,
+            10808,
+            10809,
+            true,
+            "chrome.exe",
+            "https://internal.lan",
+        )
+        .expect("Must generate Windows TUN config");
+        let tun_val: Value = serde_json::from_str(&tun_cfg).unwrap();
+        let tun_rules = tun_val["routing"]["rules"].as_array().unwrap();
+        assert_eq!(tun_rules[0]["port"], 53);
+        assert_eq!(tun_rules[0]["outboundTag"], "netray-dns");
+        assert!(tun_rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["process"].as_array().map_or(false, |p| {
+                    p.iter().any(|item| item == "chrome.exe")
+                })
+        }));
+        assert!(tun_rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["domain"].as_array().map_or(false, |d| {
+                    d.iter().any(|item| item == "domain:internal.lan")
+                })
+        }));
+    }
 }
