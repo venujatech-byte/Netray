@@ -3485,4 +3485,44 @@ mod performance_tests {
         assert_eq!(app.theme_preference, storage::ThemePreference::System);
         assert!(matches!(app.theme(), Theme::Dark | Theme::Light));
     }
+
+    #[test]
+    fn test_scrolling_memoization_and_cache_integrity() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let window_id = iced::window::Id::unique();
+
+        // 1. Verify profile display cache initialized for all default profiles
+        assert_eq!(app.profile_display_cache.len(), app.v2ray_profiles.len());
+        for p in &app.v2ray_profiles {
+            let cached = app.profile_display_cache.get(&p.id).expect("profile must be in display cache");
+            assert_eq!(cached.0, v2ray::extract_node_address(&p.config));
+            assert_eq!(cached.1, v2ray::extract_protocol_tag(&p.config));
+        }
+
+        // 2. Add profile and verify cache updates automatically
+        let _ = app.update(Message::CreateProfileWithType(protocols::ProfileType::VLess));
+        let created_id = app.active_profile_id.clone().unwrap();
+        assert!(app.profile_display_cache.contains_key(&created_id));
+
+        // 3. Delete profile and verify cache cleans up
+        let _ = app.update(Message::DeleteProfile(created_id.clone()));
+        assert!(!app.profile_display_cache.contains_key(&created_id));
+
+        // 4. Verify whitelist chips cache updates without re-parsing during view
+        let _ = app.update(Message::WhitelistAppsChanged("firefox, chrome, discord".into()));
+        assert_eq!(app.cached_app_chips, vec!["firefox", "chrome", "discord"]);
+
+        // 5. Simulate multiple scroll view frames for Profiles screen
+        app.view_mode = ViewMode::Profiles;
+        for _ in 0..10 {
+            let _element = app.view(window_id);
+        }
+
+        // 6. Simulate multiple scroll view frames for Settings screen
+        app.view_mode = ViewMode::SshSettings;
+        for _ in 0..10 {
+            let _element = app.view(window_id);
+        }
+    }
 }
+
