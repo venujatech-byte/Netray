@@ -674,21 +674,34 @@ impl NetrayApp {
                 Task::none()
             }
             Message::ShareProfile(id) => {
-                if let Some(config) = self
-                    .v2ray_profiles
-                    .iter()
-                    .find(|p| p.id == id)
-                    .map(|p| p.config.clone())
-                {
-                    self.push_log(
-                        "Share",
-                        "Copied configuration link to clipboard.",
-                        LogLevel::Success,
-                    );
-                    iced::clipboard::write(config)
-                } else {
-                    Task::none()
+                if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id).cloned() {
+                    let link = v2ray::generate_share_link(&p.config, &p.name);
+                    match qr::generate_qr_svg(&link) {
+                        Ok(svg_str) => {
+                            self.share_modal = Some(ShareModalState {
+                                profile_id: p.id.clone(),
+                                profile_name: p.name.clone(),
+                                link,
+                                qr_svg: svg_str.into_bytes(),
+                                is_protected: false,
+                                copied: false,
+                            });
+                            self.push_log(
+                                "Share",
+                                format!("Generated QR code and shareable link for '{}'.", p.name),
+                                LogLevel::Success,
+                            );
+                        }
+                        Err(err) => {
+                            self.push_log(
+                                "Share",
+                                format!("Failed to generate QR code: {err}"),
+                                LogLevel::Warn,
+                            );
+                        }
+                    }
                 }
+                Task::none()
             }
             Message::CloseShareModal => {
                 self.share_modal = None;
