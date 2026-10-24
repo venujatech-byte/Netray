@@ -837,20 +837,9 @@ impl NetrayApp {
                 Task::none()
             }
             Message::ConfirmClipboardImport => {
-                Task::none()
-            }
-            Message::RequestClipboardImport => {
-                iced::clipboard::read().map(Message::ClipboardImported)
-            }
-            Message::ClipboardImported(content) => {
-                if let Some(text) = content {
-                    let trimmed = text.trim();
-                    if trimmed.starts_with("vless://")
-                        || trimmed.starts_with("vmess://")
-                        || trimmed.starts_with("trojan://")
-                        || trimmed.starts_with("ss://")
-                        || trimmed.starts_with('{')
-                    {
+                if let Some(candidate) = self.clipboard_import_candidate.take() {
+                    let trimmed = candidate.trim();
+                    if !trimmed.is_empty() {
                         let node_name = v2ray::extract_node_name(trimmed);
                         let id = format!(
                             "node-{}",
@@ -879,6 +868,60 @@ impl NetrayApp {
                             LogLevel::Success,
                         );
                     }
+                }
+                Task::none()
+            }
+            Message::RequestClipboardImport => {
+                iced::clipboard::read().map(Message::ClipboardImported)
+            }
+            Message::ClipboardImported(content) => {
+                if let Some(text) = content {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        if self.instant_import {
+                            let node_name = v2ray::extract_node_name(trimmed);
+                            let id = format!(
+                                "node-{}",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis()
+                            );
+                            let profile = storage::V2RayProfile {
+                                id: id.clone(),
+                                name: node_name.clone(),
+                                config: trimmed.to_string(),
+                                created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                            };
+                            self.v2ray_profiles.retain(|p| p.config != trimmed);
+                            self.v2ray_profiles.insert(0, profile);
+                            self.active_profile_id = Some(id);
+
+                            self.v2ray_uri_or_json = trimmed.to_string();
+                            self.tunnel_mode = TunnelMode::V2RayXray;
+
+                            let _ = self.save_current_state();
+                            self.push_log(
+                                "Clipboard",
+                                format!("Imported and activated '{}'.", node_name),
+                                LogLevel::Success,
+                            );
+                        } else {
+                            self.clipboard_import_candidate = Some(trimmed.to_string());
+                        }
+                    } else {
+                        self.push_log(
+                            "Clipboard",
+                            "Clipboard is empty.".to_string(),
+                            LogLevel::Warn,
+                        );
+                    }
+                } else {
+                    self.push_log(
+                        "Clipboard",
+                        "Clipboard is empty or inaccessible.".to_string(),
+                        LogLevel::Warn,
+                    );
                 }
                 Task::none()
             }
