@@ -123,6 +123,10 @@ impl ProfileType {
                 });
                 ("New RAW JSON Profile".to_string(), serde_json::to_string_pretty(&raw_json).unwrap_or_else(|_| raw_json.to_string()))
             }
+            ProfileType::Ssh => (
+                "New SSH Node".to_string(),
+                "ssh://user:password123@127.0.0.1:22#New-SSH-Node".to_string(),
+            ),
             _ => (format!("New {}", self.title()), String::new()),
         }
     }
