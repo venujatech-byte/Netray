@@ -1133,6 +1133,8 @@ impl NetrayApp {
                             v2ray_config: self.v2ray_uri_or_json.clone(),
                             enable_tun: self.enable_tun,
                             enable_sysproxy: self.enable_sysproxy,
+                            whitelist_apps: self.whitelist_apps.clone(),
+                            whitelist_urls: self.whitelist_urls.clone(),
                         };
 
                         tokio::spawn(async move {
