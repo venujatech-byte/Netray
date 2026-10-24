@@ -345,6 +345,186 @@ pub fn extract_node_name(raw_input: &str) -> String {
     "Custom Node".to_string()
 }
 
+/// Generate a shareable protocol URI link from a profile config and remark.
+/// If the config is already a URI, returns it (adding the remark if missing).
+/// If the config is a raw JSON configuration, extracts the outbound parameters
+/// and generates the appropriate protocol link (VLESS, VMess, Trojan, Shadowsocks, Socks5, WireGuard, Hysteria2).
+pub fn generate_share_link(config: &str, remark: &str) -> String {
+    let trimmed = config.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let encoded_remark = percent_encoding::utf8_percent_encode(
+        if remark.trim().is_empty() { "Netray-Node" } else { remark.trim() },
+        percent_encoding::NON_ALPHANUMERIC,
+    )
+    .to_string();
+
+    // 1. If it's already a standard protocol URI
+    let known_schemes = [
+        "vless://", "vmess://", "trojan://", "ss://", "socks://", "socks5://",
+        "wireguard://", "wg://", "hy2://", "hysteria2://", "ssr://", "ssh://",
+        "dnstt+ssh://", "http://", "https://",
+    ];
+
+    for scheme in known_schemes {
+        if trimmed.starts_with(scheme) {
+            if !trimmed.contains('#') {
+                return format!("{}#{}", trimmed, encoded_remark);
+            }
+            return trimmed.to_string();
+        }
+    }
+
+    // 2. If it's a JSON configuration, parse outbounds and construct the appropriate link
+    if trimmed.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+            if let Some(link) = extract_link_from_json(&v, remark, &encoded_remark) {
+                return link;
+            }
+            // Fallback for custom raw JSON: generate compact base64 v2ray URI
+            let b64 = BASE64_STANDARD.encode(trimmed.as_bytes());
+            return format!("v2ray://config?data={}#{}", b64, encoded_remark);
+        }
+    }
+
+    // 3. Fallback for host:port or custom text
+    format!("vless://{}#{}", trimmed, encoded_remark)
+}
+
+fn extract_link_from_json(v: &Value, remark: &str, encoded_remark: &str) -> Option<String> {
+    let outbounds = v
+        .get("outbounds")
+        .and_then(|o| o.as_array())
+        .or_else(|| v.get("outbound").and_then(|o| o.as_array()))?;
+
+    // Find the primary proxy outbound (exclude freedom, blackhole, dns)
+    let outbound = outbounds
+        .iter()
+        .find(|o| {
+            let proto = o.get("protocol").and_then(|p| p.as_str()).unwrap_or("");
+            proto != "freedom" && proto != "blackhole" && proto != "dns"
+        })
+        .or_else(|| outbounds.first())?;
+
+    let proto = outbound.get("protocol").and_then(|p| p.as_str())?;
+    let settings = outbound.get("settings").unwrap_or(&Value::Null);
+    let stream = outbound.get("streamSettings").unwrap_or(&Value::Null);
+
+    let network = stream.get("network").and_then(|n| n.as_str()).unwrap_or("tcp");
+    let security = stream.get("security").and_then(|s| s.as_str()).unwrap_or("none");
+
+    match proto {
+        "vless" => {
+            let vnext = settings.get("vnext").and_then(|vn| vn.as_array())?.first()?;
+            let address = vnext.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = vnext.get("port").and_then(|p| p.as_u64()).unwrap_or(443);
+            let user = vnext.get("users").and_then(|u| u.as_array())?.first()?;
+            let uuid = user.get("id").and_then(|i| i.as_str()).unwrap_or("00000000-0000-0000-0000-000000000000");
+            let flow = user.get("flow").and_then(|f| f.as_str()).unwrap_or("");
+
+            let mut query_params = Vec::new();
+            if network != "tcp" {
+                query_params.push(format!("type={}", network));
+            }
+            if security != "none" {
+                query_params.push(format!("security={}", security));
+            }
+            if !flow.is_empty() {
+                query_params.push(format!("flow={}", flow));
+            }
+            if let Some(sni) = stream.get("tlsSettings").and_then(|t| t.get("serverName")).and_then(|s| s.as_str()) {
+                query_params.push(format!("sni={}", sni));
+            } else if let Some(sni) = stream.get("realitySettings").and_then(|r| r.get("serverName")).and_then(|s| s.as_str()) {
+                query_params.push(format!("sni={}", sni));
+            }
+            if let Some(pbk) = stream.get("realitySettings").and_then(|r| r.get("publicKey")).and_then(|s| s.as_str()) {
+                query_params.push(format!("pbk={}", pbk));
+            }
+            if let Some(sid) = stream.get("realitySettings").and_then(|r| r.get("shortId")).and_then(|s| s.as_str()) {
+                query_params.push(format!("sid={}", sid));
+            }
+            if let Some(ws_path) = stream.get("wsSettings").and_then(|w| w.get("path")).and_then(|s| s.as_str()) {
+                query_params.push(format!("path={}", percent_encoding::utf8_percent_encode(ws_path, percent_encoding::NON_ALPHANUMERIC)));
+            }
+            let query_str = if query_params.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", query_params.join("&"))
+            };
+            Some(format!("vless://{}@{}:{}{}#{}", uuid, address, port, query_str, encoded_remark))
+        }
+        "vmess" => {
+            let vnext = settings.get("vnext").and_then(|vn| vn.as_array())?.first()?;
+            let address = vnext.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = vnext.get("port").and_then(|p| p.as_u64()).unwrap_or(443);
+            let user = vnext.get("users").and_then(|u| u.as_array())?.first()?;
+            let uuid = user.get("id").and_then(|i| i.as_str()).unwrap_or("00000000-0000-0000-0000-000000000000");
+            let alter_id = user.get("alterId").and_then(|a| a.as_u64()).unwrap_or(0);
+            let sni = stream.get("tlsSettings").and_then(|t| t.get("serverName")).and_then(|s| s.as_str()).unwrap_or("");
+            let path = stream.get("wsSettings").and_then(|w| w.get("path")).and_then(|s| s.as_str()).unwrap_or("/");
+
+            let vmess_obj = json!({
+                "v": "2",
+                "ps": remark,
+                "add": address,
+                "port": port,
+                "id": uuid,
+                "aid": alter_id,
+                "scy": "auto",
+                "net": network,
+                "type": "none",
+                "host": sni,
+                "path": path,
+                "tls": if security == "tls" { "tls" } else { "" },
+                "sni": sni,
+            });
+            let b64 = BASE64_STANDARD.encode(vmess_obj.to_string().as_bytes());
+            Some(format!("vmess://{}", b64))
+        }
+        "trojan" => {
+            let server = settings.get("servers").and_then(|s| s.as_array())?.first()?;
+            let address = server.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = server.get("port").and_then(|p| p.as_u64()).unwrap_or(443);
+            let password = server.get("password").and_then(|p| p.as_str()).unwrap_or("");
+            let sni = stream.get("tlsSettings").and_then(|t| t.get("serverName")).and_then(|s| s.as_str()).unwrap_or("");
+
+            Some(format!("trojan://{}@{}:{}?security=tls&sni={}#{}", password, address, port, sni, encoded_remark))
+        }
+        "shadowsocks" => {
+            let server = settings.get("servers").and_then(|s| s.as_array())?.first()?;
+            let address = server.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = server.get("port").and_then(|p| p.as_u64()).unwrap_or(8388);
+            let method = server.get("method").and_then(|m| m.as_str()).unwrap_or("aes-128-gcm");
+            let password = server.get("password").and_then(|p| p.as_str()).unwrap_or("");
+            let auth = BASE64_STANDARD.encode(format!("{}:{}", method, password).as_bytes());
+
+            Some(format!("ss://{}@{}:{}#{}", auth, address, port, encoded_remark))
+        }
+        "socks" => {
+            let server = settings.get("servers").and_then(|s| s.as_array())?.first()?;
+            let address = server.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = server.get("port").and_then(|p| p.as_u64()).unwrap_or(1080);
+            Some(format!("socks5://{}:{}#{}", address, port, encoded_remark))
+        }
+        "wireguard" => {
+            let secret_key = settings.get("secretKey").and_then(|s| s.as_str()).unwrap_or("");
+            let address = settings.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = settings.get("port").and_then(|p| p.as_u64()).unwrap_or(51820);
+            Some(format!("wireguard://{}@{}:{}#{}", secret_key, address, port, encoded_remark))
+        }
+        "hysteria2" | "hy2" => {
+            let server = settings.get("servers").and_then(|s| s.as_array())?.first()?;
+            let address = server.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = server.get("port").and_then(|p| p.as_u64()).unwrap_or(443);
+            let password = server.get("password").and_then(|p| p.as_str()).unwrap_or("");
+            Some(format!("hy2://{}@{}:{}#{}", password, address, port, encoded_remark))
+        }
+        _ => None,
+    }
+}
+
 /// Queries the current external public IP address using `curl ifconfig.me`
 pub async fn check_public_ip() -> Result<String, String> {
     tokio::task::spawn_blocking(|| {
