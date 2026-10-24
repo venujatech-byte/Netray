@@ -124,3 +124,56 @@ pub fn extract_app_chips(raw: &str) -> Vec<String> {
     }
     chips
 }
+
+/// Launches a native Windows OpenFileDialog using PowerShell to allow user to pick an .exe file.
+/// Returns the extracted executable name (e.g. `slack.exe` or `game.exe`), or None if canceled.
+pub async fn pick_executable_file() -> Option<String> {
+    tokio::task::spawn_blocking(|| {
+        let ps_script = r#"
+            [System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms') | Out-Null
+            $dialog = New-Object System.Windows.Forms.OpenFileDialog
+            $dialog.Filter = 'Executables (*.exe)|*.exe|All files (*.*)|*.*'
+            $dialog.Title = 'Select Application Executable to Bypass'
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                Write-Output $dialog.FileName
+            }
+        "#;
+
+        if let Ok(output) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", ps_script])
+            .output()
+        {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    return extract_binary_name(&path_str);
+                }
+            }
+        }
+
+        None
+    })
+    .await
+    .unwrap_or(None)
+}
+
+pub fn extract_binary_name(path_str: &str) -> Option<String> {
+    let clean = path_str.trim().trim_matches(&['"', '\'', '`'][..]).trim();
+    if clean.is_empty() {
+        return None;
+    }
+    let name = if let Some((_, n)) = clean.rsplit_once('\\') {
+        n
+    } else if let Some((_, n)) = clean.rsplit_once('/') {
+        n
+    } else {
+        clean
+    };
+    let name = name.trim();
+    if !name.is_empty() {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+

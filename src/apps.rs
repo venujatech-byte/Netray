@@ -204,3 +204,60 @@ pub fn extract_app_chips(raw: &str) -> Vec<String> {
     }
     chips
 }
+
+/// Launches a native file picker dialog (zenity or kdialog) to allow user to pick an executable file from disk.
+/// Returns the extracted executable name (e.g. `slack` or `my_app`), or None if canceled.
+pub async fn pick_executable_file() -> Option<String> {
+    tokio::task::spawn_blocking(|| {
+        // Try zenity first
+        if let Ok(output) = std::process::Command::new("zenity")
+            .args(["--file-selection", "--title=Select Application Executable to Bypass"])
+            .output()
+        {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    return extract_binary_name(&path_str);
+                }
+            }
+        }
+
+        // Fallback to kdialog
+        if let Ok(output) = std::process::Command::new("kdialog")
+            .args(["--getopenfilename", ".", "--title", "Select Application Executable"])
+            .output()
+        {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    return extract_binary_name(&path_str);
+                }
+            }
+        }
+
+        None
+    })
+    .await
+    .unwrap_or(None)
+}
+
+pub fn extract_binary_name(path_str: &str) -> Option<String> {
+    let clean = path_str.trim().trim_matches(&['"', '\'', '`'][..]).trim();
+    if clean.is_empty() {
+        return None;
+    }
+    let name = if let Some((_, n)) = clean.rsplit_once('/') {
+        n
+    } else if let Some((_, n)) = clean.rsplit_once('\\') {
+        n
+    } else {
+        clean
+    };
+    let name = name.trim();
+    if !name.is_empty() {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
