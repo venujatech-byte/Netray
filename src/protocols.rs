@@ -76,6 +76,10 @@ impl ProfileType {
                 let encoded = base64::prelude::BASE64_STANDARD.encode(vmess_json.to_string().as_bytes());
                 ("New VMess Node".to_string(), format!("vmess://{encoded}"))
             }
+            ProfileType::VLess => (
+                "New VLess Node".to_string(),
+                "vless://b831381d-6324-4d53-ad4f-8cda48b30811@127.0.0.1:443?encryption=none&security=tls&sni=example.com&type=tcp#New-VLess-Node".to_string(),
+            ),
             _ => (format!("New {}", self.title()), String::new()),
         }
     }
