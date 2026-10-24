@@ -32,3 +32,33 @@ Clicking the `+` button in either Linux or Windows app displays the overlay moda
 2. Immediate persistence to disk (`netray_data/config.json`).
 3. Auto-activation of the newly created profile.
 4. Seamless integration with TUN mode, System Proxy, and app/URL split tunneling whitelist rules.
+
+## Import From Clipboard Confirmation & Instant Import
+
+When clicking **Import from Clipboard** (or adding from a link), Netray provides a dedicated confirmation dialog with customizable behavior:
+
+### Confirmation Dialog Features
+- **Modal Title**: `Import from clipboard`
+- **Instant Import Toggle**:
+  - When **Enabled**: Netray instantly parses, registers, activates, and saves any valid link directly without interrupting the user.
+  - When **Disabled** (Default): Netray opens the confirmation modal for the user to review before importing.
+- **URI/Link Config Preview**:
+  - Embedded preview card labeled `URI/Link Config`.
+  - Shows the extracted URI/link string with scrollable inspection.
+- **Action Buttons**:
+  - **`CANCEL`** (Coral `#fa857a`): Discards the candidate without altering existing profiles.
+  - **`IMPORT`** (Coral `#fa857a`): Validates, extracts node remarks/fragment, deduplicates, activates, and stores the new node to disk.
+
+### Supported Link Formats for Clipboard Import
+- `vless://...` (VLess with Reality / Vision / TLS)
+- `vmess://...` (VMess base64 JSON config)
+- `trojan://...` (Trojan protocol)
+- `ss://...` (Shadowsocks / Shadowsocks-2022)
+- `socks://` / `socks5://...` (SOCKS5 inbound/outbound)
+- `wireguard://` / `wg://...` (WireGuard peer config)
+- `hy2://` / `hysteria2://...` (Hysteria 2 UDP)
+- `ssr://...` (ShadowsocksR base64)
+- `ssh://...` (Native SSH multiplexing)
+- `dnstt+ssh://...` (DNS Tunneling + SSH)
+- `{ ... }` (Custom Raw JSON Xray configs)
+- `http://` / `https://` (Subscription and remote node endpoints)
