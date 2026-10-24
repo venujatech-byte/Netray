@@ -26,6 +26,8 @@ pub struct TunnelConfig {
     pub v2ray_config: String,
     pub enable_tun: bool,
     pub enable_sysproxy: bool,
+    pub whitelist_apps: String,
+    pub whitelist_urls: String,
 }
 
 struct SshClientHandler;
