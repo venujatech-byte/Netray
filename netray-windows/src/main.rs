@@ -74,6 +74,81 @@ fn form_card_style(theme: &Theme) -> container::Style {
     }
 }
 
+fn card_strip_active(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(ACCENT_BLUE.into()),
+        border: iced::Border {
+            radius: 2.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn card_strip_inactive(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(INACTIVE_STRIP.into()),
+        border: iced::Border {
+            radius: 2.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn transparent_profile_btn(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        text_color: Color::WHITE,
+        ..Default::default()
+    }
+}
+
+fn transparent_muted_btn(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        text_color: TEXT_MUTED,
+        ..Default::default()
+    }
+}
+
+fn chip_close_btn_style(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        ..Default::default()
+    }
+}
+
+fn whitelist_chip_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.24, 0.58, 1.0, 0.18).into()),
+        border: iced::Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.24, 0.58, 1.0, 0.45),
+        },
+        ..Default::default()
+    }
+}
+
+fn primary_action_btn(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: Some(ACCENT_BLUE.into()),
+        border: iced::Border {
+            radius: 6.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+const TUNNEL_MODES: [TunnelMode; 4] = [
+    TunnelMode::V2RayXray,
+    TunnelMode::SshPayload,
+    TunnelMode::SshSslSni,
+    TunnelMode::SlowDns,
+];
+
 pub fn main() -> iced::Result {
     let window = iced::window::Settings {
         size: (460.0, 600.0).into(),
@@ -246,6 +321,8 @@ pub struct NetrayApp {
     pub clipboard_import_candidate: Option<String>,
     pub share_modal: Option<ShareModalState>,
     pub theme_preference: storage::ThemePreference,
+    pub profile_display_cache: HashMap<String, (String, String)>,
+    pub cached_app_chips: Vec<String>,
 
     pub logs: Vec<LogEntry>,
     auto_scroll_logs: bool,
@@ -359,6 +436,21 @@ impl NetrayApp {
         let active_id = saved.active_profile_id.clone();
         let active_uri = saved.v2ray_uri_or_json.clone();
 
+        let profile_display_cache = saved
+            .v2ray_profiles
+            .iter()
+            .map(|p| {
+                (
+                    p.id.clone(),
+                    (
+                        v2ray::extract_node_address(&p.config),
+                        v2ray::extract_protocol_tag(&p.config),
+                    ),
+                )
+            })
+            .collect();
+        let cached_app_chips = apps::extract_app_chips(&saved.whitelist_apps);
+
         let app = Self {
             view_mode: ViewMode::Profiles,
             is_running: false,
@@ -401,6 +493,8 @@ impl NetrayApp {
             clipboard_import_candidate: None,
             share_modal: None,
             theme_preference: saved.theme_preference,
+            profile_display_cache,
+            cached_app_chips,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
@@ -421,6 +515,32 @@ impl NetrayApp {
         };
 
         (app, Task::none())
+    }
+
+    pub fn sync_profile_display_cache(&mut self) {
+        self.profile_display_cache.retain(|id, _| self.v2ray_profiles.iter().any(|p| &p.id == id));
+        for p in &self.v2ray_profiles {
+            self.profile_display_cache.entry(p.id.clone()).or_insert_with(|| {
+                (
+                    v2ray::extract_node_address(&p.config),
+                    v2ray::extract_protocol_tag(&p.config),
+                )
+            });
+        }
+    }
+
+    pub fn cache_profile_display(&mut self, profile: &storage::V2RayProfile) {
+        self.profile_display_cache.insert(
+            profile.id.clone(),
+            (
+                v2ray::extract_node_address(&profile.config),
+                v2ray::extract_protocol_tag(&profile.config),
+            ),
+        );
+    }
+
+    pub fn refresh_app_chips(&mut self) {
+        self.cached_app_chips = apps::extract_app_chips(&self.whitelist_apps);
     }
 
     pub fn is_dark(&self) -> bool {
@@ -767,6 +887,7 @@ impl NetrayApp {
                 self.node_edit_state =
                     v2ray::NodeEditState::from_profile(&profile.id, &profile.name, &profile.config);
                 self.v2ray_profiles.push(profile);
+                self.sync_profile_display_cache();
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -846,6 +967,7 @@ impl NetrayApp {
 
                 self.active_profile_id = Some(id);
                 self.v2ray_uri_or_json = uri;
+                self.sync_profile_display_cache();
                 let _ = self.save_current_state();
                 self.push_log(
                     "Config",
@@ -893,6 +1015,7 @@ impl NetrayApp {
                         self.v2ray_uri_or_json = trimmed.to_string();
                         self.tunnel_mode = TunnelMode::V2RayXray;
 
+                        self.sync_profile_display_cache();
                         let _ = self.save_current_state();
                         self.push_log(
                             "Clipboard",
@@ -932,6 +1055,7 @@ impl NetrayApp {
                             self.v2ray_uri_or_json = trimmed.to_string();
                             self.tunnel_mode = TunnelMode::V2RayXray;
 
+                            self.sync_profile_display_cache();
                             let _ = self.save_current_state();
                             self.push_log(
                                 "Clipboard",
@@ -959,6 +1083,7 @@ impl NetrayApp {
             }
             Message::DeleteProfile(id) => {
                 self.v2ray_profiles.retain(|p| p.id != id);
+                self.profile_display_cache.remove(&id);
                 self.ping_results.remove(&id);
                 if self.ping_in_progress.as_deref() == Some(&id) {
                     self.ping_in_progress = None;
@@ -990,6 +1115,7 @@ impl NetrayApp {
             }
             Message::WhitelistAppsChanged(val) => {
                 self.whitelist_apps = val;
+                self.refresh_app_chips();
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -1001,6 +1127,7 @@ impl NetrayApp {
             Message::PickAppSelected(preset) => {
                 self.whitelist_apps = apps::add_app_to_whitelist(&self.whitelist_apps, &preset.executable);
                 self.selected_app_preset = None;
+                self.refresh_app_chips();
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -1010,12 +1137,14 @@ impl NetrayApp {
             Message::AppExecutablePicked(maybe_bin) => {
                 if let Some(bin) = maybe_bin {
                     self.whitelist_apps = apps::add_app_to_whitelist(&self.whitelist_apps, &bin);
+                    self.refresh_app_chips();
                     let _ = self.save_current_state();
                 }
                 Task::none()
             }
             Message::RemoveWhitelistApp(app_name) => {
                 self.whitelist_apps = apps::remove_app_from_whitelist(&self.whitelist_apps, &app_name);
+                self.refresh_app_chips();
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -2016,18 +2145,12 @@ impl NetrayApp {
             .map(|p| {
                 let is_active = self.active_profile_id.as_deref() == Some(&p.id)
                     || self.v2ray_uri_or_json == p.config;
-                let strip_color = if is_active {
-                    ACCENT_BLUE
-                } else {
-                    INACTIVE_STRIP
-                };
-                let node_addr = v2ray::extract_node_address(&p.config);
-                let proto_tag = v2ray::extract_protocol_tag(&p.config);
+                let (node_addr, proto_tag) = self
+                    .profile_display_cache
+                    .get(&p.id)
+                    .map(|(a, t)| (a.as_str(), t.as_str()))
+                    .unwrap_or(("127.0.0.1:443", "(V2RAY)"));
 
-                let p_id_1 = p.id.clone();
-                let p_id_2 = p.id.clone();
-                let p_id_3 = p.id.clone();
-                let share_id = p.id.clone();
                 let pinging = self.ping_in_progress.as_deref() == Some(&p.id);
                 let ping_press = (self.ping_in_progress.is_none()
                     && (!self.worker_active
@@ -2049,18 +2172,15 @@ impl NetrayApp {
                     SUCCESS_GREEN
                 };
 
+                let strip_style = if is_active {
+                    card_strip_active
+                } else {
+                    card_strip_inactive
+                };
+
                 container(
                     row![
-                        container(Space::with_width(2)).height(76).style(move |_| {
-                            container::Style {
-                                background: Some(strip_color.into()),
-                                border: iced::Border {
-                                    radius: 2.0.into(),
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            }
-                        }),
+                        container(Space::with_width(2)).height(76).style(strip_style),
                         Space::with_width(12),
                         column![
                             button(
@@ -2079,13 +2199,9 @@ impl NetrayApp {
                             )
                             .padding(0)
                             .width(Length::Fill)
-                            .style(|_, _| button::Style {
-                                background: None,
-                                text_color: Color::WHITE,
-                                ..Default::default()
-                            })
+                            .style(transparent_profile_btn)
                             .on_press_maybe(
-                                (!config_locked).then(|| Message::SelectProfile(p_id_1))
+                                (!config_locked).then(|| Message::SelectProfile(p.id.clone()))
                             ),
                             row![
                                 text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
@@ -2112,31 +2228,19 @@ impl NetrayApp {
                                     .on_press_maybe(ping_press),
                                 button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
                                     .padding(6)
-                                    .style(|_, _| button::Style {
-                                        background: None,
-                                        text_color: TEXT_MUTED,
-                                        ..Default::default()
-                                    })
-                                    .on_press(Message::ShareProfile(share_id)),
+                                    .style(transparent_muted_btn)
+                                    .on_press(Message::ShareProfile(p.id.clone())),
                                 button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED))
                                     .padding(6)
-                                    .style(|_, _| button::Style {
-                                        background: None,
-                                        text_color: TEXT_MUTED,
-                                        ..Default::default()
-                                    })
+                                    .style(transparent_muted_btn)
                                     .on_press_maybe(
-                                        (!config_locked).then(|| Message::EditProfile(p_id_2))
+                                        (!config_locked).then(|| Message::EditProfile(p.id.clone()))
                                     ),
                                 button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED))
                                     .padding(6)
-                                    .style(|_, _| button::Style {
-                                        background: None,
-                                        text_color: TEXT_MUTED,
-                                        ..Default::default()
-                                    })
+                                    .style(transparent_muted_btn)
                                     .on_press_maybe(
-                                        (!config_locked).then(|| Message::DeleteProfile(p_id_3))
+                                        (!config_locked).then(|| Message::DeleteProfile(p.id.clone()))
                                     ),
                             ]
                             .spacing(4)
@@ -2705,23 +2809,18 @@ impl NetrayApp {
         .style(form_card_style)
         .width(Length::Fill);
 
-        let chips = apps::extract_app_chips(&self.whitelist_apps);
         let mut chips_col = column![].spacing(6);
-        for chunk in chips.chunks(3) {
+        for chunk in self.cached_app_chips.chunks(3) {
             let mut r = row![].spacing(6);
             for app in chunk {
-                let app_name = app.clone();
                 let chip = container(
                     row![
-                        text(app.clone()).size(12).color(Color::WHITE),
+                        text(app.as_str()).size(12).color(Color::WHITE),
                         Space::with_width(4),
                         button(icons::lucide_icon(icons::CLOSE, 10, Color::from_rgb(0.85, 0.85, 0.85)))
                             .padding(2)
-                            .style(|_, _| button::Style {
-                                background: None,
-                                ..Default::default()
-                            })
-                            .on_press(Message::RemoveWhitelistApp(app_name)),
+                            .style(chip_close_btn_style)
+                            .on_press(Message::RemoveWhitelistApp(app.clone())),
                     ]
                     .align_y(Alignment::Center)
                 )
@@ -2731,15 +2830,7 @@ impl NetrayApp {
                     left: 8.0,
                     right: 4.0,
                 })
-                .style(|_| container::Style {
-                    background: Some(Color::from_rgba(0.24, 0.58, 1.0, 0.18).into()),
-                    border: iced::Border {
-                        radius: 12.0.into(),
-                        width: 1.0,
-                        color: Color::from_rgba(0.24, 0.58, 1.0, 0.45),
-                    },
-                    ..Default::default()
-                });
+                .style(whitelist_chip_style);
                 r = r.push(chip);
             }
             chips_col = chips_col.push(r);
@@ -2747,7 +2838,7 @@ impl NetrayApp {
 
         let app_picker_row = row![
             pick_list(
-                self.available_apps.clone(),
+                &self.available_apps[..],
                 self.selected_app_preset.clone(),
                 Message::PickAppSelected,
             )
@@ -2768,14 +2859,7 @@ impl NetrayApp {
                 left: 10.0,
                 right: 10.0,
             })
-            .style(|_, _| button::Style {
-                background: Some(ACCENT_BLUE.into()),
-                border: iced::Border {
-                    radius: 6.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
+            .style(primary_action_btn)
             .on_press(Message::BrowseAppExecutable),
         ]
         .align_y(Alignment::Center)
@@ -2853,14 +2937,7 @@ impl NetrayApp {
                     left: 10.0,
                     right: 10.0,
                 })
-                .style(|_, _| button::Style {
-                    background: Some(ACCENT_BLUE.into()),
-                    border: iced::Border {
-                        radius: 6.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
+                .style(primary_action_btn)
                 .on_press_maybe(if self.is_checking_ip { None } else { Some(Message::CheckPublicIp) }),
             ]
             .align_y(Alignment::Center)
@@ -2880,12 +2957,7 @@ impl NetrayApp {
                 Space::with_height(14),
                 text("Tunneling Mode:").size(14).color(TEXT_MUTED),
                 pick_list(
-                    [
-                        TunnelMode::V2RayXray,
-                        TunnelMode::SshPayload,
-                        TunnelMode::SshSslSni,
-                        TunnelMode::SlowDns,
-                    ],
+                    &TUNNEL_MODES[..],
                     Some(self.tunnel_mode),
                     Message::TunnelModeChanged
                 )
@@ -3213,4 +3285,43 @@ mod performance_tests {
         assert_eq!(app.theme_preference, storage::ThemePreference::System);
         assert!(matches!(app.theme(), Theme::Dark | Theme::Light));
     }
+
+    #[test]
+    fn test_windows_scrolling_memoization_and_cache_integrity() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+
+        // 1. Verify profile display cache initialized for all default profiles
+        assert_eq!(app.profile_display_cache.len(), app.v2ray_profiles.len());
+        for p in &app.v2ray_profiles {
+            let cached = app.profile_display_cache.get(&p.id).expect("profile must be in display cache");
+            assert_eq!(cached.0, v2ray::extract_node_address(&p.config));
+            assert_eq!(cached.1, v2ray::extract_protocol_tag(&p.config));
+        }
+
+        // 2. Add profile and verify cache updates automatically
+        let _ = app.update_message(Message::CreateProfileWithType(protocols::ProfileType::VLess));
+        let created_id = app.active_profile_id.clone().unwrap();
+        assert!(app.profile_display_cache.contains_key(&created_id));
+
+        // 3. Delete profile and verify cache cleans up
+        let _ = app.update_message(Message::DeleteProfile(created_id.clone()));
+        assert!(!app.profile_display_cache.contains_key(&created_id));
+
+        // 4. Verify whitelist chips cache updates without re-parsing during view
+        let _ = app.update_message(Message::WhitelistAppsChanged("firefox.exe, chrome.exe, discord.exe".into()));
+        assert_eq!(app.cached_app_chips, vec!["firefox.exe", "chrome.exe", "discord.exe"]);
+
+        // 5. Simulate multiple scroll view frames for Profiles screen
+        app.view_mode = ViewMode::Profiles;
+        for _ in 0..10 {
+            let _element = app.view();
+        }
+
+        // 6. Simulate multiple scroll view frames for Settings screen
+        app.view_mode = ViewMode::SshSettings;
+        for _ in 0..10 {
+            let _element = app.view();
+        }
+    }
 }
+
