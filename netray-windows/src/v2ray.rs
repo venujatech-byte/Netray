@@ -80,6 +80,163 @@ pub fn extract_node_name(raw_input: &str) -> String {
     "Node Profile".to_string()
 }
 
+/// Extracts clean domain and IP rule matchers from user-specified URLs and domains.
+/// Supports full URLs (e.g. `https://mywork.com/login`), wildcards (`*.internal.net`),
+/// standard domains (`github.com`), IP addresses (`192.168.1.1`), and CIDRs (`10.0.0.0/8`).
+pub fn parse_whitelist_domains_and_ips(raw: &str) -> (Vec<String>, Vec<String>) {
+    let mut domains = Vec::new();
+    let mut ips = Vec::new();
+
+    for token in raw.split(|c| c == ',' || c == '\n' || c == '\r') {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Case 1: Full URL (http://... or https://...)
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            if let Ok(parsed_url) = url::Url::parse(trimmed) {
+                if let Some(host) = parsed_url.host_str() {
+                    let host_clean = host.trim_start_matches('[').trim_end_matches(']');
+                    if host_clean.parse::<std::net::IpAddr>().is_ok() {
+                        if !ips.contains(&host_clean.to_string()) {
+                            ips.push(host_clean.to_string());
+                        }
+                    } else if !domains
+                        .iter()
+                        .any(|d| d == host_clean || d == &format!("domain:{host_clean}"))
+                    {
+                        domains.push(format!("domain:{host_clean}"));
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Case 2: Direct IP address or CIDR
+        if trimmed.parse::<std::net::IpAddr>().is_ok()
+            || (trimmed.contains('/')
+                && trimmed
+                    .split('/')
+                    .next()
+                    .and_then(|ip| ip.parse::<std::net::IpAddr>().ok())
+                    .is_some())
+        {
+            if !ips.contains(&trimmed.to_string()) {
+                ips.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        // Case 3: GeoIP or special Xray IP matcher
+        if trimmed.starts_with("geoip:") {
+            if !ips.contains(&trimmed.to_string()) {
+                ips.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        // Case 4: Xray domain match prefixes (domain:, full:, regexp:, keyword:, geosite:)
+        if trimmed.starts_with("domain:")
+            || trimmed.starts_with("full:")
+            || trimmed.starts_with("regexp:")
+            || trimmed.starts_with("keyword:")
+            || trimmed.starts_with("geosite:")
+        {
+            if !domains.contains(&trimmed.to_string()) {
+                domains.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        // Case 5: Wildcard domain (*.example.com -> domain:example.com)
+        let domain_clean = if let Some(stripped) = trimmed.strip_prefix("*.") {
+            format!("domain:{stripped}")
+        } else {
+            format!("domain:{trimmed}")
+        };
+
+        if !domains.contains(&domain_clean) {
+            domains.push(domain_clean);
+        }
+    }
+
+    (domains, ips)
+}
+
+/// Extracts clean process executable names from user-specified app list.
+/// Handles file paths (e.g. `/usr/bin/curl` -> `curl`, `C:\...\app.exe` -> `app.exe`),
+/// whitespace, commas, and newlines.
+pub fn parse_whitelist_processes(raw: &str) -> Vec<String> {
+    let mut processes = Vec::new();
+
+    for token in raw.split(|c| c == ',' || c == '\n' || c == '\r') {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Strip file path components if user entered a full path
+        let file_name = if let Some((_, name)) = trimmed.rsplit_once('/') {
+            name
+        } else if let Some((_, name)) = trimmed.rsplit_once('\\') {
+            name
+        } else {
+            trimmed
+        };
+
+        let file_name = file_name.trim();
+        if !file_name.is_empty() && !processes.contains(&file_name.to_string()) {
+            processes.push(file_name.to_string());
+        }
+    }
+
+    processes
+}
+
+/// Builds routing rules targeting direct outbound for whitelisted domains, URLs, and IPs
+pub fn build_whitelist_domain_and_ip_rules(whitelist_urls: &str) -> Vec<Value> {
+    let mut rules = Vec::new();
+    let (domains, ips) = parse_whitelist_domains_and_ips(whitelist_urls);
+
+    if !domains.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "domain": domains
+        }));
+    }
+
+    if !ips.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "ip": ips
+        }));
+    }
+
+    rules
+}
+
+/// Builds routing rules targeting direct outbound for whitelisted applications, domains, URLs, and IPs
+pub fn build_whitelist_routing_rules(
+    whitelist_apps: &str,
+    whitelist_urls: &str,
+) -> Vec<Value> {
+    let mut rules = build_whitelist_domain_and_ip_rules(whitelist_urls);
+    let processes = parse_whitelist_processes(whitelist_apps);
+
+    if !processes.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "process": processes
+        }));
+    }
+
+    rules
+}
+
 /// Helper to extract protocol tag string like "(VLESS + TCP + TLS)"
 pub fn extract_protocol_tag(raw: &str) -> String {
     let trimmed = raw.trim();
@@ -308,6 +465,26 @@ pub fn parse_and_generate_xray_config(
     http_port: u16,
     enable_tun: bool,
 ) -> Result<String, String> {
+    parse_and_generate_xray_config_with_whitelist(
+        input,
+        socks_port,
+        http_port,
+        enable_tun,
+        "",
+        "",
+    )
+}
+
+/// Convert input link or JSON into complete Xray config JSON with Windows WinTun support
+/// and split-tunneling whitelist rules for processes and URLs/domains.
+pub fn parse_and_generate_xray_config_with_whitelist(
+    input: &str,
+    socks_port: u16,
+    http_port: u16,
+    enable_tun: bool,
+    whitelist_apps: &str,
+    whitelist_urls: &str,
+) -> Result<String, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err("Configuration or URI is empty.".into());
@@ -317,8 +494,26 @@ pub fn parse_and_generate_xray_config(
         let mut val: Value =
             serde_json::from_str(trimmed).map_err(|e| format!("Invalid JSON config: {}", e))?;
         inject_inbounds(&mut val, socks_port, http_port, enable_tun)?;
+        if let Some(outbounds) = val.get_mut("outbounds").and_then(Value::as_array_mut) {
+            if !outbounds.iter().any(|o| o["tag"] == "direct") {
+                outbounds.push(json!({ "tag": "direct", "protocol": "freedom" }));
+            }
+        }
+        let whitelist_rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
+        if !whitelist_rules.is_empty() {
+            let routing = val
+                .as_object_mut()
+                .ok_or("Xray config must be an object")?
+                .entry("routing")
+                .or_insert_with(|| json!({ "rules": [] }));
+            if let Some(rules) = routing.get_mut("rules").and_then(Value::as_array_mut) {
+                for (i, r) in whitelist_rules.into_iter().enumerate() {
+                    rules.insert(i, r);
+                }
+            }
+        }
         if enable_tun {
-            configure_tun(&mut val)?;
+            configure_tun(&mut val, whitelist_apps, whitelist_urls)?;
         }
         return serde_json::to_string_pretty(&val)
             .map_err(|e| format!("Serialization error: {}", e));
@@ -369,6 +564,13 @@ pub fn parse_and_generate_xray_config(
         }),
     ];
 
+    let mut rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
+    rules.push(json!({
+        "type": "field",
+        "inboundTag": ["socks-in", "http-in", "tun-in"],
+        "outboundTag": "proxy"
+    }));
+
     let mut root_cfg = json!({
         "log": {
             "loglevel": "warning"
@@ -386,18 +588,12 @@ pub fn parse_and_generate_xray_config(
             }
         ],
         "routing": {
-            "domainStrategy": "AsIs",
-            "rules": [
-                {
-                    "type": "field",
-                    "inboundTag": ["socks-in", "http-in", "tun-in"],
-                    "outboundTag": "proxy"
-                }
-            ]
+            "domainStrategy": "IPIfNonMatch",
+            "rules": rules
         }
     });
     if enable_tun {
-        configure_tun(&mut root_cfg)?;
+        configure_tun(&mut root_cfg, whitelist_apps, whitelist_urls)?;
     }
 
     serde_json::to_string_pretty(&root_cfg)
@@ -458,7 +654,11 @@ fn inject_inbounds(
     Ok(())
 }
 
-fn configure_tun(config: &mut Value) -> Result<(), String> {
+fn configure_tun(
+    config: &mut Value,
+    whitelist_apps: &str,
+    whitelist_urls: &str,
+) -> Result<(), String> {
     let inbounds = config
         .get_mut("inbounds")
         .and_then(Value::as_array_mut)
@@ -558,14 +758,25 @@ fn configure_tun(config: &mut Value) -> Result<(), String> {
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .ok_or("Xray routing rules must be an array for TUN mode.")?;
+    // 1. DNS
     rules.insert(
         0,
         json!({
-            "type": "field", "inboundTag": [tag], "port": 53, "outboundTag": dns_tag
+            "type": "field", "inboundTag": [tag.clone()], "port": 53, "outboundTag": dns_tag
         }),
     );
+
+    // 2. Direct whitelist routing rules
+    let whitelist_rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
+    let mut insert_idx = 1;
+    for rule in whitelist_rules {
+        rules.insert(insert_idx, rule);
+        insert_idx += 1;
+    }
+
+    // 3. Fallback
     rules.insert(
-        1,
+        insert_idx,
         json!({
             "type": "field", "inboundTag": [tag], "outboundTag": primary_tag
         }),

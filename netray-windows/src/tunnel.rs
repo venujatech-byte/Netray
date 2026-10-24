@@ -268,11 +268,13 @@ async fn run_xray_engine(
 
     // 2. Generate configuration
     let http_port = cfg.local_socks_port.saturating_add(1);
-    let config_json = crate::v2ray::parse_and_generate_xray_config(
+    let config_json = crate::v2ray::parse_and_generate_xray_config_with_whitelist(
         &cfg.v2ray_config,
         cfg.local_socks_port,
         http_port,
         cfg.enable_tun,
+        &cfg.whitelist_apps,
+        &cfg.whitelist_urls,
     )?;
 
     let config_json = if cfg.enable_tun {
