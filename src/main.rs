@@ -285,6 +285,9 @@ pub enum Message {
     EditProfile(String),
     DeleteProfile(String),
     ShareProfile(String),
+    CloseShareModal,
+    CopyShareLink,
+    ToggleShareProtect,
     AddNewProfile,
     OpenAddMenu,
     CloseAddMenu,
@@ -686,6 +689,34 @@ impl NetrayApp {
                 } else {
                     Task::none()
                 }
+            }
+            Message::CloseShareModal => {
+                self.share_modal = None;
+                Task::none()
+            }
+            Message::CopyShareLink => {
+                let link = if let Some(modal) = &mut self.share_modal {
+                    modal.copied = true;
+                    Some(modal.link.clone())
+                } else {
+                    None
+                };
+                if let Some(link) = link {
+                    self.push_log(
+                        "Share",
+                        "Copied configuration link to clipboard.",
+                        LogLevel::Success,
+                    );
+                    iced::clipboard::write(link)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::ToggleShareProtect => {
+                if let Some(modal) = &mut self.share_modal {
+                    modal.is_protected = !modal.is_protected;
+                }
+                Task::none()
             }
             Message::EditProfile(id) => {
                 if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id) {
