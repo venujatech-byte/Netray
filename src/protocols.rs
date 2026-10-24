@@ -114,6 +114,15 @@ impl ProfileType {
                 });
                 ("New WireGuard Node".to_string(), wg_json.to_string())
             }
+            ProfileType::RawJson => {
+                let raw_json = serde_json::json!({
+                    "outbounds": [{
+                        "protocol": "freedom",
+                        "tag": "proxy"
+                    }]
+                });
+                ("New RAW JSON Profile".to_string(), serde_json::to_string_pretty(&raw_json).unwrap_or_else(|_| raw_json.to_string()))
+            }
             _ => (format!("New {}", self.title()), String::new()),
         }
     }
