@@ -186,3 +186,54 @@ impl BadgeKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_all_eleven_protocols_present() {
+        assert_eq!(ProfileType::ALL.len(), 11);
+        let titles: Vec<&'static str> = ProfileType::ALL.iter().map(|p| p.title()).collect();
+        assert!(titles.contains(&"VMess"));
+        assert!(titles.contains(&"VLess"));
+        assert!(titles.contains(&"Socks"));
+        assert!(titles.contains(&"Trojan"));
+        assert!(titles.contains(&"ShadowsocksR"));
+        assert!(titles.contains(&"Shadowsocks2022"));
+        assert!(titles.contains(&"WireGuard"));
+        assert!(titles.contains(&"RAW config (JSON)"));
+        assert!(titles.contains(&"SSH"));
+        assert!(titles.contains(&"DNSTT + SSH"));
+        assert!(titles.contains(&"Hysteria2"));
+    }
+
+    #[test]
+    fn test_protocol_badges() {
+        assert_eq!(ProfileType::VMess.badge(), BadgeKind::Xray);
+        assert_eq!(ProfileType::VLess.badge(), BadgeKind::Xray);
+        assert_eq!(ProfileType::Socks.badge(), BadgeKind::Xray);
+        assert_eq!(ProfileType::Trojan.badge(), BadgeKind::Xray);
+        assert_eq!(ProfileType::ShadowsocksR.badge(), BadgeKind::Xray);
+        assert_eq!(ProfileType::Shadowsocks2022.badge(), BadgeKind::Xray);
+        assert_eq!(ProfileType::WireGuard.badge(), BadgeKind::Xray);
+        assert_eq!(ProfileType::RawJson.badge(), BadgeKind::Xray);
+        assert_eq!(ProfileType::Ssh.badge(), BadgeKind::Native);
+        assert_eq!(ProfileType::DnsttSsh.badge(), BadgeKind::Native);
+        assert_eq!(ProfileType::Hysteria2.badge(), BadgeKind::New);
+
+        assert_eq!(BadgeKind::Xray.text(), "XRAY");
+        assert_eq!(BadgeKind::Native.text(), "NATIVE");
+        assert_eq!(BadgeKind::New.text(), "NEW");
+    }
+
+    #[test]
+    fn test_all_eleven_templates_generate_non_empty_configs() {
+        for proto in ProfileType::ALL {
+            let (remarks, config) = proto.generate_template();
+            assert!(!remarks.is_empty(), "Remarks empty for {:?}", proto);
+            assert!(!config.is_empty(), "Config empty for {:?}", proto);
+        }
+    }
+}
+
