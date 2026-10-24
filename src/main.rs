@@ -197,6 +197,16 @@ pub async fn send_log(
         .await;
 }
 
+#[derive(Debug, Clone)]
+pub struct ShareModalState {
+    pub profile_id: String,
+    pub profile_name: String,
+    pub link: String,
+    pub qr_svg: Vec<u8>,
+    pub is_protected: bool,
+    pub copied: bool,
+}
+
 pub struct NetrayApp {
     pub view_mode: ViewMode,
     pub is_running: bool,
@@ -231,6 +241,7 @@ pub struct NetrayApp {
     pub show_add_menu: bool,
     pub instant_import: bool,
     pub clipboard_import_candidate: Option<String>,
+    pub share_modal: Option<ShareModalState>,
 
     // TUN & System Routing Mode
     pub enable_tun: bool,
@@ -397,6 +408,7 @@ impl NetrayApp {
             show_add_menu: false,
             instant_import: saved.instant_import,
             clipboard_import_candidate: None,
+            share_modal: None,
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
