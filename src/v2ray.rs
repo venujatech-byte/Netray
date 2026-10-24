@@ -123,6 +123,8 @@ pub fn parse_and_generate_xray_config_with_whitelist(
         parse_trojan_uri(trimmed)?
     } else if trimmed.starts_with("ss://") {
         parse_shadowsocks_uri(trimmed)?
+    } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
+        parse_wireguard_uri(trimmed)?
     } else {
         return Err(format!(
             "Unsupported configuration scheme: '{}'. Expected vless://, vmess://, trojan://, ss:// or JSON.",
@@ -933,6 +935,50 @@ fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
     }))
 }
 
+/// Parse WireGuard URI: wireguard://private_key@endpoint:port/?public_key=...&address=10.0.0.2/32#Name
+fn parse_wireguard_uri(uri_str: &str) -> Result<Value, String> {
+    let clean_uri = if let Some(stripped) = uri_str.strip_prefix("wireguard://") {
+        format!("wg://{}", stripped)
+    } else {
+        uri_str.to_string()
+    };
+    let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid WireGuard URL: {}", e))?;
+    let secret_key = url.username();
+    if secret_key.is_empty() {
+        return Err("WireGuard URL missing secret key (private key)".to_string());
+    }
+    let host = url.host_str().ok_or("WireGuard URL missing host")?;
+    let port = url.port().unwrap_or(51820);
+    let mut public_key = String::new();
+    let mut address = vec!["10.0.0.2/32".to_string()];
+    for (k, v) in url.query_pairs() {
+        if k == "public_key" || k == "pubkey" || k == "peer_public_key" {
+            public_key = v.to_string();
+        } else if k == "address" || k == "ip" {
+            address = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        }
+    }
+    if public_key.is_empty() {
+        return Err("WireGuard URL missing public_key query parameter".to_string());
+    }
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "wireguard",
+        "settings": {
+            "secretKey": secret_key,
+            "address": address,
+            "peers": [
+                {
+                    "publicKey": public_key,
+                    "endpoint": format!("{}:{}", host, port)
+                }
+            ]
+        }
+    }))
+}
+
+
 fn extract_stream_settings(
     query: &HashMap<String, String>,
     host: &str,
@@ -1212,6 +1258,8 @@ pub fn extract_protocol_tag(raw: &str) -> String {
         "(TROJAN)".to_string()
     } else if trimmed.starts_with("ss://") {
         "(SHADOWSOCKS)".to_string()
+    } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
+        "(WIREGUARD)".to_string()
     } else {
         "(CUSTOM JSON)".to_string()
     }
