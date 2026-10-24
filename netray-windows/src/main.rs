@@ -11,7 +11,8 @@ pub mod v2ray;
 use chrono::Local;
 use iced::futures::SinkExt;
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
+    button, checkbox, column, container, pick_list, row, scrollable, text, text_input, toggler,
+    Space,
 };
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 use std::collections::HashMap;
@@ -28,6 +29,7 @@ const TEXT_MUTED: Color = Color::from_rgb(0.55, 0.60, 0.68);
 const INACTIVE_STRIP: Color = Color::from_rgb(0.30, 0.33, 0.38);
 const SUCCESS_GREEN: Color = Color::from_rgb(0.22, 0.78, 0.49);
 const FAILURE_RED: Color = Color::from_rgb(0.95, 0.35, 0.40);
+const CORAL_ACCENT: Color = Color::from_rgb(0.98, 0.52, 0.48); // #FA857A
 const APP_VERSION: &str = match option_env!("NETRAY_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
@@ -1259,6 +1261,18 @@ impl NetrayApp {
             content
         };
 
+        let base_content = if self.clipboard_import_candidate.is_some() {
+            iced::widget::stack![
+                base_content,
+                self.view_clipboard_import_modal(),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            base_content
+        };
+
         if self.close_confirmation.is_some() {
             let dialog = container(
                 column![
@@ -1296,6 +1310,114 @@ impl NetrayApp {
         } else {
             base_content
         }
+    }
+
+    fn view_clipboard_import_modal(&self) -> Element<'_, Message> {
+        let candidate = self.clipboard_import_candidate.as_deref().unwrap_or("");
+        let uri_box = container(
+            column![
+                text("URI/Link Config").size(12).color(TEXT_MUTED),
+                scrollable(
+                    text(candidate).size(13).color(Color::WHITE)
+                )
+                .height(Length::Fixed(60.0)),
+            ]
+            .spacing(6),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgb(0.10, 0.11, 0.14).into()),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.20, 0.22, 0.28),
+            },
+            ..Default::default()
+        });
+
+        let cancel_btn = button(text("CANCEL").size(13).color(CORAL_ACCENT))
+            .padding([8, 14])
+            .style(|_, status| button::Style {
+                background: match status {
+                    button::Status::Hovered | button::Status::Pressed => {
+                        Some(Color::from_rgba(0.98, 0.52, 0.48, 0.12).into())
+                    }
+                    _ => None,
+                },
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .on_press(Message::CancelClipboardImport);
+
+        let import_btn = button(text("IMPORT").size(13).color(CORAL_ACCENT))
+            .padding([8, 14])
+            .style(|_, status| button::Style {
+                background: match status {
+                    button::Status::Hovered | button::Status::Pressed => {
+                        Some(Color::from_rgba(0.98, 0.52, 0.48, 0.18).into())
+                    }
+                    _ => None,
+                },
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .on_press(Message::ConfirmClipboardImport);
+
+        let action_row = row![
+            Space::with_width(Length::Fill),
+            cancel_btn,
+            import_btn,
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
+
+        let dialog = container(
+            column![
+                text("Import from clipboard").size(19),
+                toggler(self.instant_import)
+                    .label("Instant import")
+                    .size(18)
+                    .spacing(12)
+                    .on_toggle(Message::ToggleInstantImport),
+                uri_box,
+                action_row,
+            ]
+            .spacing(16)
+            .padding(22),
+        )
+        .style(|_| container::Style {
+            background: Some(Color::from_rgb(0.14, 0.16, 0.20).into()),
+            border: iced::Border {
+                radius: 16.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.24, 0.27, 0.35),
+            },
+            shadow: iced::Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                offset: iced::Vector::new(0.0, 8.0),
+                blur_radius: 24.0,
+            },
+            ..Default::default()
+        })
+        .width(Length::Fixed(400.0));
+
+        container(dialog)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.62).into()),
+                ..Default::default()
+            })
+            .into()
     }
 
     fn view_add_profile_modal(&self) -> Element<'_, Message> {
