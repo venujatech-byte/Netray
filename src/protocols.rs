@@ -97,6 +97,23 @@ impl ProfileType {
                 "New Shadowsocks2022 Node".to_string(),
                 "ss://2022-blake3-aes-128-gcm:7sN6q9U1jB3V0vYw8Z1A2Q==@127.0.0.1:8388#New-Shadowsocks2022-Node".to_string(),
             ),
+            ProfileType::WireGuard => {
+                let wg_json = serde_json::json!({
+                    "outbounds": [{
+                        "tag": "proxy",
+                        "protocol": "wireguard",
+                        "settings": {
+                            "secretKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                            "address": ["10.0.0.2/32"],
+                            "peers": [{
+                                "publicKey": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+                                "endpoint": "127.0.0.1:51820"
+                            }]
+                        }
+                    }]
+                });
+                ("New WireGuard Node".to_string(), wg_json.to_string())
+            }
             _ => (format!("New {}", self.title()), String::new()),
         }
     }
