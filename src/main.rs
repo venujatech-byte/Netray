@@ -4,6 +4,7 @@ pub mod protocols;
 pub mod qr;
 pub mod storage;
 pub mod sysproxy;
+pub mod theme;
 mod tunnel;
 pub mod v2ray;
 
