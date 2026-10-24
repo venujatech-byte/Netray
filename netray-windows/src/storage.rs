@@ -10,6 +10,25 @@ pub struct V2RayProfile {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    Light,
+    Dark,
+    #[default]
+    System,
+}
+
+impl std::fmt::Display for ThemePreference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Light => write!(f, "Light Mode"),
+            Self::Dark => write!(f, "Dark Mode"),
+            Self::System => write!(f, "System Theme"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppData {
     pub v2ray_profiles: Vec<V2RayProfile>,
@@ -34,6 +53,8 @@ pub struct AppData {
     pub whitelist_urls: String,
     #[serde(default)]
     pub instant_import: bool,
+    #[serde(default)]
+    pub theme_preference: ThemePreference,
 }
 
 impl Default for AppData {
@@ -66,6 +87,7 @@ impl Default for AppData {
             whitelist_apps: "".to_string(),
             whitelist_urls: "".to_string(),
             instant_import: false,
+            theme_preference: ThemePreference::System,
         }
     }
 }
@@ -204,6 +226,30 @@ mod tests {
 
         assert_eq!(deserialized.v2ray_profiles.len(), 2);
         assert_eq!(deserialized.v2ray_uri_or_json, "vless://test-uuid@1.2.3.4:443?type=tcp#TestNode");
+    }
+
+    #[test]
+    fn test_windows_theme_preference_roundtrip_and_defaults() {
+        let mut app_data = AppData::default();
+        assert_eq!(app_data.theme_preference, ThemePreference::System);
+
+        app_data.theme_preference = ThemePreference::Dark;
+        let json = serde_json::to_string(&app_data).unwrap();
+        assert!(json.contains(r#""theme_preference":"dark""#));
+
+        let mut deserialized: AppData = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.theme_preference, ThemePreference::Dark);
+
+        app_data.theme_preference = ThemePreference::Light;
+        let json_light = serde_json::to_string(&app_data).unwrap();
+        assert!(json_light.contains(r#""theme_preference":"light""#));
+        deserialized = serde_json::from_str(&json_light).unwrap();
+        assert_eq!(deserialized.theme_preference, ThemePreference::Light);
+
+        // Backward compatibility: missing theme_preference in JSON defaults to System
+        let legacy_json = r#"{"v2ray_profiles":[],"v2ray_uri_or_json":"","local_socks_port":"10808","enable_tun":true,"enable_sysproxy":false,"tunnel_mode":"V2RayXray","ssh_host":"","ssh_port":"","ssh_user":"","ssh_pass":"","proxy_ip":"","proxy_port":"","payload_text":"","bug_host":"","sni_host":""}"#;
+        let legacy: AppData = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(legacy.theme_preference, ThemePreference::System);
     }
 
     #[test]
