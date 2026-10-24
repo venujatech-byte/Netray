@@ -2041,20 +2041,23 @@ impl NetrayApp {
                 text("Whitelist Applications (Processes):").size(13).color(ACCENT_BLUE_LIGHT),
                 text_input("e.g. curl, firefox, chrome.exe, discord", &self.whitelist_apps)
                     .on_input(Message::WhitelistAppsChanged)
-                    .padding(8),
+                    .padding(8)
+                    .width(Length::Fill),
                 text("Comma or newline-separated executable names (e.g. curl, chrome.exe).")
                     .size(11)
                     .color(TEXT_MUTED),
                 Space::with_height(8),
                 text("Whitelist URLs & Domains:").size(13).color(ACCENT_BLUE_LIGHT),
-                text_input("e.g. https://mywork.com, *.internal.net, 192.168.1.1, 10.0.0.0/8", &self.whitelist_urls)
+                text_input("e.g. *.internal.net, 10.0.0.0/8, https://work.com", &self.whitelist_urls)
                     .on_input(Message::WhitelistUrlsChanged)
-                    .padding(8),
+                    .padding(8)
+                    .width(Length::Fill),
                 text("Comma or newline-separated URLs, domains, wildcards (*.site.com), or IP CIDRs.")
                     .size(11)
                     .color(TEXT_MUTED),
             ]
             .spacing(4)
+            .width(Length::Fill)
         )
         .padding(14)
         .style(form_card_style)
@@ -2130,6 +2133,7 @@ impl NetrayApp {
                 Space::with_height(20),
             ]
             .spacing(6)
+            .width(Length::Fill)
             .padding(iced::Padding {
                 top: 0.0,
                 bottom: 20.0,
@@ -2137,6 +2141,7 @@ impl NetrayApp {
                 right: 16.0,
             }),
         )
+        .width(Length::Fill)
         .height(Length::Fill);
 
         column![
