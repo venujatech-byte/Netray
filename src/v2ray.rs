@@ -74,6 +74,26 @@ pub fn parse_and_generate_xray_config(
     http_port: u16,
     enable_tun: bool,
 ) -> Result<String, String> {
+    parse_and_generate_xray_config_with_whitelist(
+        raw_input,
+        socks_port,
+        http_port,
+        enable_tun,
+        "",
+        "",
+    )
+}
+
+/// Converts raw user configuration into a full Xray JSON configuration with optional
+/// split-tunneling whitelist rules for processes and domains/URLs.
+pub fn parse_and_generate_xray_config_with_whitelist(
+    raw_input: &str,
+    socks_port: u16,
+    http_port: u16,
+    enable_tun: bool,
+    whitelist_apps: &str,
+    whitelist_urls: &str,
+) -> Result<String, String> {
     let trimmed = raw_input.trim();
     if trimmed.is_empty() {
         return Err(
@@ -84,7 +104,14 @@ pub fn parse_and_generate_xray_config(
 
     // Case 1: Raw JSON configuration
     if trimmed.starts_with('{') {
-        return handle_json_config(trimmed, socks_port, http_port, enable_tun);
+        return handle_json_config(
+            trimmed,
+            socks_port,
+            http_port,
+            enable_tun,
+            whitelist_apps,
+            whitelist_urls,
+        );
     }
 
     // Case 2: Protocol URIs
@@ -103,7 +130,14 @@ pub fn parse_and_generate_xray_config(
         ));
     };
 
-    let full_config = assemble_xray_config(outbound, socks_port, http_port, enable_tun);
+    let full_config = assemble_xray_config(
+        outbound,
+        socks_port,
+        http_port,
+        enable_tun,
+        whitelist_apps,
+        whitelist_urls,
+    );
     serde_json::to_string_pretty(&full_config)
         .map_err(|e| format!("Failed to serialize Xray config: {}", e))
 }
@@ -240,6 +274,9 @@ pub fn build_whitelist_domain_and_ip_rules(whitelist_urls: &str) -> Vec<Value> {
         }));
     }
 
+    rules
+}
+
 /// Builds routing rules targeting direct outbound for whitelisted applications, domains, URLs, and IPs
 pub fn build_whitelist_routing_rules(
     whitelist_apps: &str,
@@ -305,6 +342,8 @@ fn assemble_xray_config(
     socks_port: u16,
     http_port: u16,
     enable_tun: bool,
+    whitelist_apps: &str,
+    whitelist_urls: &str,
 ) -> Value {
     let inbounds = vec![
         json!({
@@ -333,6 +372,20 @@ fn assemble_xray_config(
         }),
     ];
 
+    let primary_tag = primary_outbound["tag"]
+        .as_str()
+        .unwrap_or("proxy")
+        .to_string();
+    let mut routing_rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
+
+    if !routing_rules.is_empty() && !enable_tun {
+        routing_rules.push(json!({
+            "type": "field",
+            "inboundTag": ["socks-in", "http-in"],
+            "outboundTag": primary_tag
+        }));
+    }
+
     let mut config = json!({
         "log": {
             "loglevel": "warning"
@@ -350,13 +403,25 @@ fn assemble_xray_config(
             }
         ]
     });
+
+    if !routing_rules.is_empty() {
+        config["routing"] = json!({
+            "domainStrategy": "IPIfNonMatch",
+            "rules": routing_rules
+        });
+    }
+
     if enable_tun {
-        configure_tun(&mut config).expect("generated Xray config supports TUN");
+        configure_tun(&mut config, whitelist_apps, whitelist_urls).expect("generated Xray config supports TUN");
     }
     config
 }
 
-fn configure_tun(config: &mut Value) -> Result<(), String> {
+fn configure_tun(
+    config: &mut Value,
+    whitelist_apps: &str,
+    whitelist_urls: &str,
+) -> Result<(), String> {
     let tun = json!({
         "tag": "tun-in",
         "protocol": "tun",
@@ -467,14 +532,25 @@ fn configure_tun(config: &mut Value) -> Result<(), String> {
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .ok_or("Xray routing rules must be an array for TUN mode.")?;
+    // 1. DNS routing rule (port 53 always goes to DNS outbound)
     rules.insert(
         0,
         json!({
-            "type": "field", "inboundTag": [tag], "port": 53, "outboundTag": dns_tag
+            "type": "field", "inboundTag": [tag.clone()], "port": 53, "outboundTag": dns_tag
         }),
     );
+
+    // 2. Direct whitelist routing rules (for bypassed apps, domains, and IPs)
+    let whitelist_rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
+    let mut insert_idx = 1;
+    for rule in whitelist_rules {
+        rules.insert(insert_idx, rule);
+        insert_idx += 1;
+    }
+
+    // 3. Fallback: all remaining traffic from TUN goes to primary proxy outbound
     rules.insert(
-        1,
+        insert_idx,
         json!({
             "type": "field", "inboundTag": [tag], "outboundTag": primary_tag
         }),
@@ -488,17 +564,39 @@ fn handle_json_config(
     socks_port: u16,
     http_port: u16,
     enable_tun: bool,
+    whitelist_apps: &str,
+    whitelist_urls: &str,
 ) -> Result<String, String> {
     let mut parsed: Value =
         serde_json::from_str(raw_json).map_err(|e| format!("Invalid JSON config: {}", e))?;
+
+    // Ensure direct outbound exists
+    if let Some(outbounds) = parsed.get_mut("outbounds").and_then(Value::as_array_mut) {
+        if !outbounds.iter().any(|o| o["tag"] == "direct") {
+            outbounds.push(json!({ "tag": "direct", "protocol": "freedom" }));
+        }
+    }
 
     // If it already has inbounds and outbounds, ensure loglevel is present
     if parsed.get("inbounds").is_some() && parsed.get("outbounds").is_some() {
         if parsed.get("log").is_none() {
             parsed["log"] = json!({ "loglevel": "warning" });
         }
+        let whitelist_rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
+        if !whitelist_rules.is_empty() {
+            let routing = parsed
+                .as_object_mut()
+                .ok_or("Xray config must be an object")?
+                .entry("routing")
+                .or_insert_with(|| json!({ "rules": [] }));
+            if let Some(rules) = routing.get_mut("rules").and_then(Value::as_array_mut) {
+                for (i, r) in whitelist_rules.into_iter().enumerate() {
+                    rules.insert(i, r);
+                }
+            }
+        }
         if enable_tun {
-            configure_tun(&mut parsed)?;
+            configure_tun(&mut parsed, whitelist_apps, whitelist_urls)?;
         }
         return serde_json::to_string_pretty(&parsed)
             .map_err(|e| format!("Serialization error: {}", e));
@@ -506,10 +604,17 @@ fn handle_json_config(
 
     // If it has outbounds but no inbounds, add standard inbounds
     if let Some(outbounds) = parsed.get("outbounds") {
-        let mut full = assemble_xray_config(json!({}), socks_port, http_port, false);
+        let mut full = assemble_xray_config(
+            json!({}),
+            socks_port,
+            http_port,
+            false,
+            whitelist_apps,
+            whitelist_urls,
+        );
         full["outbounds"] = outbounds.clone();
         if enable_tun {
-            configure_tun(&mut full)?;
+            configure_tun(&mut full, whitelist_apps, whitelist_urls)?;
         }
         return serde_json::to_string_pretty(&full)
             .map_err(|e| format!("Serialization error: {}", e));
@@ -517,7 +622,14 @@ fn handle_json_config(
 
     // If it's a single outbound object (has "protocol")
     if parsed.get("protocol").is_some() {
-        let full = assemble_xray_config(parsed, socks_port, http_port, enable_tun);
+        let full = assemble_xray_config(
+            parsed,
+            socks_port,
+            http_port,
+            enable_tun,
+            whitelist_apps,
+            whitelist_urls,
+        );
         return serde_json::to_string_pretty(&full)
             .map_err(|e| format!("Serialization error: {}", e));
     }
