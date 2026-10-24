@@ -94,3 +94,24 @@ When clicking the **Share** option on any profile card or menu, Netray opens an 
      - `Standard` status chip pill in coral (`#fa857a`).
      - Dismiss / Close button.
 
+
+## Theme & Appearance (Settings)
+
+Netray provides theme switching directly from the **Settings & Routing** screen (`Menu` -> `Settings`), with support for:
+
+### Supported Themes
+1. **Light Mode**:
+   - Crisp, high-contrast light surfaces (`#F8FAFC` window background, `#FFFFFF` cards, `#0F172A` text).
+   - Ideal for daytime usage and bright environments.
+2. **Dark Mode**:
+   - Nocturnal obsidian surfaces (`#1A1C20` cards, `#0F1114` window background, `#FFFFFF` text, cybernetic blue accents).
+   - High-density dark cockpit optimized for server operators and nighttime workflows.
+3. **System Theme (Default)**:
+   - Automatically queries the desktop environment and dynamically adapts to the OS appearance:
+     - **Linux**: Interrogates `org.gnome.desktop.interface color-scheme` via `gsettings` and Freedesktop Settings Portal (`org.freedesktop.appearance color-scheme`).
+     - **Windows**: Reads `AppsUseLightTheme` from `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`.
+   - Real-time indicator displaying the currently resolved mode (e.g. `System theme active (Dark detected)`).
+
+### Persistence & Storage
+- Theme preferences are automatically saved to `config.json` (`"theme_preference": "light" | "dark" | "system"`).
+- Backward-compatible deserialization ensures existing configurations default to `system` without data loss.
