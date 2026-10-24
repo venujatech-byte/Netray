@@ -123,6 +123,8 @@ pub fn parse_and_generate_xray_config_with_whitelist(
         parse_trojan_uri(trimmed)?
     } else if trimmed.starts_with("ss://") {
         parse_shadowsocks_uri(trimmed)?
+    } else if trimmed.starts_with("socks://") || trimmed.starts_with("socks5://") {
+        parse_socks_uri(trimmed)?
     } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
         parse_wireguard_uri(trimmed)?
     } else {
@@ -935,6 +937,45 @@ fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
     }))
 }
 
+/// Parse Socks URI: socks://user:password@host:port#Name or socks5://host:port#Name
+fn parse_socks_uri(uri_str: &str) -> Result<Value, String> {
+    let clean_uri = if let Some(stripped) = uri_str.strip_prefix("socks5://") {
+        format!("socks://{}", stripped)
+    } else {
+        uri_str.to_string()
+    };
+    let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid Socks URL: {}", e))?;
+    let host = url.host_str().ok_or("Socks URL missing host")?;
+    let port = url.port().unwrap_or(1080);
+
+    let mut users = Vec::new();
+    let user = url.username();
+    if !user.is_empty() {
+        let pass = url.password().unwrap_or("");
+        users.push(json!({
+            "user": user,
+            "pass": pass,
+            "level": 0
+        }));
+    }
+
+    let mut server = json!({
+        "address": host,
+        "port": port
+    });
+    if !users.is_empty() {
+        server["users"] = Value::Array(users);
+    }
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "socks",
+        "settings": {
+            "servers": [server]
+        }
+    }))
+}
+
 /// Parse WireGuard URI: wireguard://private_key@endpoint:port/?public_key=...&address=10.0.0.2/32#Name
 fn parse_wireguard_uri(uri_str: &str) -> Result<Value, String> {
     let clean_uri = if let Some(stripped) = uri_str.strip_prefix("wireguard://") {
@@ -1257,7 +1298,13 @@ pub fn extract_protocol_tag(raw: &str) -> String {
         }
         "(TROJAN)".to_string()
     } else if trimmed.starts_with("ss://") {
-        "(SHADOWSOCKS)".to_string()
+        if trimmed.to_lowercase().contains("2022-") {
+            "(SHADOWSOCKS-2022)".to_string()
+        } else {
+            "(SHADOWSOCKS)".to_string()
+        }
+    } else if trimmed.starts_with("socks://") || trimmed.starts_with("socks5://") {
+        "(SOCKS5)".to_string()
     } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
         "(WIREGUARD)".to_string()
     } else {
