@@ -127,6 +127,10 @@ impl ProfileType {
                 "New SSH Node".to_string(),
                 "ssh://user:password123@127.0.0.1:22#New-SSH-Node".to_string(),
             ),
+            ProfileType::DnsttSsh => (
+                "New DNSTT + SSH Node".to_string(),
+                "dnstt+ssh://ns.example.com:53/?pubkey=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef&ssh=user:password123@127.0.0.1:22#New-DNSTT-SSH-Node".to_string(),
+            ),
             _ => (format!("New {}", self.title()), String::new()),
         }
     }
