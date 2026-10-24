@@ -1498,5 +1498,31 @@ mod tests {
         assert!(parse_ifconfig_output("   \n\t").is_err());
         assert!(parse_ifconfig_output("<html>502 Bad Gateway</html>").is_err());
     }
+
+    #[tokio::test]
+    async fn test_windows_all_eleven_templates_produce_valid_outbounds() {
+        for proto in crate::protocols::ProfileType::ALL {
+            let (remarks, config) = proto.generate_template();
+            assert!(!remarks.is_empty());
+            assert!(!config.is_empty());
+
+            match proto.badge() {
+                crate::protocols::BadgeKind::Xray | crate::protocols::BadgeKind::New => {
+                    let result = parse_and_generate_xray_config(&config, 10808, 10809, false);
+                    assert!(
+                        result.is_ok(),
+                        "Failed to generate config for {:?}: {:?}",
+                        proto,
+                        result.err()
+                    );
+                    let parsed: Value = serde_json::from_str(&result.unwrap()).unwrap();
+                    assert!(parsed.get("outbounds").is_some());
+                }
+                crate::protocols::BadgeKind::Native => {
+                    assert!(config.starts_with("ssh://") || config.starts_with("dnstt+ssh://"));
+                }
+            }
+        }
+    }
 }
 
