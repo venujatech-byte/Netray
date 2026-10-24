@@ -272,7 +272,17 @@ pub fn extract_protocol_tag(raw: &str) -> String {
         }
         "(TROJAN)".to_string()
     } else if trimmed.starts_with("ss://") {
-        "(SHADOWSOCKS)".to_string()
+        if trimmed.to_lowercase().contains("2022-") {
+            "(SHADOWSOCKS-2022)".to_string()
+        } else {
+            "(SHADOWSOCKS)".to_string()
+        }
+    } else if trimmed.starts_with("socks://") || trimmed.starts_with("socks5://") {
+        "(SOCKS5)".to_string()
+    } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
+        "(WIREGUARD)".to_string()
+    } else if trimmed.starts_with("hy2://") || trimmed.starts_with("hysteria2://") {
+        "(HYSTERIA2)".to_string()
     } else {
         "(CUSTOM JSON)".to_string()
     }
@@ -569,9 +579,15 @@ pub fn parse_and_generate_xray_config_with_whitelist(
         parse_trojan_uri(trimmed)?
     } else if trimmed.starts_with("ss://") {
         parse_shadowsocks_uri(trimmed)?
+    } else if trimmed.starts_with("socks://") || trimmed.starts_with("socks5://") {
+        parse_socks_uri(trimmed)?
+    } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
+        parse_wireguard_uri(trimmed)?
+    } else if trimmed.starts_with("hy2://") || trimmed.starts_with("hysteria2://") {
+        parse_hysteria2_uri(trimmed)?
     } else {
         return Err(
-            "Unsupported format. Please provide a VLESS, VMess, Trojan, Shadowsocks link, or JSON."
+            "Unsupported format. Please provide a VLESS, VMess, Trojan, Shadowsocks, Socks, WireGuard, Hysteria2 link, or JSON."
                 .into(),
         );
     };
@@ -1022,6 +1038,133 @@ fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
                     "password": password
                 }
             ]
+        }
+    }))
+}
+
+/// Parse Socks URI: socks://user:password@host:port#Name or socks5://host:port#Name
+fn parse_socks_uri(uri_str: &str) -> Result<Value, String> {
+    let clean_uri = if let Some(stripped) = uri_str.strip_prefix("socks5://") {
+        format!("socks://{}", stripped)
+    } else {
+        uri_str.to_string()
+    };
+    let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid Socks URL: {}", e))?;
+    let host = url.host_str().ok_or("Socks URL missing host")?;
+    let port = url.port().unwrap_or(1080);
+
+    let mut users = Vec::new();
+    let user = url.username();
+    if !user.is_empty() {
+        let pass = url.password().unwrap_or("");
+        users.push(json!({
+            "user": user,
+            "pass": pass,
+            "level": 0
+        }));
+    }
+
+    let mut server = json!({
+        "address": host,
+        "port": port
+    });
+    if !users.is_empty() {
+        server["users"] = Value::Array(users);
+    }
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "socks",
+        "settings": {
+            "servers": [server]
+        }
+    }))
+}
+
+/// Parse WireGuard URI: wireguard://private_key@endpoint:port/?public_key=...&address=10.0.0.2/32#Name
+fn parse_wireguard_uri(uri_str: &str) -> Result<Value, String> {
+    let clean_uri = if let Some(stripped) = uri_str.strip_prefix("wireguard://") {
+        format!("wg://{}", stripped)
+    } else {
+        uri_str.to_string()
+    };
+    let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid WireGuard URL: {}", e))?;
+    let secret_key = url.username();
+    if secret_key.is_empty() {
+        return Err("WireGuard URL missing secret key (private key)".to_string());
+    }
+    let host = url.host_str().ok_or("WireGuard URL missing host")?;
+    let port = url.port().unwrap_or(51820);
+    let mut public_key = String::new();
+    let mut address = vec!["10.0.0.2/32".to_string()];
+    for (k, v) in url.query_pairs() {
+        if k == "public_key" || k == "pubkey" || k == "peer_public_key" {
+            public_key = v.to_string();
+        } else if k == "address" || k == "ip" {
+            address = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        }
+    }
+    if public_key.is_empty() {
+        return Err("WireGuard URL missing public_key query parameter".to_string());
+    }
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "wireguard",
+        "settings": {
+            "secretKey": secret_key,
+            "address": address,
+            "peers": [
+                {
+                    "publicKey": public_key,
+                    "endpoint": format!("{}:{}", host, port)
+                }
+            ]
+        }
+    }))
+}
+
+/// Parse Hysteria2 URI: hy2://password@host:port/?insecure=1&sni=example.com#Name
+fn parse_hysteria2_uri(uri_str: &str) -> Result<Value, String> {
+    let clean_uri = if let Some(stripped) = uri_str.strip_prefix("hy2://") {
+        format!("hysteria2://{}", stripped)
+    } else {
+        uri_str.to_string()
+    };
+    let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid Hysteria2 URL: {}", e))?;
+    let password = url.username();
+    let host = url.host_str().ok_or("Hysteria2 URL missing host")?;
+    let port = url.port().unwrap_or(443);
+
+    let mut sni = host.to_string();
+    let mut insecure = false;
+    for (k, v) in url.query_pairs() {
+        if k == "sni" {
+            sni = v.to_string();
+        } else if k == "insecure" && (v == "1" || v == "true") {
+            insecure = true;
+        }
+    }
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "hysteria2",
+        "settings": {
+            "servers": [
+                {
+                    "address": host,
+                    "port": port,
+                    "password": password
+                }
+            ]
+        },
+        "streamSettings": {
+            "network": "udp",
+            "security": "tls",
+            "tlsSettings": {
+                "serverName": sni,
+                "allowInsecure": insecure
+            }
         }
     }))
 }
