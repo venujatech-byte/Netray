@@ -62,3 +62,35 @@ When clicking **Import from Clipboard** (or adding from a link), Netray provides
 - `dnstt+ssh://...` (DNS Tunneling + SSH)
 - `{ ... }` (Custom Raw JSON Xray configs)
 - `http://` / `https://` (Subscription and remote node endpoints)
+
+## Share Profile & QR Code Generation
+
+When clicking the **Share** option on any profile card or menu, Netray opens an interactive **Share Profile** dialog featuring vector QR code generation, automatic URI link synthesis, and clipboard copy.
+
+### Key Capabilities
+1. **Direct Link Presentation**:
+   - If the profile was created from a link (e.g. `vless://`, `vmess://`, `trojan://`, `ss://`, `socks://`, `wireguard://`, `hy2://`), that link is directly displayed and encoded.
+2. **On-Demand Link Synthesis for Raw JSON Configs**:
+   - If a profile only contains a raw Xray JSON configuration or custom outbound JSON, Netray inspects the primary outbound (`outbounds[0]`) and automatically generates a standard shareable URI:
+     - **VLESS**: Generates `vless://<uuid>@<address>:<port>?type=...&security=...#<remark>`
+     - **VMess**: Generates standard `vmess://<base64_json>` with remark, address, port, id, and transport.
+     - **Trojan**: Generates `trojan://<password>@<address>:<port>?sni=...&security=tls#<remark>`
+     - **Shadowsocks**: Generates `ss://<base64(method:password)>@<address>:<port>#<remark>`
+     - **Socks5**: Generates `socks://<user:pass>@<address>:<port>#<remark>`
+     - **WireGuard**: Generates `wireguard://<private_key>@<address>:<port>?publickey=...&ip=...#<remark>`
+     - **Hysteria 2**: Generates `hy2://<auth>@<address>:<port>?sni=...#<remark>`
+3. **Crisp Vector SVG QR Code**:
+   - Uses the `qrcode` crate with SVG rendering and quiet zones for crisp, pixel-perfect display at any scaling.
+   - White contrast background container with rounded borders.
+4. **Modal Dialog UX**:
+   - **Helper Note**: `(i) Consider using file export if configuration too complex`
+   - **Link Card**:
+     - Embedded link icon on the left.
+     - Bold `Link` label.
+     - Protocol URI with truncated scrollable display.
+     - Integrated `Copy` button with visual feedback (`COPIED!` notification).
+   - **Status Badges & Security Pills**:
+     - `Protect` button with Lock icon.
+     - `Standard` status chip pill in coral (`#fa857a`).
+     - Dismiss / Close button.
+
