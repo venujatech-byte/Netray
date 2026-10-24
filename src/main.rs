@@ -2666,4 +2666,28 @@ mod performance_tests {
         pending.await;
         assert_eq!(rx.recv().await.unwrap().message, "second");
     }
+
+    #[test]
+    fn test_add_menu_toggle_and_cancel() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        assert!(!app.show_add_menu);
+        let _ = app.update(Message::OpenAddMenu);
+        assert!(app.show_add_menu);
+        let _ = app.update(Message::CloseAddMenu);
+        assert!(!app.show_add_menu);
+    }
+
+    #[test]
+    fn test_create_profile_across_all_eleven_protocols() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let initial_count = app.v2ray_profiles.len();
+        for (i, proto) in protocols::ProfileType::ALL.iter().enumerate() {
+            let _ = app.update(Message::CreateProfileWithType(*proto));
+            assert_eq!(app.v2ray_profiles.len(), initial_count + i + 1);
+            let created = app.v2ray_profiles.last().unwrap();
+            assert_eq!(created.name, proto.generate_template().0);
+            assert_eq!(app.active_profile_id, Some(created.id.clone()));
+            assert!(!app.show_add_menu);
+        }
+    }
 }
