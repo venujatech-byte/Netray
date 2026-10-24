@@ -35,10 +35,103 @@ pub const SUN: &[u8] = lucide_svg!(r#"<circle cx="12" cy="12" r="4"/><path d="M1
 pub const MOON: &[u8] = lucide_svg!(r#"<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>"#);
 pub const MONITOR: &[u8] = lucide_svg!(r#"<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>"#);
 
+use std::sync::LazyLock;
+
+static HANDLE_MENU: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(MENU));
+static HANDLE_FILE_PLUS: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(FILE_PLUS));
+static HANDLE_QR_CODE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(QR_CODE));
+static HANDLE_LINK: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(LINK));
+static HANDLE_MORE_VERTICAL: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(MORE_VERTICAL));
+static HANDLE_PLUS: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(PLUS));
+static HANDLE_SHARE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(SHARE));
+static HANDLE_PENCIL: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(PENCIL));
+static HANDLE_TRASH: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(TRASH));
+static HANDLE_ACTIVITY: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(ACTIVITY));
+static HANDLE_PLAY: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(PLAY));
+static HANDLE_SQUARE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(SQUARE));
+static HANDLE_CHECK: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(CHECK));
+static HANDLE_MINIMIZE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(MINIMIZE));
+static HANDLE_MAXIMIZE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(MAXIMIZE));
+static HANDLE_CLOSE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(CLOSE));
+static HANDLE_BACK: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(BACK));
+static HANDLE_COPY: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(COPY));
+static HANDLE_INFO: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(INFO));
+static HANDLE_LOCK: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(LOCK));
+static HANDLE_SUN: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(SUN));
+static HANDLE_MOON: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(MOON));
+static HANDLE_MONITOR: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(MONITOR));
+
+/// Returns a pre-cached `Handle` for known vector icons with zero heap allocation or byte hashing
+pub fn handle_for(svg_bytes: &'static [u8]) -> Handle {
+    if std::ptr::eq(svg_bytes, MENU) {
+        HANDLE_MENU.clone()
+    } else if std::ptr::eq(svg_bytes, FILE_PLUS) {
+        HANDLE_FILE_PLUS.clone()
+    } else if std::ptr::eq(svg_bytes, QR_CODE) {
+        HANDLE_QR_CODE.clone()
+    } else if std::ptr::eq(svg_bytes, LINK) {
+        HANDLE_LINK.clone()
+    } else if std::ptr::eq(svg_bytes, MORE_VERTICAL) {
+        HANDLE_MORE_VERTICAL.clone()
+    } else if std::ptr::eq(svg_bytes, PLUS) {
+        HANDLE_PLUS.clone()
+    } else if std::ptr::eq(svg_bytes, SHARE) {
+        HANDLE_SHARE.clone()
+    } else if std::ptr::eq(svg_bytes, PENCIL) {
+        HANDLE_PENCIL.clone()
+    } else if std::ptr::eq(svg_bytes, TRASH) {
+        HANDLE_TRASH.clone()
+    } else if std::ptr::eq(svg_bytes, ACTIVITY) {
+        HANDLE_ACTIVITY.clone()
+    } else if std::ptr::eq(svg_bytes, PLAY) {
+        HANDLE_PLAY.clone()
+    } else if std::ptr::eq(svg_bytes, SQUARE) {
+        HANDLE_SQUARE.clone()
+    } else if std::ptr::eq(svg_bytes, CHECK) {
+        HANDLE_CHECK.clone()
+    } else if std::ptr::eq(svg_bytes, MINIMIZE) {
+        HANDLE_MINIMIZE.clone()
+    } else if std::ptr::eq(svg_bytes, MAXIMIZE) {
+        HANDLE_MAXIMIZE.clone()
+    } else if std::ptr::eq(svg_bytes, CLOSE) {
+        HANDLE_CLOSE.clone()
+    } else if std::ptr::eq(svg_bytes, BACK) {
+        HANDLE_BACK.clone()
+    } else if std::ptr::eq(svg_bytes, COPY) {
+        HANDLE_COPY.clone()
+    } else if std::ptr::eq(svg_bytes, INFO) {
+        HANDLE_INFO.clone()
+    } else if std::ptr::eq(svg_bytes, LOCK) {
+        HANDLE_LOCK.clone()
+    } else if std::ptr::eq(svg_bytes, SUN) {
+        HANDLE_SUN.clone()
+    } else if std::ptr::eq(svg_bytes, MOON) {
+        HANDLE_MOON.clone()
+    } else if std::ptr::eq(svg_bytes, MONITOR) {
+        HANDLE_MONITOR.clone()
+    } else {
+        Handle::from_memory(svg_bytes)
+    }
+}
+
 /// Renders a Lucide vector icon with zero runtime string/memory allocations
 pub fn lucide_icon(svg_bytes: &'static [u8], size: u16, color: Color) -> Svg<'static, Theme> {
-    Svg::new(Handle::from_memory(svg_bytes))
+    Svg::new(handle_for(svg_bytes))
         .width(size)
         .height(size)
         .style(move |_, _| svg::Style { color: Some(color) })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_handle_id_behavior() {
+        let h1 = handle_for(MENU);
+        let h2 = handle_for(MENU);
+        assert_eq!(h1.id(), h2.id());
+    }
+}
+
+
