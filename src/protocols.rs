@@ -80,6 +80,10 @@ impl ProfileType {
                 "New VLess Node".to_string(),
                 "vless://b831381d-6324-4d53-ad4f-8cda48b30811@127.0.0.1:443?encryption=none&security=tls&sni=example.com&type=tcp#New-VLess-Node".to_string(),
             ),
+            ProfileType::Socks => (
+                "New Socks Node".to_string(),
+                "socks://127.0.0.1:1080#New-Socks-Proxy".to_string(),
+            ),
             _ => (format!("New {}", self.title()), String::new()),
         }
     }
