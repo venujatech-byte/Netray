@@ -1216,6 +1216,18 @@ impl NetrayApp {
             ViewMode::Logs => self.view_logs_screen(),
             ViewMode::SshSettings => self.view_ssh_screen(),
         };
+        let base_content: Element<'_, Message> = if self.show_add_menu {
+            iced::widget::stack![
+                content,
+                self.view_add_profile_modal(),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            content
+        };
+
         if self.close_confirmation.is_some() {
             let dialog = container(
                 column![
@@ -1236,7 +1248,7 @@ impl NetrayApp {
             .style(form_card_style)
             .width(Length::Fixed(340.0));
             iced::widget::stack![
-                content,
+                base_content,
                 container(dialog)
                     .width(Length::Fill)
                     .height(Length::Fill)
@@ -1251,8 +1263,127 @@ impl NetrayApp {
             .height(Length::Fill)
             .into()
         } else {
-            content
+            base_content
         }
+    }
+
+    fn view_add_profile_modal(&self) -> Element<'_, Message> {
+        let mut list = column![].spacing(3);
+
+        for proto in protocols::ProfileType::ALL {
+            let badge = proto.badge();
+            let badge_widget = container(
+                text(badge.text())
+                    .size(10)
+                    .color(badge.text_color())
+            )
+            .padding(iced::Padding {
+                top: 2.0,
+                bottom: 2.0,
+                left: 6.0,
+                right: 6.0,
+            })
+            .style(move |_| container::Style {
+                background: Some(badge.bg_color().into()),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+
+            let item_btn = button(
+                row![
+                    text(proto.title()).size(14).color(Color::WHITE),
+                    Space::with_width(Length::Fill),
+                    badge_widget,
+                ]
+                .align_y(Alignment::Center)
+                .padding(iced::Padding {
+                    top: 8.0,
+                    bottom: 8.0,
+                    left: 12.0,
+                    right: 12.0,
+                })
+            )
+            .width(Length::Fill)
+            .padding(0)
+            .style(|_, status| button::Style {
+                background: match status {
+                    button::Status::Hovered | button::Status::Pressed => {
+                        Some(Color::from_rgba(1.0, 1.0, 1.0, 0.09).into())
+                    }
+                    _ => None,
+                },
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .on_press(Message::CreateProfileWithType(proto));
+
+            list = list.push(item_btn);
+        }
+
+        let header = row![
+            text("Add Profile").size(15).color(Color::WHITE),
+            Space::with_width(Length::Fill),
+            button(icons::lucide_icon(icons::CLOSE, 16, Color::WHITE))
+                .padding(4)
+                .style(|_, status| button::Style {
+                    background: match status {
+                        button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.1).into()),
+                        _ => None,
+                    },
+                    border: iced::Border {
+                        radius: 12.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .on_press(Message::CloseAddMenu),
+        ]
+        .align_y(Alignment::Center);
+
+        let modal_box = container(
+            column![
+                header,
+                Space::with_height(6),
+                scrollable(list).height(Length::Fixed(360.0)),
+            ]
+            .spacing(4)
+            .padding(14)
+        )
+        .width(Length::Fixed(300.0))
+        .style(|_| container::Style {
+            background: Some(Color::from_rgb(0.16, 0.17, 0.19).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            shadow: iced::Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                offset: iced::Vector::new(0.0, 8.0),
+                blur_radius: 24.0,
+            },
+            ..Default::default()
+        });
+
+        iced::widget::mouse_area(
+            container(modal_box)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
+                    ..Default::default()
+                })
+        )
+        .on_press(Message::CloseAddMenu)
+        .into()
     }
 
     fn view_profiles_screen(&self) -> Element<'_, Message> {
