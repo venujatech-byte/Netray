@@ -708,6 +708,11 @@ impl NetrayApp {
                     config: config.clone(),
                     created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
                 };
+                self.push_log(
+                    "Netray",
+                    format!("Added new {} profile '{}'.", proto.title(), profile.name),
+                    LogLevel::Info,
+                );
                 self.v2ray_profiles.push(profile);
                 self.active_profile_id = Some(id);
                 self.v2ray_uri_or_json = config;
