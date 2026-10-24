@@ -1145,10 +1145,13 @@ fn parse_wireguard_uri(uri_str: &str) -> Result<Value, String> {
         uri_str.to_string()
     };
     let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid WireGuard URL: {}", e))?;
-    let secret_key = url.username();
-    if secret_key.is_empty() {
+    let raw_secret = url.username();
+    if raw_secret.is_empty() {
         return Err("WireGuard URL missing secret key (private key)".to_string());
     }
+    let secret_key = percent_encoding::percent_decode_str(raw_secret)
+        .decode_utf8_lossy()
+        .to_string();
     let host = url.host_str().ok_or("WireGuard URL missing host")?;
     let port = url.port().unwrap_or(51820);
     let mut public_key = String::new();

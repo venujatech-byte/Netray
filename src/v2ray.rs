@@ -1040,10 +1040,13 @@ fn parse_wireguard_uri(uri_str: &str) -> Result<Value, String> {
         uri_str.to_string()
     };
     let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid WireGuard URL: {}", e))?;
-    let secret_key = url.username();
-    if secret_key.is_empty() {
+    let raw_secret = url.username();
+    if raw_secret.is_empty() {
         return Err("WireGuard URL missing secret key (private key)".to_string());
     }
+    let secret_key = percent_encoding::percent_decode_str(raw_secret)
+        .decode_utf8_lossy()
+        .to_string();
     let host = url.host_str().ok_or("WireGuard URL missing host")?;
     let port = url.port().unwrap_or(51820);
     let mut public_key = String::new();
@@ -1964,6 +1967,38 @@ mod tests {
         assert!(parse_ifconfig_output("").is_err());
         assert!(parse_ifconfig_output("   \n\t").is_err());
         assert!(parse_ifconfig_output("<html>502 Bad Gateway</html>").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_wireguard_generation() {
+        let uri = "wireguard://AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=@127.0.0.1:51820/?public_key=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=&address=10.0.0.2/32#Test-WG";
+        let config_str = parse_and_generate_xray_config(uri, 10808, 10809, false)
+            .expect("Should generate WireGuard config");
+        let val: Value = serde_json::from_str(&config_str).unwrap();
+        assert_eq!(val["outbounds"][0]["protocol"], "wireguard");
+        assert_eq!(
+            val["outbounds"][0]["settings"]["secretKey"],
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        );
+        assert_eq!(
+            val["outbounds"][0]["settings"]["peers"][0]["publicKey"],
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+        );
+        assert_eq!(extract_protocol_tag(uri), "(WIREGUARD)");
+    }
+
+    #[tokio::test]
+    async fn test_shadowsocks2022_generation() {
+        let uri = "ss://2022-blake3-aes-128-gcm:7sN6q9U1jB3V0vYw8Z1A2Q==@127.0.0.1:8388#Test-SS2022";
+        let config_str = parse_and_generate_xray_config(uri, 10808, 10809, false)
+            .expect("Should generate SS2022 config");
+        let val: Value = serde_json::from_str(&config_str).unwrap();
+        assert_eq!(val["outbounds"][0]["protocol"], "shadowsocks");
+        assert_eq!(
+            val["outbounds"][0]["settings"]["servers"][0]["method"],
+            "2022-blake3-aes-128-gcm"
+        );
+        assert_eq!(extract_protocol_tag(uri), "(SHADOWSOCKS-2022)");
     }
 }
 
