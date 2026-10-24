@@ -26,7 +26,6 @@ use tunnel::{run_real_tunnel_worker, TunnelConfig};
 
 const ACCENT_BLUE: Color = Color::from_rgb(0.15, 0.48, 0.98); // #2563EB
 const ACCENT_BLUE_LIGHT: Color = Color::from_rgb(0.24, 0.58, 1.0); // #3B82F6
-const SURFACE_CARD: Color = Color::from_rgb(0.14, 0.16, 0.20);
 const TEXT_MUTED: Color = Color::from_rgb(0.55, 0.60, 0.68);
 const INACTIVE_STRIP: Color = Color::from_rgb(0.30, 0.33, 0.38);
 const SUCCESS_GREEN: Color = Color::from_rgb(0.22, 0.78, 0.49);
@@ -47,15 +46,31 @@ fn format_uptime(elapsed: Duration) -> String {
     )
 }
 
-fn form_card_style(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(SURFACE_CARD.into()),
-        border: iced::Border {
-            radius: 8.0.into(),
-            width: 1.0,
-            color: Color::from_rgb(0.20, 0.22, 0.28),
-        },
-        ..Default::default()
+fn form_card_style(theme: &Theme) -> container::Style {
+    let is_dark = match theme {
+        Theme::Light => false,
+        _ => true,
+    };
+    if is_dark {
+        container::Style {
+            background: Some(theme::CARD_BG_DARK.into()),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: theme::CARD_BORDER_DARK,
+            },
+            ..Default::default()
+        }
+    } else {
+        container::Style {
+            background: Some(theme::CARD_BG_LIGHT.into()),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: theme::CARD_BORDER_LIGHT,
+            },
+            ..Default::default()
+        }
     }
 }
 
@@ -68,7 +83,7 @@ pub fn main() -> iced::Result {
     };
     iced::application("Netray", NetrayApp::update, NetrayApp::view)
         .subscription(NetrayApp::subscription)
-        .theme(|_| Theme::Dark)
+        .theme(|app| app.theme())
         .window(window)
         .run_with(NetrayApp::new)
 }
@@ -230,6 +245,7 @@ pub struct NetrayApp {
     pub instant_import: bool,
     pub clipboard_import_candidate: Option<String>,
     pub share_modal: Option<ShareModalState>,
+    pub theme_preference: storage::ThemePreference,
 
     pub logs: Vec<LogEntry>,
     auto_scroll_logs: bool,
@@ -312,6 +328,7 @@ pub enum Message {
     RemoveWhitelistApp(String),
     CheckPublicIp,
     PublicIpChecked(Result<String, String>),
+    ThemePreferenceChanged(storage::ThemePreference),
 
     LoggerReady(mpsc::Sender<LogEntry>),
     NewLog(LogEntry),
@@ -383,6 +400,7 @@ impl NetrayApp {
             instant_import: saved.instant_import,
             clipboard_import_candidate: None,
             share_modal: None,
+            theme_preference: saved.theme_preference,
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
@@ -403,6 +421,30 @@ impl NetrayApp {
         };
 
         (app, Task::none())
+    }
+
+    pub fn is_dark(&self) -> bool {
+        theme::resolve_effective_theme(self.theme_preference).is_dark()
+    }
+
+    pub fn theme(&self) -> Theme {
+        theme::resolve_effective_theme(self.theme_preference).to_iced_theme()
+    }
+
+    pub fn text_primary(&self) -> Color {
+        if self.is_dark() {
+            theme::TEXT_PRIMARY_DARK
+        } else {
+            theme::TEXT_PRIMARY_LIGHT
+        }
+    }
+
+    pub fn bg_window(&self) -> Color {
+        if self.is_dark() {
+            theme::BG_WINDOW_DARK
+        } else {
+            theme::BG_WINDOW_LIGHT
+        }
     }
 
     fn save_current_state(&self) -> Result<std::path::PathBuf, String> {
@@ -427,6 +469,7 @@ impl NetrayApp {
             whitelist_apps: &self.whitelist_apps,
             whitelist_urls: &self.whitelist_urls,
             instant_import: self.instant_import,
+            theme_preference: self.theme_preference,
         };
         storage::save_state_ref(&app_ref)
     }
@@ -1238,6 +1281,16 @@ impl NetrayApp {
                         .unwrap_or_else(Task::none)
                 }
             }
+            Message::ThemePreferenceChanged(pref) => {
+                self.theme_preference = pref;
+                self.push_log(
+                    "SYSTEM",
+                    format!("Theme appearance set to: {}", pref),
+                    LogLevel::Info,
+                );
+                let _ = self.save_current_state();
+                Task::none()
+            }
             Message::CancelExit => {
                 self.close_confirmation = None;
                 Task::none()
@@ -1353,6 +1406,23 @@ impl NetrayApp {
             ViewMode::Logs => self.view_logs_screen(),
             ViewMode::SshSettings => self.view_ssh_screen(),
         };
+        let content = container(content)
+            .style(|theme| {
+                let is_dark = match theme {
+                    Theme::Light => false,
+                    _ => true,
+                };
+                container::Style {
+                    background: Some(if is_dark {
+                        theme::BG_WINDOW_DARK.into()
+                    } else {
+                        theme::BG_WINDOW_LIGHT.into()
+                    }),
+                    ..Default::default()
+                }
+            })
+            .width(Length::Fill)
+            .height(Length::Fill);
         let base_content: Element<'_, Message> = if self.show_add_menu {
             iced::widget::stack![
                 content,
@@ -1362,7 +1432,7 @@ impl NetrayApp {
             .height(Length::Fill)
             .into()
         } else {
-            content
+            content.into()
         };
 
         let base_content = if self.clipboard_import_candidate.is_some() {
@@ -1858,7 +1928,7 @@ impl NetrayApp {
     fn view_profiles_screen(&self) -> Element<'_, Message> {
         let config_locked = self.config_locked();
         let top_bar = row![
-            button(icons::lucide_icon(icons::MENU, 22, Color::WHITE))
+            button(icons::lucide_icon(icons::MENU, 22, self.text_primary()))
                 .padding(6)
                 .style(|_, _| button::Style {
                     background: None,
@@ -1866,16 +1936,16 @@ impl NetrayApp {
                 })
                 .on_press(Message::SetViewMode(ViewMode::SshSettings)),
             Space::with_width(12),
-            text("Netray").size(22).color(Color::WHITE),
+            text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
-            button(icons::lucide_icon(icons::FILE_PLUS, 20, Color::WHITE))
+            button(icons::lucide_icon(icons::FILE_PLUS, 20, self.text_primary()))
                 .padding(6)
                 .style(|_, _| button::Style {
                     background: None,
                     ..Default::default()
                 })
                 .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
-            button(icons::lucide_icon(icons::LINK, 20, Color::WHITE))
+            button(icons::lucide_icon(icons::LINK, 20, self.text_primary()))
                 .padding(6)
                 .style(|_, _| button::Style {
                     background: None,
@@ -1890,7 +1960,7 @@ impl NetrayApp {
                     ..Default::default()
                 })
                 .on_press(Message::MinimizeToTray),
-            button(icons::lucide_icon(icons::MORE_VERTICAL, 20, Color::WHITE))
+            button(icons::lucide_icon(icons::MORE_VERTICAL, 20, self.text_primary()))
                 .padding(6)
                 .style(|_, _| button::Style {
                     background: None,
@@ -2010,7 +2080,7 @@ impl NetrayApp {
                             button(
                                 column![
                                     row![
-                                        text(p.name.as_str()).size(15).color(Color::WHITE),
+                                        text(p.name.as_str()).size(15).color(self.text_primary()),
                                         Space::with_width(Length::Fill),
                                         text(if is_active { "SELECTED" } else { "" })
                                             .size(9)
@@ -2532,11 +2602,15 @@ impl NetrayApp {
 
     fn view_ssh_screen(&self) -> Element<'_, Message> {
         let top_bar = row![
-            button(icons::lucide_icon(icons::BACK, 22, Color::WHITE))
+            button(icons::lucide_icon(icons::BACK, 22, self.text_primary()))
                 .padding(6)
+                .style(|_, _| button::Style {
+                    background: None,
+                    ..Default::default()
+                })
                 .on_press(Message::SetViewMode(ViewMode::Profiles)),
             Space::with_width(12),
-            text("Settings & Routing").size(20).color(Color::WHITE),
+            text("Settings & Routing").size(20).color(self.text_primary()),
         ]
         .align_y(Alignment::Center)
         .padding(iced::Padding {
@@ -2545,6 +2619,105 @@ impl NetrayApp {
             left: 12.0,
             right: 12.0,
         });
+
+        // Theme & Appearance Card
+        let is_dark_active = self.is_dark();
+        let theme_button = |label: &'static str, icon_bytes: &'static [u8], pref: storage::ThemePreference| {
+            let is_selected = self.theme_preference == pref;
+            let (bg, border_color, text_color, icon_color) = if is_selected {
+                (
+                    Some(ACCENT_BLUE.into()),
+                    ACCENT_BLUE_LIGHT,
+                    Color::WHITE,
+                    Color::WHITE,
+                )
+            } else if is_dark_active {
+                (
+                    Some(Color::from_rgb(0.18, 0.20, 0.25).into()),
+                    Color::from_rgb(0.25, 0.28, 0.35),
+                    Color::from_rgb(0.85, 0.88, 0.93),
+                    Color::from_rgb(0.70, 0.75, 0.82),
+                )
+            } else {
+                (
+                    Some(Color::from_rgb(0.92, 0.94, 0.96).into()),
+                    Color::from_rgb(0.82, 0.85, 0.90),
+                    Color::from_rgb(0.15, 0.18, 0.24),
+                    Color::from_rgb(0.25, 0.30, 0.40),
+                )
+            };
+
+            button(
+                row![
+                    icons::lucide_icon(icon_bytes, 14, icon_color),
+                    Space::with_width(6),
+                    text(label).size(12).color(text_color),
+                ]
+                .align_y(Alignment::Center)
+            )
+            .padding(iced::Padding {
+                top: 7.0,
+                bottom: 7.0,
+                left: 10.0,
+                right: 10.0,
+            })
+            .style(move |_, status| button::Style {
+                background: match status {
+                    button::Status::Hovered if !is_selected => Some(Color::from_rgba(0.24, 0.58, 1.0, 0.18).into()),
+                    _ => bg,
+                },
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    width: 1.0,
+                    color: border_color,
+                },
+                ..Default::default()
+            })
+            .on_press(Message::ThemePreferenceChanged(pref))
+        };
+
+        let active_theme_label = match self.theme_preference {
+            storage::ThemePreference::Light => "Light mode active",
+            storage::ThemePreference::Dark => "Dark mode active",
+            storage::ThemePreference::System => {
+                if is_dark_active {
+                    "System theme active (Dark detected)"
+                } else {
+                    "System theme active (Light detected)"
+                }
+            }
+        };
+
+        let theme_card = container(
+            column![
+                row![
+                    icons::lucide_icon(icons::SUN, 16, ACCENT_BLUE_LIGHT),
+                    Space::with_width(6),
+                    text("Theme & Appearance").size(14).color(self.text_primary()),
+                ]
+                .align_y(Alignment::Center),
+                text("Select application theme: Light Mode, Dark Mode, or follow your System Theme.")
+                    .size(12)
+                    .color(TEXT_MUTED),
+                Space::with_height(6),
+                row![
+                    theme_button("Light Mode", icons::SUN, storage::ThemePreference::Light),
+                    theme_button("Dark Mode", icons::MOON, storage::ThemePreference::Dark),
+                    theme_button("System Theme", icons::MONITOR, storage::ThemePreference::System),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                Space::with_height(2),
+                text(active_theme_label)
+                    .size(11)
+                    .color(ACCENT_BLUE_LIGHT),
+            ]
+            .spacing(4)
+            .width(Length::Fill)
+        )
+        .padding(12)
+        .style(form_card_style)
+        .width(Length::Fill);
 
         let chips = apps::extract_app_chips(&self.whitelist_apps);
         let mut chips_col = column![].spacing(6);
@@ -2713,6 +2886,8 @@ impl NetrayApp {
 
         let content = scrollable(
             column![
+                theme_card,
+                Space::with_height(12),
                 ip_card,
                 Space::with_height(12),
                 whitelist_card,
@@ -3031,5 +3206,25 @@ mod performance_tests {
 
         let _ = app.update_message(Message::CloseShareModal);
         assert!(app.share_modal.is_none());
+    }
+
+    #[test]
+    fn test_windows_theme_preference_lifecycle_and_switching() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        assert_eq!(app.theme_preference, storage::ThemePreference::System);
+
+        let _ = app.update_message(Message::ThemePreferenceChanged(storage::ThemePreference::Light));
+        assert_eq!(app.theme_preference, storage::ThemePreference::Light);
+        assert!(!app.is_dark());
+        assert_eq!(app.theme(), Theme::Light);
+
+        let _ = app.update_message(Message::ThemePreferenceChanged(storage::ThemePreference::Dark));
+        assert_eq!(app.theme_preference, storage::ThemePreference::Dark);
+        assert!(app.is_dark());
+        assert_eq!(app.theme(), Theme::Dark);
+
+        let _ = app.update_message(Message::ThemePreferenceChanged(storage::ThemePreference::System));
+        assert_eq!(app.theme_preference, storage::ThemePreference::System);
+        assert!(matches!(app.theme(), Theme::Dark | Theme::Light));
     }
 }

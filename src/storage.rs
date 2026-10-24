@@ -149,6 +149,7 @@ pub struct AppDataRef<'a> {
     pub whitelist_apps: &'a str,
     pub whitelist_urls: &'a str,
     pub instant_import: bool,
+    pub theme_preference: ThemePreference,
 }
 
 impl AppData {
@@ -173,6 +174,7 @@ impl AppData {
             whitelist_apps: &self.whitelist_apps,
             whitelist_urls: &self.whitelist_urls,
             instant_import: self.instant_import,
+            theme_preference: self.theme_preference,
         }
     }
 }
