@@ -226,6 +226,8 @@ pub struct NetrayApp {
     pub ping_in_progress: Option<String>,
     pub ping_results: HashMap<String, String>,
     pub show_add_menu: bool,
+    pub instant_import: bool,
+    pub clipboard_import_candidate: Option<String>,
 
     // TUN & System Routing Mode
     pub enable_tun: bool,
@@ -386,6 +388,8 @@ impl NetrayApp {
             ping_in_progress: None,
             ping_results: HashMap::new(),
             show_add_menu: false,
+            instant_import: saved.instant_import,
+            clipboard_import_candidate: None,
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
@@ -449,6 +453,7 @@ impl NetrayApp {
             sni_host: &self.sni_host,
             whitelist_apps: &self.whitelist_apps,
             whitelist_urls: &self.whitelist_urls,
+            instant_import: self.instant_import,
         };
         storage::save_state_ref(&app_ref)
     }
