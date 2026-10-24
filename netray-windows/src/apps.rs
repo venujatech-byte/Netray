@@ -177,3 +177,56 @@ pub fn extract_binary_name(path_str: &str) -> Option<String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_app_to_whitelist_windows() {
+        let current = "";
+        let res = add_app_to_whitelist(current, "firefox.exe");
+        assert_eq!(res, "firefox.exe");
+
+        let res2 = add_app_to_whitelist(&res, "chrome.exe");
+        assert_eq!(res2, "firefox.exe, chrome.exe");
+
+        // Duplicate addition should be ignored
+        let res3 = add_app_to_whitelist(&res2, "Firefox.EXE");
+        assert_eq!(res3, "firefox.exe, chrome.exe");
+    }
+
+    #[test]
+    fn test_remove_app_from_whitelist_windows() {
+        let current = "curl.exe, firefox.exe, discord.exe, chrome.exe";
+        let res = remove_app_from_whitelist(current, "firefox.exe");
+        assert_eq!(res, "curl.exe, discord.exe, chrome.exe");
+
+        let res2 = remove_app_from_whitelist(&res, "CURL.EXE");
+        assert_eq!(res2, "discord.exe, chrome.exe");
+    }
+
+    #[test]
+    fn test_extract_app_chips_windows() {
+        let raw = "\"curl.exe\"; 'C:\\Program Files\\Firefox\\firefox.exe'\t`discord.exe`\nslack.exe, chrome.exe";
+        let chips = extract_app_chips(raw);
+        assert_eq!(chips, vec!["curl.exe", "firefox.exe", "discord.exe", "slack.exe", "chrome.exe"]);
+    }
+
+    #[test]
+    fn test_extract_binary_name_windows() {
+        assert_eq!(extract_binary_name("C:\\Program Files\\App\\app.exe"), Some("app.exe".to_string()));
+        assert_eq!(extract_binary_name("/usr/bin/slack"), Some("slack".to_string()));
+        assert_eq!(extract_binary_name("\"firefox.exe\""), Some("firefox.exe".to_string()));
+        assert_eq!(extract_binary_name("   "), None);
+    }
+
+    #[test]
+    fn test_curated_windows_apps_catalog() {
+        let apps = get_curated_windows_apps();
+        assert!(!apps.is_empty());
+        assert!(apps.iter().any(|a| a.executable == "firefox.exe"));
+        assert!(apps.iter().any(|a| a.executable == "chrome.exe"));
+    }
+}
+
+

@@ -261,3 +261,56 @@ pub fn extract_binary_name(path_str: &str) -> Option<String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_app_to_whitelist() {
+        let current = "";
+        let res = add_app_to_whitelist(current, "firefox");
+        assert_eq!(res, "firefox");
+
+        let res2 = add_app_to_whitelist(&res, "chrome");
+        assert_eq!(res2, "firefox, chrome");
+
+        // Duplicate addition should be ignored
+        let res3 = add_app_to_whitelist(&res2, "Firefox");
+        assert_eq!(res3, "firefox, chrome");
+    }
+
+    #[test]
+    fn test_remove_app_from_whitelist() {
+        let current = "curl, firefox, discord, chrome";
+        let res = remove_app_from_whitelist(current, "firefox");
+        assert_eq!(res, "curl, discord, chrome");
+
+        let res2 = remove_app_from_whitelist(&res, "CURL");
+        assert_eq!(res2, "discord, chrome");
+    }
+
+    #[test]
+    fn test_extract_app_chips() {
+        let raw = "\"curl\"; '/usr/bin/firefox'\t`discord`\nslack, chrome";
+        let chips = extract_app_chips(raw);
+        assert_eq!(chips, vec!["curl", "firefox", "discord", "slack", "chrome"]);
+    }
+
+    #[test]
+    fn test_extract_binary_name() {
+        assert_eq!(extract_binary_name("/usr/bin/slack"), Some("slack".to_string()));
+        assert_eq!(extract_binary_name("C:\\Program Files\\App\\app.exe"), Some("app.exe".to_string()));
+        assert_eq!(extract_binary_name("\"firefox\""), Some("firefox".to_string()));
+        assert_eq!(extract_binary_name("   "), None);
+    }
+
+    #[test]
+    fn test_curated_apps_catalog() {
+        let apps = get_curated_linux_apps();
+        assert!(!apps.is_empty());
+        assert!(apps.iter().any(|a| a.executable == "firefox"));
+        assert!(apps.iter().any(|a| a.executable == "google-chrome"));
+    }
+}
+
+
