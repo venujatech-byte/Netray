@@ -2000,5 +2000,59 @@ mod tests {
         );
         assert_eq!(extract_protocol_tag(uri), "(SHADOWSOCKS-2022)");
     }
+
+    #[tokio::test]
+    async fn test_socks_generation() {
+        let uri = "socks://user:pass@127.0.0.1:1080#Test-Socks";
+        let config_str = parse_and_generate_xray_config(uri, 10808, 10809, false)
+            .expect("Should generate Socks config");
+        let val: Value = serde_json::from_str(&config_str).unwrap();
+        assert_eq!(val["outbounds"][0]["protocol"], "socks");
+        assert_eq!(
+            val["outbounds"][0]["settings"]["servers"][0]["address"],
+            "127.0.0.1"
+        );
+        assert_eq!(
+            val["outbounds"][0]["settings"]["servers"][0]["port"],
+            1080
+        );
+        assert_eq!(extract_protocol_tag(uri), "(SOCKS5)");
+    }
+
+    #[tokio::test]
+    async fn test_hysteria2_generation() {
+        let uri = "hy2://password123@127.0.0.1:443?insecure=1&sni=example.com#Test-Hy2";
+        let config_str = parse_and_generate_xray_config(uri, 10808, 10809, false)
+            .expect("Should generate Hysteria2 config");
+        let val: Value = serde_json::from_str(&config_str).unwrap();
+        assert_eq!(val["outbounds"][0]["protocol"], "hysteria2");
+        assert_eq!(
+            val["outbounds"][0]["settings"]["servers"][0]["password"],
+            "password123"
+        );
+        assert_eq!(
+            val["outbounds"][0]["streamSettings"]["tlsSettings"]["serverName"],
+            "example.com"
+        );
+        assert_eq!(extract_protocol_tag(uri), "(HYSTERIA2)");
+    }
+
+    #[tokio::test]
+    async fn test_shadowsocksr_generation() {
+        let uri = "ssr://MTI3LjAuMC4xOjgzODg6b3JpZ2luOmFlcy0yNTYtY2ZiOnBsYWluOmNHRnpjM2R2Y21ReE1qTT0vP3JlbWFya3M9VG1WM0xWTlRVUzFPYkdRPQ==";
+        let config_str = parse_and_generate_xray_config(uri, 10808, 10809, false)
+            .expect("Should generate SSR config");
+        let val: Value = serde_json::from_str(&config_str).unwrap();
+        assert_eq!(val["outbounds"][0]["protocol"], "shadowsocks");
+        assert_eq!(
+            val["outbounds"][0]["settings"]["servers"][0]["method"],
+            "aes-256-cfb"
+        );
+        assert_eq!(
+            val["outbounds"][0]["settings"]["servers"][0]["password"],
+            "password123"
+        );
+        assert_eq!(extract_protocol_tag(uri), "(SHADOWSOCKSR)");
+    }
 }
 
