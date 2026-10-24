@@ -1688,4 +1688,27 @@ mod tests {
         assert_eq!(last_rule["inboundTag"][0], "tun-in");
         assert_eq!(last_rule["outboundTag"], "proxy");
     }
+
+    #[tokio::test]
+    async fn test_whitelist_config_validation_with_xray() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@server.example.com:443?encryption=none&security=tls&sni=example.com&type=tcp#SampleNode";
+        let config = parse_and_generate_xray_config_with_whitelist(
+            uri,
+            10808,
+            10809,
+            false,
+            "curl, firefox, discord",
+            "https://mywork.com, *.internal.net, 10.0.0.0/8, 192.168.1.1",
+        )
+        .expect("Should generate whitelist config");
+
+        if let Ok(bin) = find_xray_binary() {
+            let res = test_xray_config(&bin, &config).await;
+            assert!(
+                res.is_ok(),
+                "Xray validation failed for whitelist routing config: {:?}",
+                res
+            );
+        }
+    }
 }
