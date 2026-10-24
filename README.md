@@ -23,6 +23,7 @@ Netray is available with first-class native support for both **Linux** and **Win
 
 - **Xray & V2Ray Core**: Full support for VLESS, VMess, Trojan, and Shadowsocks protocols.
 - **Rootless & Privileged TUN Mode**: Seamless full-system virtual network interface routing with automatic teardown on stop.
+- **Split-Tunneling Whitelist**: Bypass specific applications (e.g. `curl`, `chrome.exe`, `discord`) and URLs/domains/IPs (e.g. `*.internal.net`, `10.0.0.0/8`, `https://company.org`) directly without going through the V2Ray tunnel, working across both TUN and System Proxy modes on Linux and Windows.
 - **System Proxy Integration**: Instant one-click system-wide SOCKS5/HTTP routing across Linux desktops and Windows.
 - **SSH & HTTP Payload Injection**: Custom HTTP payload generator with Bug Host / SNI substitution and Direct SOCKS5 tunneling.
 - **Modern UI**: Clean Material-inspired Dark aesthetic with Blue accent (`#2563EB`) and vector Lucide icons.
