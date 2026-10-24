@@ -225,6 +225,7 @@ pub struct NetrayApp {
     pub node_edit_state: v2ray::NodeEditState,
     pub ping_in_progress: Option<String>,
     pub ping_results: HashMap<String, String>,
+    pub show_add_menu: bool,
 
     // TUN & System Routing Mode
     pub enable_tun: bool,
@@ -269,6 +270,9 @@ pub enum Message {
     DeleteProfile(String),
     ShareProfile(String),
     AddNewProfile,
+    OpenAddMenu,
+    CloseAddMenu,
+    CreateProfileWithType(protocols::ProfileType),
 
     // Node Editor Form fields (Screenshots 2 & 3)
     EditRemarksChanged(String),
@@ -381,6 +385,7 @@ impl NetrayApp {
             node_edit_state: v2ray::NodeEditState::default(),
             ping_in_progress: None,
             ping_results: HashMap::new(),
+            show_add_menu: false,
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
@@ -508,6 +513,8 @@ impl NetrayApp {
                     | Message::EditProfile(_)
                     | Message::DeleteProfile(_)
                     | Message::AddNewProfile
+                    | Message::OpenAddMenu
+                    | Message::CreateProfileWithType(_)
                     | Message::SaveEditedNode
                     | Message::RequestClipboardImport
                     | Message::ClipboardImported(_)
@@ -673,6 +680,38 @@ impl NetrayApp {
                 self.node_edit_state =
                     v2ray::NodeEditState::from_profile(&id, "New VLess Node", "");
                 self.view_mode = ViewMode::EditNode;
+                Task::none()
+            }
+            Message::OpenAddMenu => {
+                if !self.is_running && !self.worker_active {
+                    self.show_add_menu = true;
+                }
+                Task::none()
+            }
+            Message::CloseAddMenu => {
+                self.show_add_menu = false;
+                Task::none()
+            }
+            Message::CreateProfileWithType(proto) => {
+                self.show_add_menu = false;
+                let id = format!(
+                    "node-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+                let (name, config) = proto.generate_template();
+                let profile = storage::V2RayProfile {
+                    id: id.clone(),
+                    name,
+                    config: config.clone(),
+                    created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                };
+                self.v2ray_profiles.push(profile);
+                self.active_profile_id = Some(id);
+                self.v2ray_uri_or_json = config;
+                let _ = self.save_current_state();
                 Task::none()
             }
             Message::EditRemarksChanged(v) => {
@@ -1427,7 +1466,7 @@ impl NetrayApp {
         let sub_bar = row![
             button(icons::lucide_icon(icons::PLUS, 18, Color::WHITE))
                 .padding(6)
-                .on_press_maybe((!config_locked).then(|| Message::AddNewProfile)),
+                .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
             Space::with_width(12),
             text(format!("{} profiles", self.v2ray_profiles.len()))
                 .size(13)
