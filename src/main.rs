@@ -314,6 +314,10 @@ pub enum Message {
     LoadSampleV2Ray,
     RequestClipboardImport,
     ClipboardImported(Option<String>),
+    ToggleInstantImport(bool),
+    ConfirmClipboardImport,
+    CancelClipboardImport,
+    ClipboardCandidateChanged(String),
     ToggleTunMode(bool),
     ToggleSysProxy(bool),
     WhitelistAppsChanged(String),
@@ -523,6 +527,8 @@ impl NetrayApp {
                     | Message::SaveEditedNode
                     | Message::RequestClipboardImport
                     | Message::ClipboardImported(_)
+                    | Message::ConfirmClipboardImport
+                    | Message::ClipboardCandidateChanged(_)
                     | Message::LoadSampleV2Ray
                     | Message::EditRemarksChanged(_)
                     | Message::EditAddressChanged(_)
@@ -813,6 +819,22 @@ impl NetrayApp {
                     LogLevel::Success,
                 );
                 self.view_mode = ViewMode::Profiles;
+                Task::none()
+            }
+            Message::ToggleInstantImport(v) => {
+                self.instant_import = v;
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::CancelClipboardImport => {
+                self.clipboard_import_candidate = None;
+                Task::none()
+            }
+            Message::ClipboardCandidateChanged(v) => {
+                self.clipboard_import_candidate = Some(v);
+                Task::none()
+            }
+            Message::ConfirmClipboardImport => {
                 Task::none()
             }
             Message::RequestClipboardImport => {
