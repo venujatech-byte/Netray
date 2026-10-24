@@ -1,0 +1,206 @@
+//! Application Catalog and Discovery for Whitelist Split Tunneling
+//!
+//! Provides a list of popular applications, scans installed desktop entries,
+//! and helpers to manage whitelist app chips.
+
+use std::path::Path;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppPreset {
+    pub label: String,
+    pub executable: String,
+}
+
+impl std::fmt::Display for AppPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label)
+    }
+}
+
+/// Returns a list of curated popular desktop apps for Linux
+pub fn get_curated_linux_apps() -> Vec<AppPreset> {
+    vec![
+        AppPreset {
+            label: "Google Chrome (google-chrome)".to_string(),
+            executable: "google-chrome".to_string(),
+        },
+        AppPreset {
+            label: "Mozilla Firefox (firefox)".to_string(),
+            executable: "firefox".to_string(),
+        },
+        AppPreset {
+            label: "Brave Browser (brave-browser)".to_string(),
+            executable: "brave-browser".to_string(),
+        },
+        AppPreset {
+            label: "Discord (discord)".to_string(),
+            executable: "discord".to_string(),
+        },
+        AppPreset {
+            label: "Telegram Desktop (telegram-desktop)".to_string(),
+            executable: "telegram-desktop".to_string(),
+        },
+        AppPreset {
+            label: "Steam (steam)".to_string(),
+            executable: "steam".to_string(),
+        },
+        AppPreset {
+            label: "Spotify (spotify)".to_string(),
+            executable: "spotify".to_string(),
+        },
+        AppPreset {
+            label: "Visual Studio Code (code)".to_string(),
+            executable: "code".to_string(),
+        },
+        AppPreset {
+            label: "Slack (slack)".to_string(),
+            executable: "slack".to_string(),
+        },
+        AppPreset {
+            label: "Obsidian (obsidian)".to_string(),
+            executable: "obsidian".to_string(),
+        },
+        AppPreset {
+            label: "cURL (curl)".to_string(),
+            executable: "curl".to_string(),
+        },
+        AppPreset {
+            label: "Git (git)".to_string(),
+            executable: "git".to_string(),
+        },
+    ]
+}
+
+/// Discovers installed desktop applications by reading standard .desktop files
+pub fn discover_installed_linux_apps() -> Vec<AppPreset> {
+    let mut apps = get_curated_linux_apps();
+    let dirs = [
+        "/usr/share/applications",
+        "/usr/local/share/applications",
+    ];
+
+    for dir_path in dirs {
+        let path = Path::new(dir_path);
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let file_path = entry.path();
+                if file_path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+                    if let Ok(content) = std::fs::read_to_string(&file_path) {
+                        if let Some((name, exec)) = parse_desktop_entry(&content) {
+                            if !apps.iter().any(|a| a.executable.eq_ignore_ascii_case(&exec)) {
+                                apps.push(AppPreset {
+                                    label: format!("{name} ({exec})"),
+                                    executable: exec,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort alphabetically by label
+    apps.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    apps
+}
+
+/// Parses a `.desktop` file to extract `Name=` and `Exec=`
+fn parse_desktop_entry(content: &str) -> Option<(String, String)> {
+    let mut name = None;
+    let mut exec = None;
+    let mut in_desktop_entry = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[Desktop Entry]" {
+            in_desktop_entry = true;
+            continue;
+        } else if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_desktop_entry = false;
+        }
+
+        if in_desktop_entry {
+            if trimmed.starts_with("NoDisplay=true") {
+                return None;
+            }
+            if name.is_none() && trimmed.starts_with("Name=") {
+                let val = trimmed.strip_prefix("Name=").unwrap().trim();
+                if !val.is_empty() {
+                    name = Some(val.to_string());
+                }
+            }
+            if exec.is_none() && trimmed.starts_with("Exec=") {
+                let raw_exec = trimmed.strip_prefix("Exec=").unwrap().trim();
+                // Extract first token (the binary name or path)
+                let first_token = raw_exec.split_whitespace().next().unwrap_or("");
+                let bin_name = if let Some((_, n)) = first_token.rsplit_once('/') {
+                    n
+                } else {
+                    first_token
+                };
+                let clean_bin = bin_name.trim_matches(&['"', '\''][..]).trim();
+                if !clean_bin.is_empty() && !clean_bin.starts_with('%') {
+                    exec = Some(clean_bin.to_string());
+                }
+            }
+        }
+    }
+
+    match (name, exec) {
+        (Some(n), Some(e)) => Some((n, e)),
+        _ => None,
+    }
+}
+
+/// Adds an executable process name to the comma-separated whitelist string.
+/// Avoids duplicates (case-insensitive).
+pub fn add_app_to_whitelist(current: &str, new_app: &str) -> String {
+    let new_clean = new_app.trim().trim_matches(&['"', '\'', '`'][..]).trim();
+    if new_clean.is_empty() {
+        return current.to_string();
+    }
+
+    let existing = extract_app_chips(current);
+    if existing.iter().any(|app| app.eq_ignore_ascii_case(new_clean)) {
+        return current.to_string();
+    }
+
+    let mut list = existing;
+    list.push(new_clean.to_string());
+    list.join(", ")
+}
+
+/// Removes an executable process name from the comma-separated whitelist string.
+pub fn remove_app_from_whitelist(current: &str, app_to_remove: &str) -> String {
+    let to_remove = app_to_remove.trim();
+    let existing = extract_app_chips(current);
+    let filtered: Vec<String> = existing
+        .into_iter()
+        .filter(|app| !app.eq_ignore_ascii_case(to_remove))
+        .collect();
+    filtered.join(", ")
+}
+
+/// Extracts clean, trimmed process names from the whitelist string for chip display.
+pub fn extract_app_chips(raw: &str) -> Vec<String> {
+    let mut chips = Vec::new();
+    for token in raw.split(|c| c == ',' || c == ';' || c == '\n' || c == '\r' || c == '\t') {
+        let trimmed = token.trim().trim_matches(&['"', '\'', '`'][..]).trim();
+        if !trimmed.is_empty() {
+            // Strip any directory path components
+            let file_name = if let Some((_, name)) = trimmed.rsplit_once('/') {
+                name
+            } else if let Some((_, name)) = trimmed.rsplit_once('\\') {
+                name
+            } else {
+                trimmed
+            };
+            let file_name = file_name.trim();
+            if !file_name.is_empty() && !chips.iter().any(|c: &String| c.eq_ignore_ascii_case(file_name)) {
+                chips.push(file_name.to_string());
+            }
+        }
+    }
+    chips
+}
