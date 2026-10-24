@@ -186,3 +186,32 @@ impl BadgeKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_windows_all_eleven_protocols_present() {
+        assert_eq!(ProfileType::ALL.len(), 11);
+        let titles: Vec<&'static str> = ProfileType::ALL.iter().map(|p| p.title()).collect();
+        assert_eq!(titles.len(), 11);
+    }
+
+    #[test]
+    fn test_windows_protocol_badges() {
+        assert_eq!(ProfileType::VMess.badge(), BadgeKind::Xray);
+        assert_eq!(ProfileType::Ssh.badge(), BadgeKind::Native);
+        assert_eq!(ProfileType::Hysteria2.badge(), BadgeKind::New);
+    }
+
+    #[test]
+    fn test_windows_templates_generate_non_empty_configs() {
+        for proto in ProfileType::ALL {
+            let (remarks, config) = proto.generate_template();
+            assert!(!remarks.is_empty());
+            assert!(!config.is_empty());
+        }
+    }
+}
+
