@@ -404,7 +404,7 @@ fn assemble_xray_config(
         ]
     });
 
-    if !routing_rules.is_empty() {
+    if !routing_rules.is_empty() && !enable_tun {
         config["routing"] = json!({
             "domainStrategy": "IPIfNonMatch",
             "rules": routing_rules
@@ -1634,5 +1634,53 @@ mod tests {
                     i.iter().any(|item| item == "10.0.0.1")
                 })
         }));
+    }
+
+    #[test]
+    fn test_whitelist_processes_parsing() {
+        let input = "curl, /usr/bin/firefox, C:\\Program Files\\App\\discord.exe\nspotify";
+        let procs = parse_whitelist_processes(input);
+        assert_eq!(procs, vec!["curl", "firefox", "discord.exe", "spotify"]);
+    }
+
+    #[test]
+    fn test_whitelist_routing_rules_tun_mode() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=tcp#TunTestNode";
+        let config_str = parse_and_generate_xray_config_with_whitelist(
+            uri,
+            10808,
+            10809,
+            true,
+            "curl, chrome.exe",
+            "https://internal.site, 192.168.0.0/16",
+        )
+        .expect("Should generate TUN config");
+        let val: Value = serde_json::from_str(&config_str).unwrap();
+
+        assert!(val["inbounds"].as_array().unwrap().iter().any(|i| i["protocol"] == "tun"));
+        let rules = val["routing"]["rules"].as_array().unwrap();
+
+        // Rule 0 is DNS routing to dns tag
+        assert_eq!(rules[0]["port"], 53);
+        assert_eq!(rules[0]["outboundTag"], "netray-dns");
+
+        // Subsequent rules include direct whitelist rules
+        assert!(rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["process"].as_array().map_or(false, |p| {
+                    p.iter().any(|item| item == "curl") && p.iter().any(|item| item == "chrome.exe")
+                })
+        }));
+        assert!(rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["domain"].as_array().map_or(false, |d| {
+                    d.iter().any(|item| item == "domain:internal.site")
+                })
+        }));
+
+        // Final rule routes tun-in traffic to primary proxy tag
+        let last_rule = rules.last().unwrap();
+        assert_eq!(last_rule["inboundTag"][0], "tun-in");
+        assert_eq!(last_rule["outboundTag"], "proxy");
     }
 }
