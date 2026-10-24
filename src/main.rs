@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod icons;
+pub mod protocols;
 pub mod storage;
 pub mod sysproxy;
 mod tunnel;
