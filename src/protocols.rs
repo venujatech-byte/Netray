@@ -131,7 +131,10 @@ impl ProfileType {
                 "New DNSTT + SSH Node".to_string(),
                 "dnstt+ssh://ns.example.com:53/?pubkey=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef&ssh=user:password123@127.0.0.1:22#New-DNSTT-SSH-Node".to_string(),
             ),
-            _ => (format!("New {}", self.title()), String::new()),
+            ProfileType::Hysteria2 => (
+                "New Hysteria2 Node".to_string(),
+                "hy2://password123@127.0.0.1:443?insecure=1&sni=example.com#New-Hysteria2-Node".to_string(),
+            ),
         }
     }
 
