@@ -370,6 +370,9 @@ pub enum Message {
     EditSniChanged(String),
     EditFingerprintChanged(String),
     EditAlpnChanged(String),
+    EditPathChanged(String),
+    EditPublicKeyChanged(String),
+    EditShortIdChanged(String),
     SaveEditedNode,
     CancelEditNode,
 
@@ -659,6 +662,9 @@ impl NetrayApp {
                     | Message::EditSniChanged(_)
                     | Message::EditFingerprintChanged(_)
                     | Message::EditAlpnChanged(_)
+                    | Message::EditPathChanged(_)
+                    | Message::EditPublicKeyChanged(_)
+                    | Message::EditShortIdChanged(_)
             )
         {
             return Task::none();
@@ -846,8 +852,9 @@ impl NetrayApp {
                         .unwrap_or_default()
                         .as_millis()
                 );
+                let (name, config) = protocols::ProfileType::VLess.generate_template();
                 self.node_edit_state =
-                    v2ray::NodeEditState::from_profile(&id, "New VLess Node", "");
+                    v2ray::NodeEditState::new_for_setup(&id, "VLess", &name, &config);
                 self.view_mode = ViewMode::EditNode;
                 Task::none()
             }
@@ -871,24 +878,14 @@ impl NetrayApp {
                         .as_millis()
                 );
                 let (name, config) = proto.generate_template();
-                let profile = storage::V2RayProfile {
-                    id: id.clone(),
-                    name,
-                    config: config.clone(),
-                    created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                };
+                self.node_edit_state =
+                    v2ray::NodeEditState::new_for_setup(&id, proto.title(), &name, &config);
                 self.push_log(
                     "Netray",
-                    format!("Added new {} profile '{}'.", proto.title(), profile.name),
+                    format!("Opening setup for new {} profile...", proto.title()),
                     LogLevel::Info,
                 );
-                self.active_profile_id = Some(id);
-                self.v2ray_uri_or_json = config;
-                self.node_edit_state =
-                    v2ray::NodeEditState::from_profile(&profile.id, &profile.name, &profile.config);
-                self.v2ray_profiles.push(profile);
-                self.sync_profile_display_cache();
-                let _ = self.save_current_state();
+                self.view_mode = ViewMode::EditNode;
                 Task::none()
             }
             Message::EditRemarksChanged(v) => {
@@ -939,14 +936,39 @@ impl NetrayApp {
                 self.node_edit_state.alpn = v;
                 Task::none()
             }
+            Message::EditPathChanged(v) => {
+                self.node_edit_state.path = v;
+                Task::none()
+            }
+            Message::EditPublicKeyChanged(v) => {
+                self.node_edit_state.public_key = v;
+                Task::none()
+            }
+            Message::EditShortIdChanged(v) => {
+                self.node_edit_state.short_id = v;
+                Task::none()
+            }
             Message::CancelEditNode => {
+                if self.node_edit_state.is_new {
+                    self.push_log(
+                        "Netray",
+                        "Cancelled new profile setup.",
+                        LogLevel::Info,
+                    );
+                }
+                self.node_edit_state = v2ray::NodeEditState::default();
                 self.view_mode = ViewMode::Profiles;
                 Task::none()
             }
             Message::SaveEditedNode => {
+                let is_new = self.node_edit_state.is_new;
                 let id = self.node_edit_state.id.clone();
-                let name = self.node_edit_state.remarks.trim().to_string();
-                let uri = self.node_edit_state.to_vless_uri();
+                let config = self.node_edit_state.to_config();
+                let name = if self.node_edit_state.remarks.trim().is_empty() {
+                    v2ray::extract_node_name(&config)
+                } else {
+                    self.node_edit_state.remarks.trim().to_string()
+                };
                 self.ping_results.remove(&id);
                 if self.ping_in_progress.as_deref() == Some(&id) {
                     self.ping_in_progress = None;
@@ -954,26 +976,35 @@ impl NetrayApp {
 
                 if let Some(existing) = self.v2ray_profiles.iter_mut().find(|p| p.id == id) {
                     existing.name = name.clone();
-                    existing.config = uri.clone();
+                    existing.config = config.clone();
                 } else {
                     let profile = storage::V2RayProfile {
                         id: id.clone(),
                         name: name.clone(),
-                        config: uri.clone(),
+                        config: config.clone(),
                         created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
                     };
                     self.v2ray_profiles.insert(0, profile);
                 }
 
                 self.active_profile_id = Some(id);
-                self.v2ray_uri_or_json = uri;
+                self.v2ray_uri_or_json = config;
                 self.sync_profile_display_cache();
                 let _ = self.save_current_state();
-                self.push_log(
-                    "Config",
-                    format!("Saved node '{}'.", name),
-                    LogLevel::Success,
-                );
+                if is_new {
+                    self.push_log(
+                        "Config",
+                        format!("Setup complete: added profile '{}'.", name),
+                        LogLevel::Success,
+                    );
+                } else {
+                    self.push_log(
+                        "Config",
+                        format!("Saved node '{}'.", name),
+                        LogLevel::Success,
+                    );
+                }
+                self.node_edit_state = v2ray::NodeEditState::default();
                 self.view_mode = ViewMode::Profiles;
                 Task::none()
             }
@@ -2348,12 +2379,30 @@ impl NetrayApp {
     }
 
     fn view_edit_screen(&self) -> Element<'_, Message> {
+        let proto_name = match self.node_edit_state.protocol.to_lowercase().as_str() {
+            "vless" => "VLess",
+            "vmess" => "VMess",
+            "trojan" => "Trojan",
+            "socks" => "Socks",
+            "shadowsocks" | "ss" => "Shadowsocks",
+            "shadowsocksr" | "ssr" => "ShadowsocksR",
+            "hysteria2" | "hy2" => "Hysteria2",
+            "wireguard" => "WireGuard",
+            "raw" => "RAW Config",
+            _ => "VLess",
+        };
+        let screen_title = if self.node_edit_state.is_new {
+            format!("Setup {}", proto_name)
+        } else {
+            format!("Edit {}", proto_name)
+        };
+
         let top_bar = row![
             button(icons::lucide_icon(icons::CLOSE, 22, Color::WHITE))
                 .padding(6)
                 .on_press(Message::CancelEditNode),
             Space::with_width(16),
-            text("Edit VLess").size(20).color(Color::WHITE),
+            text(screen_title).size(20).color(Color::WHITE),
             Space::with_width(Length::Fill),
             button(icons::lucide_icon(icons::CHECK, 24, ACCENT_BLUE_LIGHT))
                 .padding(6)
@@ -2485,6 +2534,19 @@ impl NetrayApp {
         .width(Length::Fill)
         .style(form_card_style);
 
+        let path_card = container(
+            column![
+                text("Path / Service name").size(11).color(TEXT_MUTED),
+                text_input("/path (e.g. /ws)", &self.node_edit_state.path)
+                    .on_input(Message::EditPathChanged)
+                    .padding(6),
+            ]
+            .spacing(4),
+        )
+        .padding(10)
+        .width(Length::Fill)
+        .style(form_card_style);
+
         let tls_card = container(
             column![
                 text("TLS type").size(11).color(TEXT_MUTED),
@@ -2500,6 +2562,49 @@ impl NetrayApp {
         .padding(10)
         .width(Length::Fill)
         .style(form_card_style);
+
+        let mut form_items = vec![
+            remarks_card.into(),
+            addr_port_card.into(),
+            encrypt_card.into(),
+            flow_card.into(),
+            uuid_card.into(),
+            transport_card.into(),
+            header_card.into(),
+            path_card.into(),
+            tls_card.into(),
+        ];
+
+        if self.node_edit_state.tls_type == "reality" {
+            let reality_row = row![
+                container(
+                    column![
+                        text("Reality Public Key").size(11).color(TEXT_MUTED),
+                        text_input("PublicKey", &self.node_edit_state.public_key)
+                            .on_input(Message::EditPublicKeyChanged)
+                            .padding(6),
+                    ]
+                    .spacing(4)
+                )
+                .padding(10)
+                .width(Length::FillPortion(2))
+                .style(form_card_style),
+                Space::with_width(10),
+                container(
+                    column![
+                        text("Short ID").size(11).color(TEXT_MUTED),
+                        text_input("ShortId", &self.node_edit_state.short_id)
+                            .on_input(Message::EditShortIdChanged)
+                            .padding(6),
+                    ]
+                    .spacing(4)
+                )
+                .padding(10)
+                .width(Length::FillPortion(1))
+                .style(form_card_style),
+            ];
+            form_items.push(reality_row.into());
+        }
 
         let sni_card = container(
             column![
@@ -2546,28 +2651,20 @@ impl NetrayApp {
         .width(Length::Fill)
         .style(form_card_style);
 
+        form_items.push(sni_card.into());
+        form_items.push(fp_card.into());
+        form_items.push(alpn_card.into());
+        form_items.push(Space::with_height(20).into());
+
         let form_content = scrollable(
-            column![
-                remarks_card,
-                addr_port_card,
-                encrypt_card,
-                flow_card,
-                uuid_card,
-                transport_card,
-                header_card,
-                tls_card,
-                sni_card,
-                fp_card,
-                alpn_card,
-                Space::with_height(20),
-            ]
-            .spacing(10)
-            .padding(iced::Padding {
-                top: 0.0,
-                bottom: 20.0,
-                left: 16.0,
-                right: 16.0,
-            }),
+            column(form_items)
+                .spacing(10)
+                .padding(iced::Padding {
+                    top: 0.0,
+                    bottom: 20.0,
+                    left: 16.0,
+                    right: 16.0,
+                }),
         )
         .height(Length::Fill);
 
@@ -3179,12 +3276,35 @@ mod performance_tests {
         let initial_count = app.v2ray_profiles.len();
         for (i, proto) in protocols::ProfileType::ALL.iter().enumerate() {
             let _ = app.update_message(Message::CreateProfileWithType(*proto));
-            assert_eq!(app.v2ray_profiles.len(), initial_count + i + 1);
-            let created = app.v2ray_profiles.last().unwrap();
-            assert_eq!(created.name, proto.generate_template().0);
-            assert_eq!(app.active_profile_id, Some(created.id.clone()));
+            assert_eq!(app.v2ray_profiles.len(), initial_count + i);
+            assert_eq!(app.view_mode, ViewMode::EditNode);
+            assert!(app.node_edit_state.is_new);
             assert!(!app.show_add_menu);
+
+            let _ = app.update_message(Message::SaveEditedNode);
+            assert_eq!(app.v2ray_profiles.len(), initial_count + i + 1);
+            assert_eq!(app.view_mode, ViewMode::Profiles);
+            let created = &app.v2ray_profiles[0];
+            assert_eq!(app.active_profile_id, Some(created.id.clone()));
         }
+    }
+
+    #[test]
+    fn test_windows_create_profile_cancel_setup_flow() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let initial_count = app.v2ray_profiles.len();
+        let _ = app.update_message(Message::OpenAddMenu);
+        assert!(app.show_add_menu);
+        let _ = app.update_message(Message::CreateProfileWithType(protocols::ProfileType::VLess));
+        assert!(!app.show_add_menu);
+        assert_eq!(app.view_mode, ViewMode::EditNode);
+        assert!(app.node_edit_state.is_new);
+        assert_eq!(app.v2ray_profiles.len(), initial_count);
+
+        let _ = app.update_message(Message::CancelEditNode);
+        assert_eq!(app.view_mode, ViewMode::Profiles);
+        assert_eq!(app.v2ray_profiles.len(), initial_count);
+        assert!(!app.node_edit_state.is_new);
     }
 
     #[test]
@@ -3300,6 +3420,7 @@ mod performance_tests {
 
         // 2. Add profile and verify cache updates automatically
         let _ = app.update_message(Message::CreateProfileWithType(protocols::ProfileType::VLess));
+        let _ = app.update_message(Message::SaveEditedNode);
         let created_id = app.active_profile_id.clone().unwrap();
         assert!(app.profile_display_cache.contains_key(&created_id));
 
