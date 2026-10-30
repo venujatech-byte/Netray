@@ -4265,5 +4265,115 @@ mod performance_tests {
         let _ = app.update_message(Message::SudoAuthResult(Ok(())));
         assert!(app.sudo_auth_modal.is_none());
     }
+
+    #[test]
+    fn test_windows_auto_reconnect_error_lifecycle_and_actions() {
+        let mut data = storage::AppData::default();
+        data.auto_reconnect = true;
+        let (mut app, _) = NetrayApp::from_saved(data);
+
+        assert!(app.auto_reconnect);
+        assert_eq!(app.reconnect_attempts, 0);
+        assert!(app.error_notification.is_none());
+        assert!(!app.user_stopped);
+
+        // 1. Simulate active tunnel
+        app.is_running = true;
+        app.worker_active = true;
+
+        // 2. Unexpected error arrival in logs triggers auto-reconnect
+        let _ = app.update_message(Message::NewLog(LogEntry {
+            timestamp: Local::now().format("%H:%M:%S").to_string(),
+            source: "Error".to_string(),
+            message: "Connection check failed: Latency endpoint returned HTTP 503".to_string(),
+            level: LogLevel::Error,
+        }));
+        let _ = app.update_message(Message::NewLog(LogEntry {
+            timestamp: Local::now().format("%H:%M:%S").to_string(),
+            source: "Supervisor".to_string(),
+            message: "Tunnel is offline.".to_string(),
+            level: LogLevel::Warn,
+        }));
+
+        assert_eq!(app.reconnect_attempts, 1);
+        let notif = app.error_notification.as_ref().expect("Notification toast should be present");
+        assert_eq!(notif.attempt, 1);
+        assert_eq!(notif.max_attempts, MAX_RECONNECT_ATTEMPTS);
+        assert_eq!(notif.countdown_secs, Some(RECONNECT_COUNTDOWN_SECONDS));
+        assert!(!notif.is_reconnecting);
+
+        // 3. Verify view renders toast banner without error
+        drop(app.view());
+
+        // 4. Tick countdown: 3 -> 2 -> 1
+        let _ = app.update_message(Message::ReconnectCountdownTick);
+        assert_eq!(app.error_notification.as_ref().unwrap().countdown_secs, Some(2));
+        let _ = app.update_message(Message::ReconnectCountdownTick);
+        assert_eq!(app.error_notification.as_ref().unwrap().countdown_secs, Some(1));
+
+        // 5. Final tick reaches zero: triggers reconnection
+        let _ = app.update_message(Message::ReconnectCountdownTick);
+        let notif = app.error_notification.as_ref().unwrap();
+        assert_eq!(notif.countdown_secs, None);
+        assert!(notif.is_reconnecting);
+        assert!(app.worker_active);
+        drop(app.view());
+
+        // 6. Successful connection clears notification and resets attempt counter
+        let _ = app.update_message(Message::NewLog(LogEntry {
+            timestamp: Local::now().format("%H:%M:%S").to_string(),
+            source: "Supervisor".to_string(),
+            message: "Tunnel ready · HTTP 204 through proxy in 64 ms.".to_string(),
+            level: LogLevel::Success,
+        }));
+        assert!(app.is_running);
+        assert_eq!(app.reconnect_attempts, 0);
+        assert!(app.error_notification.is_none());
+
+        // 7. Manual cancel stops auto-reconnect and marks user_stopped = true
+        app.is_running = false;
+        let _ = app.update_message(Message::TriggerErrorAutoReconnect("Process crashed".into()));
+        assert!(app.error_notification.is_some());
+        let _ = app.update_message(Message::CancelAutoReconnect);
+        assert!(app.error_notification.is_none());
+        assert_eq!(app.reconnect_attempts, 0);
+        assert!(app.user_stopped);
+
+        // 8. While user_stopped is true, incoming errors must NOT trigger auto-reconnect
+        let _ = app.update_message(Message::NewLog(LogEntry {
+            timestamp: Local::now().format("%H:%M:%S").to_string(),
+            source: "Error".to_string(),
+            message: "Core process exited with: 1".to_string(),
+            level: LogLevel::Error,
+        }));
+        assert!(app.error_notification.is_none());
+        assert_eq!(app.reconnect_attempts, 0);
+
+        // 9. Manual start / retry resets user_stopped
+        app.user_stopped = false;
+        let _ = app.update_message(Message::TriggerErrorAutoReconnect("Timeout error".into()));
+        assert!(app.error_notification.is_some());
+        let _ = app.update_message(Message::ExecuteAutoReconnect);
+        assert!(app.error_notification.as_ref().unwrap().is_reconnecting);
+        assert_eq!(app.error_notification.as_ref().unwrap().countdown_secs, None);
+
+        // 10. Dismiss notification
+        let _ = app.update_message(Message::DismissNotification);
+        assert!(app.error_notification.is_none());
+
+        // 11. Intentional user disconnect does NOT trigger auto-reconnect
+        app.is_running = true;
+        app.worker_active = true;
+        let _ = app.update_message(Message::ToggleTunnel); // User stops tunnel
+        assert!(!app.is_running);
+        assert!(app.user_stopped);
+        assert!(app.error_notification.is_none());
+
+        // 12. ToggleAutoReconnect setting persistence
+        let _ = app.update_message(Message::ToggleAutoReconnect(false));
+        assert!(!app.auto_reconnect);
+        let _ = app.update_message(Message::ToggleAutoReconnect(true));
+        assert!(app.auto_reconnect);
+    }
 }
 
