@@ -272,7 +272,7 @@ fn whitelist_chip_style(_: &Theme) -> container::Style {
     container::Style {
         background: Some(Color::from_rgba(0.24, 0.58, 1.0, 0.18).into()),
         border: iced::Border {
-            radius: 12.0.into(),
+            radius: 999.0.into(),
             width: 1.0,
             color: Color::from_rgba(0.24, 0.58, 1.0, 0.45),
         },
@@ -1964,33 +1964,31 @@ impl NetrayApp {
         });
 
         let cancel_btn = button(text("CANCEL").size(13).color(CORAL_ACCENT))
-            .padding([8, 14])
+            .padding([8, 18])
             .style(|_, status| button::Style {
                 background: match status {
                     button::Status::Hovered | button::Status::Pressed => {
-                        Some(Color::from_rgba(0.98, 0.52, 0.48, 0.12).into())
+                        Some(Color::from_rgba(0.98, 0.52, 0.48, 0.14).into())
                     }
                     _ => None,
                 },
                 border: iced::Border {
-                    radius: 6.0.into(),
+                    radius: 999.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
             })
             .on_press(Message::CancelClipboardImport);
 
-        let import_btn = button(text("IMPORT").size(13).color(CORAL_ACCENT))
-            .padding([8, 14])
+        let import_btn = button(text("IMPORT").size(13).color(Color::WHITE))
+            .padding([8, 18])
             .style(|_, status| button::Style {
                 background: match status {
-                    button::Status::Hovered | button::Status::Pressed => {
-                        Some(Color::from_rgba(0.98, 0.52, 0.48, 0.18).into())
-                    }
-                    _ => None,
+                    button::Status::Hovered => Some(Color::from_rgb(0.99, 0.60, 0.56).into()),
+                    _ => Some(CORAL_ACCENT.into()),
                 },
                 border: iced::Border {
-                    radius: 6.0.into(),
+                    radius: 999.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -2106,12 +2104,12 @@ impl NetrayApp {
         .style(|_, status| button::Style {
             background: match status {
                 button::Status::Hovered | button::Status::Pressed => {
-                    Some(Color::from_rgba(1.0, 1.0, 1.0, 0.08).into())
+                    Some(Color::from_rgba(1.0, 1.0, 1.0, 0.12).into())
                 }
                 _ => None,
             },
             border: iced::Border {
-                radius: 6.0.into(),
+                radius: 999.0.into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -2137,7 +2135,7 @@ impl NetrayApp {
         .style(|_| container::Style {
             background: Some(Color::from_rgb(0.10, 0.11, 0.14).into()),
             border: iced::Border {
-                radius: 8.0.into(),
+                radius: 12.0.into(),
                 width: 1.0,
                 color: Color::from_rgb(0.20, 0.22, 0.28),
             },
@@ -2163,12 +2161,12 @@ impl NetrayApp {
         .style(move |_, status| button::Style {
             background: match status {
                 button::Status::Hovered | button::Status::Pressed => {
-                    Some(Color::from_rgba(1.0, 1.0, 1.0, 0.12).into())
+                    Some(Color::from_rgba(1.0, 1.0, 1.0, 0.14).into())
                 }
                 _ => Some(Color::from_rgb(0.20, 0.22, 0.27).into()),
             },
             border: iced::Border {
-                radius: 16.0.into(),
+                radius: 999.0.into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -2184,7 +2182,7 @@ impl NetrayApp {
         .style(|_| container::Style {
             background: Some(Color::from_rgba(0.98, 0.52, 0.48, 0.16).into()),
             border: iced::Border {
-                radius: 16.0.into(),
+                radius: 999.0.into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -2195,8 +2193,18 @@ impl NetrayApp {
             protect_btn,
             standard_pill,
             button(text("Close").size(12).color(TEXT_MUTED))
-                .padding([6, 12])
-                .style(|_, _| button::Style::default())
+                .padding([6, 14])
+                .style(|_, status| button::Style {
+                    background: match status {
+                        button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.08).into()),
+                        _ => None,
+                    },
+                    border: iced::Border {
+                        radius: 999.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
                 .on_press(Message::CloseShareModal),
         ]
         .spacing(8)
@@ -2217,7 +2225,7 @@ impl NetrayApp {
         .style(|_| container::Style {
             background: Some(Color::from_rgb(0.14, 0.16, 0.20).into()),
             border: iced::Border {
-                radius: 16.0.into(),
+                radius: 20.0.into(),
                 width: 1.0,
                 color: Color::from_rgb(0.24, 0.27, 0.35),
             },
@@ -2238,6 +2246,7 @@ impl NetrayApp {
     }
 
     fn view_add_profile_modal(&self) -> Element<'_, Message> {
+        let is_dark = self.is_dark();
         let mut list = column![].spacing(3);
 
         for proto in protocols::ProfileType::ALL {
@@ -2250,13 +2259,13 @@ impl NetrayApp {
             .padding(iced::Padding {
                 top: 2.0,
                 bottom: 2.0,
-                left: 6.0,
-                right: 6.0,
+                left: 8.0,
+                right: 8.0,
             })
             .style(move |_| container::Style {
                 background: Some(badge.bg_color().into()),
                 border: iced::Border {
-                    radius: 4.0.into(),
+                    radius: 999.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -2281,12 +2290,12 @@ impl NetrayApp {
             .style(|_, status| button::Style {
                 background: match status {
                     button::Status::Hovered | button::Status::Pressed => {
-                        Some(Color::from_rgba(1.0, 1.0, 1.0, 0.09).into())
+                        Some(Color::from_rgba(1.0, 1.0, 1.0, 0.10).into())
                     }
                     _ => None,
                 },
                 border: iced::Border {
-                    radius: 6.0.into(),
+                    radius: 10.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -2299,20 +2308,16 @@ impl NetrayApp {
         let header = row![
             text("Add Profile").size(15).color(Color::WHITE),
             Space::with_width(Length::Fill),
-            button(icons::lucide_icon(icons::CLOSE, 16, Color::WHITE))
-                .padding(4)
-                .style(|_, status| button::Style {
-                    background: match status {
-                        button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.1).into()),
-                        _ => None,
-                    },
-                    border: iced::Border {
-                        radius: 12.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .on_press(Message::CloseAddMenu),
+            button(
+                container(icons::lucide_icon(icons::CLOSE, 16, Color::WHITE))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+            )
+            .width(28)
+            .height(28)
+            .padding(0)
+            .style(rounded_icon_btn_style(is_dark, true))
+            .on_press(Message::CloseAddMenu),
         ]
         .align_y(Alignment::Center);
 
@@ -2327,11 +2332,11 @@ impl NetrayApp {
         )
         .width(Length::Fixed(300.0))
         .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.16, 0.17, 0.19).into()),
+            background: Some(Color::from_rgb(0.14, 0.16, 0.22).into()),
             border: iced::Border {
                 color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
                 width: 1.0,
-                radius: 12.0.into(),
+                radius: 18.0.into(),
             },
             ..Default::default()
         });
