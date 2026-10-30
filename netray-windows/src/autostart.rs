@@ -1,7 +1,5 @@
 //! System Startup / Autostart Management for Netray Windows
 
-use std::path::PathBuf;
-
 pub fn set_run_at_startup(enable: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {

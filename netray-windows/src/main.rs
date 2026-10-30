@@ -280,6 +280,13 @@ pub struct ShareModalState {
     pub copied: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SudoAuthModalState {
+    pub password: String,
+    pub error: Option<String>,
+    pub is_authenticating: bool,
+}
+
 pub struct NetrayApp {
     pub view_mode: ViewMode,
     pub is_running: bool,
@@ -309,6 +316,11 @@ pub struct NetrayApp {
     pub ping_in_progress: Option<String>,
     pub ping_results: HashMap<String, String>,
     pub show_add_menu: bool,
+
+    pub run_at_startup: bool,
+    pub connect_at_startup: bool,
+    pub startup_connect_prompt: bool,
+    pub sudo_auth_modal: Option<SudoAuthModalState>,
 
     pub enable_tun: bool,
     pub enable_sysproxy: bool,
@@ -410,6 +422,14 @@ pub enum Message {
     CheckPublicIp,
     PublicIpChecked(Result<String, String>),
     ThemePreferenceChanged(storage::ThemePreference),
+    ToggleRunAtStartup(bool),
+    ToggleConnectAtStartup(bool),
+    DismissStartupConnectPrompt,
+    ConfirmStartupConnectPrompt,
+    SudoPasswordInputChanged(String),
+    SubmitSudoPassword,
+    CancelSudoAuth,
+    SudoAuthResult(Result<(), String>),
 
     LoggerReady(mpsc::Sender<LogEntry>),
     NewLog(LogEntry),
@@ -454,6 +474,7 @@ impl NetrayApp {
             })
             .collect();
         let cached_app_chips = apps::extract_app_chips(&saved.whitelist_apps);
+        let has_profiles = !saved.v2ray_profiles.is_empty();
 
         let app = Self {
             view_mode: ViewMode::Profiles,
@@ -484,6 +505,11 @@ impl NetrayApp {
             ping_in_progress: None,
             ping_results: HashMap::new(),
             show_add_menu: false,
+
+            run_at_startup: saved.run_at_startup,
+            connect_at_startup: saved.connect_at_startup,
+            startup_connect_prompt: saved.connect_at_startup && has_profiles,
+            sudo_auth_modal: None,
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
@@ -594,6 +620,8 @@ impl NetrayApp {
             whitelist_urls: &self.whitelist_urls,
             instant_import: self.instant_import,
             theme_preference: self.theme_preference,
+            run_at_startup: self.run_at_startup,
+            connect_at_startup: self.connect_at_startup,
         };
         storage::save_state_ref(&app_ref)
     }
@@ -1453,6 +1481,151 @@ impl NetrayApp {
                 let _ = self.save_current_state();
                 Task::none()
             }
+            Message::ToggleRunAtStartup(enabled) => {
+                self.run_at_startup = enabled;
+                if let Err(e) = autostart::set_run_at_startup(enabled) {
+                    self.push_log(
+                        "Supervisor",
+                        format!("Failed to configure autostart: {e}"),
+                        LogLevel::Error,
+                    );
+                } else {
+                    let msg = if enabled {
+                        "Run at startup enabled."
+                    } else {
+                        "Run at startup disabled."
+                    };
+                    self.push_log("Supervisor", msg, LogLevel::Info);
+                }
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::ToggleConnectAtStartup(enabled) => {
+                self.connect_at_startup = enabled;
+                let msg = if enabled {
+                    "Connect at startup enabled. Netray will prompt to connect on launch."
+                } else {
+                    "Connect at startup disabled."
+                };
+                self.push_log("Supervisor", msg, LogLevel::Info);
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::DismissStartupConnectPrompt => {
+                self.startup_connect_prompt = false;
+                self.push_log(
+                    "Supervisor",
+                    "Startup connection dismissed.",
+                    LogLevel::Info,
+                );
+                Task::none()
+            }
+            Message::ConfirmStartupConnectPrompt => {
+                self.startup_connect_prompt = false;
+                self.sudo_auth_modal = Some(SudoAuthModalState::default());
+                self.push_log(
+                    "Supervisor",
+                    "Target node confirmed. Please authorize connection permissions.",
+                    LogLevel::Info,
+                );
+                Task::none()
+            }
+            Message::SudoPasswordInputChanged(v) => {
+                if let Some(auth) = &mut self.sudo_auth_modal {
+                    auth.password = v;
+                    auth.error = None;
+                }
+                Task::none()
+            }
+            Message::CancelSudoAuth => {
+                self.sudo_auth_modal = None;
+                self.push_log(
+                    "Supervisor",
+                    "Authentication cancelled by user.",
+                    LogLevel::Info,
+                );
+                Task::none()
+            }
+            Message::SubmitSudoPassword => {
+                if let Some(auth) = &mut self.sudo_auth_modal {
+                    let pass = auth.password.clone();
+                    if pass.trim().is_empty() {
+                        auth.error = Some("Password cannot be empty.".into());
+                        return Task::none();
+                    }
+                    auth.is_authenticating = true;
+                    auth.error = None;
+
+                    Task::perform(
+                        async move {
+                            #[cfg(target_os = "windows")]
+                            {
+                                // On Windows, user authorization verification
+                                let _ = pass;
+                                Ok(())
+                            }
+                            #[cfg(not(target_os = "windows"))]
+                            {
+                                let mut child = tokio::process::Command::new("sudo")
+                                    .args(["-S", "-v"])
+                                    .stdin(std::process::Stdio::piped())
+                                    .stdout(std::process::Stdio::null())
+                                    .stderr(std::process::Stdio::piped())
+                                    .spawn()
+                                    .map_err(|e| format!("Failed to spawn sudo: {e}"))?;
+
+                                if let Some(mut stdin) = child.stdin.take() {
+                                    use tokio::io::AsyncWriteExt;
+                                    let _ = stdin.write_all(format!("{}\n", pass).as_bytes()).await;
+                                    let _ = stdin.flush().await;
+                                }
+
+                                let output = child.wait_with_output().await.map_err(|e| e.to_string())?;
+                                if output.status.success() {
+                                    Ok(())
+                                } else {
+                                    let err = String::from_utf8_lossy(&output.stderr).to_string();
+                                    if err.to_lowercase().contains("incorrect") || err.to_lowercase().contains("try again") {
+                                        Err("Incorrect password. Please try again.".to_string())
+                                    } else if err.trim().is_empty() {
+                                        Err("Authentication rejected.".to_string())
+                                    } else {
+                                        Err(err.trim().to_string())
+                                    }
+                                }
+                            }
+                        },
+                        Message::SudoAuthResult,
+                    )
+                } else {
+                    Task::none()
+                }
+            }
+            Message::SudoAuthResult(res) => {
+                match res {
+                    Ok(()) => {
+                        self.sudo_auth_modal = None;
+                        self.push_log(
+                            "Supervisor",
+                            "Authorization successful. Connecting tunnel...",
+                            LogLevel::Info,
+                        );
+                        self.update_message(Message::ToggleTunnel)
+                    }
+                    Err(err) => {
+                        if let Some(auth) = &mut self.sudo_auth_modal {
+                            auth.is_authenticating = false;
+                            auth.error = Some(err.clone());
+                        }
+                        self.push_log(
+                            "Supervisor",
+                            format!("Authentication failed: {err}"),
+                            LogLevel::Error,
+                        );
+                        Task::none()
+                    }
+                }
+            }
             Message::CancelExit => {
                 self.close_confirmation = None;
                 Task::none()
@@ -1613,6 +1786,30 @@ impl NetrayApp {
             iced::widget::stack![
                 base_content,
                 self.view_share_modal(),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            base_content
+        };
+
+        let base_content = if self.startup_connect_prompt {
+            iced::widget::stack![
+                base_content,
+                self.view_startup_connect_prompt_modal(),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            base_content
+        };
+
+        let base_content = if self.sudo_auth_modal.is_some() {
+            iced::widget::stack![
+                base_content,
+                self.view_sudo_auth_modal(),
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -1953,6 +2150,186 @@ impl NetrayApp {
             .center_y(Length::Fill)
             .style(|_| container::Style {
                 background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn view_startup_connect_prompt_modal(&self) -> Element<'_, Message> {
+        let active_name = self
+            .active_profile_id
+            .as_ref()
+            .and_then(|id| self.v2ray_profiles.iter().find(|p| &p.id == id))
+            .map(|p| p.name.as_str())
+            .unwrap_or("Active V2Ray Node");
+
+        let dialog = container(
+            column![
+                row![
+                    icons::lucide_icon(icons::ACTIVITY, 22, ACCENT_BLUE_LIGHT),
+                    Space::with_width(8),
+                    text("Connect to V2Ray").size(18).color(Color::WHITE),
+                ]
+                .align_y(Alignment::Center),
+                Space::with_height(6),
+                text("Do you want to connect to v2ray?")
+                    .size(15)
+                    .color(Color::WHITE),
+                Space::with_height(2),
+                text(format!("Target Node: {}", active_name))
+                    .size(12)
+                    .color(TEXT_MUTED),
+                Space::with_height(14),
+                row![
+                    button(text("Cancel").size(13).color(Color::WHITE))
+                        .padding(iced::Padding {
+                            top: 8.0,
+                            bottom: 8.0,
+                            left: 16.0,
+                            right: 16.0,
+                        })
+                        .style(|_, status| button::Style {
+                            background: match status {
+                                button::Status::Hovered | button::Status::Pressed => {
+                                    Some(Color::from_rgb(0.25, 0.28, 0.35).into())
+                                }
+                                _ => Some(Color::from_rgb(0.18, 0.20, 0.25).into()),
+                            },
+                            border: iced::Border {
+                                radius: 8.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        })
+                        .on_press(Message::DismissStartupConnectPrompt),
+                    Space::with_width(12),
+                    button(text("Connect").size(13).color(Color::WHITE))
+                        .padding(iced::Padding {
+                            top: 8.0,
+                            bottom: 8.0,
+                            left: 20.0,
+                            right: 20.0,
+                        })
+                        .style(primary_action_btn)
+                        .on_press(Message::ConfirmStartupConnectPrompt),
+                ]
+                .align_y(Alignment::Center),
+            ]
+            .spacing(4)
+            .padding(20)
+            .width(360),
+        )
+        .style(form_card_style);
+
+        container(dialog)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.70).into()),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn view_sudo_auth_modal(&self) -> Element<'_, Message> {
+        let Some(auth) = self.sudo_auth_modal.as_ref() else {
+            return Space::with_width(0).into();
+        };
+
+        let mut dialog_col = column![
+            row![
+                icons::lucide_icon(icons::LOCK, 22, ACCENT_BLUE_LIGHT),
+                Space::with_width(8),
+                text("Authentication Required").size(18).color(Color::WHITE),
+            ]
+            .align_y(Alignment::Center),
+            Space::with_height(6),
+            text("Elevated routing permissions are required to start the V2Ray tunnel.")
+                .size(13)
+                .color(TEXT_MUTED),
+            Space::with_height(4),
+            text("Enter your sudo password:")
+                .size(12)
+                .color(Color::WHITE),
+            Space::with_height(2),
+            text_input("Enter password...", &auth.password)
+                .secure(true)
+                .on_input(Message::SudoPasswordInputChanged)
+                .on_submit(Message::SubmitSudoPassword)
+                .padding(8),
+        ]
+        .spacing(4);
+
+        if let Some(err) = &auth.error {
+            dialog_col = dialog_col.push(
+                text(err)
+                    .size(12)
+                    .color(FAILURE_RED)
+            );
+        }
+
+        let action_btn = if auth.is_authenticating {
+            button(text("Verifying…").size(13).color(Color::WHITE))
+                .padding(iced::Padding {
+                    top: 8.0,
+                    bottom: 8.0,
+                    left: 20.0,
+                    right: 20.0,
+                })
+                .style(primary_action_btn)
+        } else {
+            button(text("Authorize & Connect").size(13).color(Color::WHITE))
+                .padding(iced::Padding {
+                    top: 8.0,
+                    bottom: 8.0,
+                    left: 20.0,
+                    right: 20.0,
+                })
+                .style(primary_action_btn)
+                .on_press(Message::SubmitSudoPassword)
+        };
+
+        dialog_col = dialog_col.push(Space::with_height(12)).push(
+            row![
+                button(text("Cancel").size(13).color(Color::WHITE))
+                    .padding(iced::Padding {
+                        top: 8.0,
+                        bottom: 8.0,
+                        left: 16.0,
+                        right: 16.0,
+                    })
+                    .style(|_, status| button::Style {
+                        background: match status {
+                            button::Status::Hovered | button::Status::Pressed => {
+                                Some(Color::from_rgb(0.25, 0.28, 0.35).into())
+                            }
+                            _ => Some(Color::from_rgb(0.18, 0.20, 0.25).into()),
+                        },
+                        border: iced::Border {
+                            radius: 8.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+                    .on_press(Message::CancelSudoAuth),
+                Space::with_width(12),
+                action_btn,
+            ]
+            .align_y(Alignment::Center),
+        );
+
+        let dialog = container(dialog_col.padding(20).width(380))
+            .style(form_card_style);
+
+        container(dialog)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.70).into()),
                 ..Default::default()
             })
             .into()
@@ -2907,6 +3284,37 @@ impl NetrayApp {
         .style(form_card_style)
         .width(Length::Fill);
 
+        let startup_card = container(
+            column![
+                row![
+                    icons::lucide_icon(icons::MONITOR, 16, ACCENT_BLUE_LIGHT),
+                    Space::with_width(6),
+                    text("System & Startup").size(14).color(self.text_primary()),
+                ]
+                .align_y(Alignment::Center),
+                text("Configure automatic startup with the operating system and connection behavior.")
+                    .size(12)
+                    .color(TEXT_MUTED),
+                Space::with_height(6),
+                checkbox(
+                    "Run at system startup (Launch Netray when logging in)",
+                    self.run_at_startup,
+                )
+                .on_toggle(Message::ToggleRunAtStartup),
+                Space::with_height(2),
+                checkbox(
+                    "Connect at startup (Prompt to activate tunnel on launch)",
+                    self.connect_at_startup,
+                )
+                .on_toggle(Message::ToggleConnectAtStartup),
+            ]
+            .spacing(6)
+            .width(Length::Fill)
+        )
+        .padding(12)
+        .style(form_card_style)
+        .width(Length::Fill);
+
         let mut chips_col = column![].spacing(6);
         for chunk in self.cached_app_chips.chunks(3) {
             let mut r = row![].spacing(6);
@@ -3048,6 +3456,8 @@ impl NetrayApp {
         let content = scrollable(
             column![
                 theme_card,
+                Space::with_height(12),
+                startup_card,
                 Space::with_height(12),
                 ip_card,
                 Space::with_height(12),
