@@ -4129,12 +4129,35 @@ mod performance_tests {
         let initial_count = app.v2ray_profiles.len();
         for (i, proto) in protocols::ProfileType::ALL.iter().enumerate() {
             let _ = app.update(Message::CreateProfileWithType(*proto));
-            assert_eq!(app.v2ray_profiles.len(), initial_count + i + 1);
-            let created = app.v2ray_profiles.last().unwrap();
-            assert_eq!(created.name, proto.generate_template().0);
-            assert_eq!(app.active_profile_id, Some(created.id.clone()));
+            assert_eq!(app.v2ray_profiles.len(), initial_count + i);
+            assert_eq!(app.view_mode, ViewMode::EditNode);
+            assert!(app.node_edit_state.is_new);
             assert!(!app.show_add_menu);
+
+            let _ = app.update(Message::SaveEditedNode);
+            assert_eq!(app.v2ray_profiles.len(), initial_count + i + 1);
+            assert_eq!(app.view_mode, ViewMode::Profiles);
+            let created = &app.v2ray_profiles[0];
+            assert_eq!(app.active_profile_id, Some(created.id.clone()));
         }
+    }
+
+    #[test]
+    fn test_create_profile_cancel_setup_flow() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let initial_count = app.v2ray_profiles.len();
+        let _ = app.update(Message::OpenAddMenu);
+        assert!(app.show_add_menu);
+        let _ = app.update(Message::CreateProfileWithType(protocols::ProfileType::VLess));
+        assert!(!app.show_add_menu);
+        assert_eq!(app.view_mode, ViewMode::EditNode);
+        assert!(app.node_edit_state.is_new);
+        assert_eq!(app.v2ray_profiles.len(), initial_count);
+
+        let _ = app.update(Message::CancelEditNode);
+        assert_eq!(app.view_mode, ViewMode::Profiles);
+        assert_eq!(app.v2ray_profiles.len(), initial_count);
+        assert!(!app.node_edit_state.is_new);
     }
 
     #[test]
@@ -4251,6 +4274,7 @@ mod performance_tests {
 
         // 2. Add profile and verify cache updates automatically
         let _ = app.update(Message::CreateProfileWithType(protocols::ProfileType::VLess));
+        let _ = app.update(Message::SaveEditedNode);
         let created_id = app.active_profile_id.clone().unwrap();
         assert!(app.profile_display_cache.contains_key(&created_id));
 
