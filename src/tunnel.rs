@@ -489,6 +489,19 @@ fn classify_xray_log(line: &str) -> LogLevel {
     }
 }
 
+fn strip_xray_log_prefix(line: &str) -> &str {
+    let trimmed = line.trim();
+    if trimmed.len() > 20
+        && trimmed.as_bytes().get(4) == Some(&b'/')
+        && trimmed.as_bytes().get(7) == Some(&b'/')
+    {
+        if let Some(bracket_end) = trimmed.find("] ") {
+            return trimmed[bracket_end + 2..].trim();
+        }
+    }
+    trimmed
+}
+
 fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     stream: R,
     tx: mpsc::Sender<LogEntry>,
@@ -525,7 +538,8 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
                 .await;
             } else {
                 let lvl = classify_xray_log(&line);
-                send_log(&tx, "Xray", line, lvl).await;
+                let cleaned = strip_xray_log_prefix(&line);
+                send_log(&tx, "Xray", cleaned, lvl).await;
             }
         }
     });
@@ -724,6 +738,13 @@ cleanup
             Ok(ms) => Some(ms),
             Err(error) => {
                 send_log(log_tx, "Error", format!("Connection check failed: {error}"), LogLevel::Error).await;
+                send_log(
+                    log_tx,
+                    "Supervisor",
+                    "Hint: Ensure that the proxy node server is online and reachable from your network.",
+                    LogLevel::Warn,
+                )
+                .await;
                 None
             }
         },

@@ -3168,43 +3168,70 @@ impl NetrayApp {
 
         let (active_conns, proxied_total, bypassed_total) = crate::tunnel::get_tunnel_metrics();
 
+        let status_pill = container(
+            text(if self.is_running { "ACTIVE" } else { "STOPPED" })
+                .size(10)
+                .color(if self.is_running {
+                    Color::from_rgb(0.2, 0.9, 0.4)
+                } else {
+                    TEXT_MUTED
+                }),
+        )
+        .padding(iced::Padding {
+            top: 2.0,
+            bottom: 2.0,
+            left: 7.0,
+            right: 7.0,
+        })
+        .style(move |_| container::Style {
+            background: Some(if self.is_running {
+                Color::from_rgba(0.2, 0.9, 0.4, 0.12).into()
+            } else {
+                Color::from_rgba(0.5, 0.5, 0.5, 0.12).into()
+            }),
+            border: iced::Border {
+                radius: 4.0.into(),
+                width: 1.0,
+                color: if self.is_running {
+                    Color::from_rgba(0.2, 0.9, 0.4, 0.3)
+                } else {
+                    Color::from_rgba(0.5, 0.5, 0.5, 0.25)
+                },
+            },
+            ..Default::default()
+        });
+
         let status_bar = container(
             row![
-                text(format!("SOCKS5: 127.0.0.1:{}", self.local_socks_port))
+                text(format!("SOCKS :{}", self.local_socks_port))
                     .size(11)
                     .color(ACCENT_BLUE_LIGHT),
-                Space::with_width(12),
-                text(format!("HTTP: 127.0.0.1:{}", http_port))
+                Space::with_width(10),
+                text(format!("HTTP :{}", http_port))
                     .size(11)
                     .color(ACCENT_BLUE_LIGHT),
-                Space::with_width(12),
-                text(format!("Active: {}", active_conns))
+                Space::with_width(10),
+                text(format!("Act: {}", active_conns))
                     .size(11)
                     .color(if active_conns > 0 { SUCCESS_GREEN } else { TEXT_MUTED }),
-                Space::with_width(12),
-                text(format!("Routed: {}", proxied_total))
+                Space::with_width(10),
+                text(format!("Prox: {}", proxied_total))
                     .size(11)
                     .color(Color::from_rgb(0.40, 0.85, 1.0)),
-                Space::with_width(12),
-                text(format!("Bypassed: {}", bypassed_total))
+                Space::with_width(10),
+                text(format!("Byp: {}", bypassed_total))
                     .size(11)
                     .color(Color::from_rgb(1.0, 0.75, 0.20)),
                 Space::with_width(Length::Fill),
-                text(if self.is_running { "ACTIVE" } else { "STOPPED" })
-                    .size(11)
-                    .color(if self.is_running {
-                        Color::from_rgb(0.2, 0.9, 0.4)
-                    } else {
-                        TEXT_MUTED
-                    }),
+                status_pill,
             ]
             .align_y(Alignment::Center),
         )
         .padding(iced::Padding {
             top: 6.0,
             bottom: 6.0,
-            left: 16.0,
-            right: 16.0,
+            left: 14.0,
+            right: 14.0,
         })
         .style(|_| container::Style {
             background: Some(SURFACE_CARD.into()),
@@ -3402,30 +3429,35 @@ impl NetrayApp {
         .spacing(4)
         .align_y(Alignment::Center);
 
+        let auto_scroll_check = checkbox("Auto-scroll", self.auto_scroll_logs)
+            .size(13)
+            .on_toggle(Message::AutoScrollLogs);
+
+        let top_controls = row![
+            auto_scroll_check,
+            Space::with_width(Length::Fill),
+            presets_row,
+        ]
+        .align_y(Alignment::Center);
+
         let search_input = modern_text_input(
             "Filter logs by app, website, or keyword...",
             &self.logs_filter,
             is_dark,
         )
         .on_input(Message::LogsFilterChanged)
-        .width(Length::Fixed(240.0));
+        .width(Length::Fill);
 
-        let mut controls_row = row![
-            checkbox("Auto-scroll", self.auto_scroll_logs).on_toggle(Message::AutoScrollLogs),
-            Space::with_width(8),
-            presets_row,
-            Space::with_width(8),
-            search_input,
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+        let mut search_row = row![search_input]
+            .spacing(6)
+            .align_y(Alignment::Center);
 
         if !self.logs_filter.is_empty() {
-            controls_row = controls_row.push(
-                button(text("Clear Filter").size(11))
+            search_row = search_row.push(
+                button(text("Clear").size(11))
                     .padding(iced::Padding {
-                        top: 4.0,
-                        bottom: 4.0,
+                        top: 5.0,
+                        bottom: 5.0,
                         left: 8.0,
                         right: 8.0,
                     })
@@ -3434,21 +3466,35 @@ impl NetrayApp {
             );
         }
 
-        controls_row = controls_row.push(Space::with_width(Length::Fill));
-        controls_row = controls_row.push(
-            text(format!(
-                "Showing {} of {}",
-                filtered_logs.len(),
-                self.logs.len()
-            ))
-            .size(11)
-            .color(TEXT_MUTED),
-        );
+        let count_badge = container(
+            text(format!("{}/{} logs", filtered_logs.len(), self.logs.len()))
+                .size(10)
+                .color(TEXT_MUTED),
+        )
+        .padding(iced::Padding {
+            top: 4.0,
+            bottom: 4.0,
+            left: 6.0,
+            right: 6.0,
+        });
+
+        search_row = search_row.push(count_badge);
+
+        let controls_toolbar = column![
+            top_controls,
+            search_row,
+        ]
+        .spacing(6);
 
         column![
             top_bar,
             status_bar,
-            container(controls_row).padding([4, 12]),
+            container(controls_toolbar).padding(iced::Padding {
+                top: 6.0,
+                bottom: 4.0,
+                left: 12.0,
+                right: 12.0,
+            }),
             container(terminal)
                 .padding(iced::Padding {
                     top: 8.0,

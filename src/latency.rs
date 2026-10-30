@@ -98,23 +98,33 @@ pub async fn ping_local_http_proxy(port: u16) -> Result<u128, String> {
 
 pub async fn wait_for_http_proxy(port: u16) -> Result<u128, String> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
+    let mut last_error = String::new();
+    while tokio::time::Instant::now() < deadline {
         match TcpStream::connect(("127.0.0.1", port)).await {
             Ok(stream) => {
-                return timeout(Duration::from_secs(10), response_latency(stream))
-                    .await
-                    .map_err(|_| "Xray started, but the remote HTTP check timed out.".to_owned())?
-            }
-            Err(_error) if tokio::time::Instant::now() < deadline => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                match timeout(Duration::from_secs(4), response_latency(stream)).await {
+                    Ok(Ok(latency)) => return Ok(latency),
+                    Ok(Err(err)) => {
+                        last_error = err;
+                        tokio::time::sleep(Duration::from_millis(350)).await;
+                    }
+                    Err(_) => {
+                        last_error = "Remote HTTP check timed out.".to_string();
+                        tokio::time::sleep(Duration::from_millis(350)).await;
+                    }
+                }
             }
             Err(error) => {
-                return Err(format!(
-                    "Xray HTTP proxy did not start on port {port}: {error}"
-                ))
+                last_error = format!("Xray HTTP proxy did not start on port {port}: {error}");
+                tokio::time::sleep(Duration::from_millis(150)).await;
             }
         }
     }
+    Err(if last_error.is_empty() {
+        "Xray started, but the remote HTTP check timed out.".to_string()
+    } else {
+        last_error
+    })
 }
 
 async fn response_latency(mut stream: TcpStream) -> Result<u128, String> {
@@ -133,13 +143,13 @@ async fn response_latency(mut stream: TcpStream) -> Result<u128, String> {
                 .ok()
                 .and_then(|s| s.lines().next())
                 .and_then(|line| line.split_whitespace().nth(1));
-            return if status == Some("204") {
-                Ok(started.elapsed().as_millis())
-            } else {
-                Err(format!(
-                    "Latency endpoint returned HTTP {}",
-                    status.unwrap_or("invalid")
-                ))
+            return match status {
+                Some("204") => Ok(started.elapsed().as_millis()),
+                Some("503") => Err("Remote proxy server is unreachable or refused connection (HTTP 503)".into()),
+                Some("502") => Err("Remote proxy server returned Bad Gateway (HTTP 502)".into()),
+                Some("504") => Err("Remote proxy server gateway timed out (HTTP 504)".into()),
+                Some(code) => Err(format!("Latency endpoint returned HTTP {code}")),
+                None => Err("Latency endpoint returned invalid HTTP response".into()),
             };
         }
     }
