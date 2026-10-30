@@ -1251,40 +1251,50 @@ impl NetrayApp {
                 Task::none()
             }
             Message::SaveEditedNode => {
-                let uri = self.node_edit_state.to_vless_uri();
+                let is_new = self.node_edit_state.is_new;
+                let config = self.node_edit_state.to_config();
                 let id = self.node_edit_state.id.clone();
                 self.ping_results.remove(&id);
                 if self.ping_in_progress.as_deref() == Some(&id) {
                     self.ping_in_progress = None;
                 }
                 let name = if self.node_edit_state.remarks.is_empty() {
-                    v2ray::extract_node_name(&uri)
+                    v2ray::extract_node_name(&config)
                 } else {
                     self.node_edit_state.remarks.clone()
                 };
 
                 if let Some(existing) = self.v2ray_profiles.iter_mut().find(|p| p.id == id) {
                     existing.name = name.clone();
-                    existing.config = uri.clone();
+                    existing.config = config.clone();
                 } else {
                     let profile = storage::V2RayProfile {
                         id: id.clone(),
                         name: name.clone(),
-                        config: uri.clone(),
+                        config: config.clone(),
                         created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
                     };
                     self.v2ray_profiles.insert(0, profile);
                 }
 
                 self.active_profile_id = Some(id);
-                self.v2ray_uri_or_json = uri;
+                self.v2ray_uri_or_json = config;
                 self.sync_profile_display_cache();
                 let _ = self.save_current_state();
-                self.push_log(
-                    "Config",
-                    format!("Saved node '{}'.", name),
-                    LogLevel::Success,
-                );
+                if is_new {
+                    self.push_log(
+                        "Config",
+                        format!("Setup complete: added profile '{}'.", name),
+                        LogLevel::Success,
+                    );
+                } else {
+                    self.push_log(
+                        "Config",
+                        format!("Saved node '{}'.", name),
+                        LogLevel::Success,
+                    );
+                }
+                self.node_edit_state = v2ray::NodeEditState::default();
                 self.view_mode = ViewMode::Profiles;
                 Task::none()
             }
