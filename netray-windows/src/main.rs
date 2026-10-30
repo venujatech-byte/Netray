@@ -319,6 +319,7 @@ pub struct NetrayApp {
 
     pub run_at_startup: bool,
     pub connect_at_startup: bool,
+    pub auto_reconnect: bool,
     pub startup_connect_prompt: bool,
     pub sudo_auth_modal: Option<SudoAuthModalState>,
 
@@ -508,6 +509,7 @@ impl NetrayApp {
 
             run_at_startup: saved.run_at_startup,
             connect_at_startup: saved.connect_at_startup,
+            auto_reconnect: saved.auto_reconnect,
             startup_connect_prompt: saved.connect_at_startup && has_profiles,
             sudo_auth_modal: None,
 
@@ -622,6 +624,7 @@ impl NetrayApp {
             theme_preference: self.theme_preference,
             run_at_startup: self.run_at_startup,
             connect_at_startup: self.connect_at_startup,
+            auto_reconnect: self.auto_reconnect,
         };
         storage::save_state_ref(&app_ref)
     }

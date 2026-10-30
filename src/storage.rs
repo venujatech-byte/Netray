@@ -29,6 +29,10 @@ impl std::fmt::Display for ThemePreference {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppData {
     pub v2ray_profiles: Vec<V2RayProfile>,
@@ -59,6 +63,8 @@ pub struct AppData {
     pub run_at_startup: bool,
     #[serde(default)]
     pub connect_at_startup: bool,
+    #[serde(default = "default_true")]
+    pub auto_reconnect: bool,
 }
 
 impl Default for AppData {
@@ -94,6 +100,7 @@ impl Default for AppData {
             theme_preference: ThemePreference::System,
             run_at_startup: false,
             connect_at_startup: false,
+            auto_reconnect: true,
         }
     }
 }
@@ -158,6 +165,7 @@ pub struct AppDataRef<'a> {
     pub theme_preference: ThemePreference,
     pub run_at_startup: bool,
     pub connect_at_startup: bool,
+    pub auto_reconnect: bool,
 }
 
 impl AppData {
@@ -185,6 +193,7 @@ impl AppData {
             theme_preference: self.theme_preference,
             run_at_startup: self.run_at_startup,
             connect_at_startup: self.connect_at_startup,
+            auto_reconnect: self.auto_reconnect,
         }
     }
 }
@@ -257,6 +266,20 @@ mod tests {
         let legacy_json = r#"{"v2ray_profiles":[],"v2ray_uri_or_json":"","local_socks_port":"10808","enable_tun":true,"enable_sysproxy":false,"tunnel_mode":"V2RayXray","ssh_host":"","ssh_port":"","ssh_user":"","ssh_pass":"","proxy_ip":"","proxy_port":"","payload_text":"","bug_host":"","sni_host":""}"#;
         let legacy: AppData = serde_json::from_str(legacy_json).unwrap();
         assert_eq!(legacy.theme_preference, ThemePreference::System);
+    }
+
+    #[test]
+    fn test_auto_reconnect_preference_and_defaults() {
+        let app_data = AppData::default();
+        assert!(app_data.auto_reconnect);
+
+        let legacy_json = r#"{"v2ray_profiles":[],"v2ray_uri_or_json":"","local_socks_port":"10808","enable_tun":true,"enable_sysproxy":false,"tunnel_mode":"V2RayXray","ssh_host":"","ssh_port":"","ssh_user":"","ssh_pass":"","proxy_ip":"","proxy_port":"","payload_text":"","bug_host":"","sni_host":""}"#;
+        let legacy: AppData = serde_json::from_str(legacy_json).unwrap();
+        assert!(legacy.auto_reconnect);
+
+        let disabled_json = r#"{"v2ray_profiles":[],"v2ray_uri_or_json":"","local_socks_port":"10808","enable_tun":true,"enable_sysproxy":false,"tunnel_mode":"V2RayXray","ssh_host":"","ssh_port":"","ssh_user":"","ssh_pass":"","proxy_ip":"","proxy_port":"","payload_text":"","bug_host":"","sni_host":"","auto_reconnect":false}"#;
+        let disabled: AppData = serde_json::from_str(disabled_json).unwrap();
+        assert!(!disabled.auto_reconnect);
     }
 
     #[test]
