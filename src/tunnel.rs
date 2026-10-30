@@ -376,6 +376,48 @@ fn binary_has_cap_net_admin(bin: &Path) -> bool {
     false
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrayConnectionInfo {
+    pub client_port: Option<u16>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub protocol: String,
+    pub route: String,
+}
+
+/// Parses Xray access log lines to extract connecting client endpoint, target website/host, port, and route.
+pub fn parse_xray_connection(line: &str) -> Option<XrayConnectionInfo> {
+    if let Some((left, right)) = line.split_once(" accepted ") {
+        // Extract client port from left side (e.g. "... 127.0.0.1:54321")
+        let client_port = left.rsplit_once(':').and_then(|(_, p)| p.trim().parse::<u16>().ok());
+
+        // Right side format: "tcp:www.google.com:443 [proxy]" or "tcp:github.com:443 [direct]"
+        let mut tokens = right.split_whitespace();
+        let target_token = tokens.next()?;
+        let route_raw = tokens.next().unwrap_or("[proxy]");
+        let route = route_raw.trim_matches(&['[', ']'][..]).to_string();
+
+        let parts: Vec<&str> = target_token.split(':').collect();
+        if parts.len() >= 3 {
+            let protocol = parts[0].to_string();
+            let port_str = parts[parts.len() - 1];
+            let host = parts[1..parts.len() - 1].join(":");
+            if let Ok(port) = port_str.parse::<u16>() {
+                if !host.is_empty() {
+                    return Some(XrayConnectionInfo {
+                        client_port,
+                        target_host: host,
+                        target_port: port,
+                        protocol,
+                        route,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
 fn classify_xray_log(line: &str) -> LogLevel {
     if line.contains("[Warning]") {
         LogLevel::Warn
@@ -395,8 +437,34 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     tokio::spawn(async move {
         let mut reader = BufReader::new(stream).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            let lvl = classify_xray_log(&line);
-            send_log(&tx, "Xray", line, lvl).await;
+            if let Some(conn) = parse_xray_connection(&line) {
+                let app_name = conn.client_port.and_then(crate::apps::resolve_socket_process_name);
+                let app_display = app_name.as_deref().unwrap_or("app");
+                let is_direct = conn.route.eq_ignore_ascii_case("direct");
+                let route_tag = if is_direct { "Bypass" } else { "Tunnel" };
+                let msg = format!(
+                    "Connection: [{}] -> {}:{} [{}] ({})",
+                    app_display,
+                    conn.target_host,
+                    conn.target_port,
+                    route_tag,
+                    conn.protocol.to_uppercase()
+                );
+                crate::send_connection_log(
+                    &tx,
+                    "Traffic",
+                    msg,
+                    if is_direct { LogLevel::Warn } else { LogLevel::Success },
+                    conn.target_host,
+                    conn.target_port,
+                    app_name,
+                    Some(route_tag.to_string()),
+                )
+                .await;
+            } else {
+                let lvl = classify_xray_log(&line);
+                send_log(&tx, "Xray", line, lvl).await;
+            }
         }
     });
 }
@@ -656,4 +724,37 @@ cleanup
         let _ = Command::new("ip").args(["link", "delete", "netray0"]).output().await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_xray_connection_standard_proxy() {
+        let line = "2026/10/30 18:30:00 127.0.0.1:54321 accepted tcp:www.google.com:443 [proxy]";
+        let info = parse_xray_connection(line).expect("must parse connection");
+        assert_eq!(info.client_port, Some(54321));
+        assert_eq!(info.target_host, "www.google.com");
+        assert_eq!(info.target_port, 443);
+        assert_eq!(info.protocol, "tcp");
+        assert_eq!(info.route, "proxy");
+    }
+
+    #[test]
+    fn test_parse_xray_connection_direct_bypass() {
+        let line = "127.0.0.1:48210 accepted tcp:github.com:22 [direct]";
+        let info = parse_xray_connection(line).expect("must parse direct bypass");
+        assert_eq!(info.client_port, Some(48210));
+        assert_eq!(info.target_host, "github.com");
+        assert_eq!(info.target_port, 22);
+        assert_eq!(info.protocol, "tcp");
+        assert_eq!(info.route, "direct");
+    }
+
+    #[test]
+    fn test_parse_xray_connection_non_matching_lines() {
+        assert_eq!(parse_xray_connection("Xray 1.8.23 started"), None);
+        assert_eq!(parse_xray_connection("[Warning] defaultroute failed"), None);
+    }
 }
