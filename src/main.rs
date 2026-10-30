@@ -481,6 +481,16 @@ pub async fn send_connection_log(
     let _ = tx.send(entry).await;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogsFilterPreset {
+    #[default]
+    All,
+    Tunnel,
+    Bypass,
+    Apps,
+    Errors,
+}
+
 #[derive(Debug, Clone)]
 pub struct ShareModalState {
     pub profile_id: String,
@@ -544,6 +554,7 @@ pub struct NetrayApp {
     // Real-time Logs & Background Worker Control
     pub logs: Vec<LogEntry>,
     pub logs_filter: String,
+    pub logs_preset: LogsFilterPreset,
     auto_scroll_logs: bool,
     pub log_sender: Option<mpsc::Sender<LogEntry>>,
     pub stop_signal: Option<tokio::sync::oneshot::Sender<()>>,
@@ -643,6 +654,7 @@ pub enum Message {
     ClearLogs,
     AutoScrollLogs(bool),
     LogsFilterChanged(String),
+    LogsPresetChanged(LogsFilterPreset),
     CloseRequested(iced::window::Id),
     WindowOpened(iced::window::Id),
     ShowWindow,
@@ -734,6 +746,7 @@ impl NetrayApp {
 
             logs: vec![LogEntry::new("Netray", "Ready to connect.", LogLevel::Info)],
             logs_filter: String::new(),
+            logs_preset: LogsFilterPreset::All,
             auto_scroll_logs: true,
             log_sender: None,
             stop_signal: None,
@@ -1626,6 +1639,10 @@ impl NetrayApp {
             }
             Message::LogsFilterChanged(query) => {
                 self.logs_filter = query;
+                Task::none()
+            }
+            Message::LogsPresetChanged(preset) => {
+                self.logs_preset = preset;
                 Task::none()
             }
             Message::ClearLogs => {
@@ -3140,6 +3157,23 @@ impl NetrayApp {
             .logs
             .iter()
             .filter(|entry| {
+                let matches_preset = match self.logs_preset {
+                    LogsFilterPreset::All => true,
+                    LogsFilterPreset::Tunnel => entry
+                        .route
+                        .as_deref()
+                        .is_some_and(|r| !r.eq_ignore_ascii_case("bypass") && !r.eq_ignore_ascii_case("direct")),
+                    LogsFilterPreset::Bypass => entry
+                        .route
+                        .as_deref()
+                        .is_some_and(|r| r.eq_ignore_ascii_case("bypass") || r.eq_ignore_ascii_case("direct")),
+                    LogsFilterPreset::Apps => entry.app_name.is_some(),
+                    LogsFilterPreset::Errors => matches!(entry.level, LogLevel::Error | LogLevel::Warn),
+                };
+                if !matches_preset {
+                    return false;
+                }
+
                 if query.is_empty() {
                     return true;
                 }
@@ -3242,17 +3276,66 @@ impl NetrayApp {
             ..Default::default()
         });
 
+        let make_preset_btn = |preset: LogsFilterPreset, label: &'static str| -> Element<'_, Message> {
+            let is_selected = self.logs_preset == preset;
+            let (bg_col, text_col, border_col) = if is_selected {
+                (
+                    Color::from_rgba(0.0, 0.48, 1.0, 0.28),
+                    Color::from_rgb(0.55, 0.85, 1.0),
+                    Color::from_rgba(0.0, 0.48, 1.0, 0.70),
+                )
+            } else {
+                (
+                    Color::from_rgba(0.12, 0.14, 0.18, 0.60),
+                    Color::from_rgb(0.70, 0.73, 0.80),
+                    Color::from_rgba(0.24, 0.26, 0.32, 0.45),
+                )
+            };
+
+            button(text(label).size(11).color(text_col))
+                .padding(iced::Padding {
+                    top: 3.0,
+                    bottom: 3.0,
+                    left: 9.0,
+                    right: 9.0,
+                })
+                .style(move |_, _| button::Style {
+                    background: Some(bg_col.into()),
+                    border: iced::Border {
+                        radius: 999.0.into(),
+                        width: 1.0,
+                        color: border_col,
+                    },
+                    ..Default::default()
+                })
+                .on_press(Message::LogsPresetChanged(preset))
+                .into()
+        };
+
+        let presets_row = row![
+            text("View:").size(11).color(TEXT_MUTED),
+            make_preset_btn(LogsFilterPreset::All, "All"),
+            make_preset_btn(LogsFilterPreset::Tunnel, "Tunnel"),
+            make_preset_btn(LogsFilterPreset::Bypass, "Bypass"),
+            make_preset_btn(LogsFilterPreset::Apps, "Apps"),
+            make_preset_btn(LogsFilterPreset::Errors, "Errors"),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+
         let search_input = modern_text_input(
             "Filter logs by app, website, or keyword...",
             &self.logs_filter,
             is_dark,
         )
         .on_input(Message::LogsFilterChanged)
-        .width(Length::Fixed(280.0));
+        .width(Length::Fixed(240.0));
 
         let mut controls_row = row![
             checkbox("Auto-scroll", self.auto_scroll_logs).on_toggle(Message::AutoScrollLogs),
-            Space::with_width(12),
+            Space::with_width(8),
+            presets_row,
+            Space::with_width(8),
             search_input,
         ]
         .spacing(6)
