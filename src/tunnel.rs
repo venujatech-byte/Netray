@@ -222,12 +222,17 @@ async fn run_ssh_payload_engine(
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let (client_socket, _) = accepted?;
+                let (client_socket, client_addr) = accepted?;
                 let ssh_handle = Arc::clone(&shared_ssh);
                 let log_tx_clone = log_tx.clone();
+                let log_tx_err = log_tx.clone();
                 clients.spawn(async move {
-                    if let Err(e) = handle_socks5_client(client_socket, ssh_handle).await {
-                        send_log(&log_tx_clone, "SOCKS5", format!("Stream closed: {}", e), LogLevel::Warn).await;
+                    if let Err(e) = handle_socks5_client(client_socket, client_addr, ssh_handle, log_tx_clone).await {
+                        // ignore normal client closes
+                        let err_str = e.to_string();
+                        if !err_str.contains("Broken pipe") && !err_str.contains("Connection reset") {
+                            send_log(&log_tx_err, "SOCKS5", format!("Stream closed: {}", err_str), LogLevel::Warn).await;
+                        }
                     }
                 });
             }
@@ -239,7 +244,9 @@ async fn run_ssh_payload_engine(
 /// Minimal RFC 1928 SOCKS5 server that pipes each request into a russh `direct-tcpip` channel
 async fn handle_socks5_client(
     mut sock: TcpStream,
+    client_addr: std::net::SocketAddr,
     ssh: Arc<client::Handle<SshClientHandler>>,
+    log_tx: mpsc::Sender<LogEntry>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = [0u8; 512];
 
@@ -273,19 +280,73 @@ async fn handle_socks5_client(
     };
 
     sock.read_exact(&mut buf[..2]).await?;
-    let target_port = u16::from_be_bytes([buf[0], buf[1]]) as u32;
+    let target_port = u16::from_be_bytes([buf[0], buf[1]]);
+
+    let app_name = crate::apps::resolve_socket_process_name(client_addr.port());
+    let app_display = app_name.as_deref().unwrap_or("app");
+
+    crate::send_connection_log(
+        &log_tx,
+        "SOCKS5",
+        format!("Connecting: [{}] -> {}:{} via SSH", app_display, target_host, target_port),
+        LogLevel::Info,
+        &target_host,
+        target_port,
+        app_name.clone(),
+        Some("Tunnel".into()),
+    )
+    .await;
 
     // 3. Open SSH `direct-tcpip` channel to destination
-    let channel = ssh
-        .channel_open_direct_tcpip(&target_host, target_port, "127.0.0.1", 10808)
-        .await?;
+    let channel_result = ssh
+        .channel_open_direct_tcpip(&target_host, target_port as u32, "127.0.0.1", 10808)
+        .await;
+
+    let channel = match channel_result {
+        Ok(c) => c,
+        Err(e) => {
+            crate::send_connection_log(
+                &log_tx,
+                "SOCKS5",
+                format!("Failed: [{}] -> {}:{} ({})", app_display, target_host, target_port, e),
+                LogLevel::Error,
+                &target_host,
+                target_port,
+                app_name,
+                Some("Failed".into()),
+            )
+            .await;
+            return Err(e.into());
+        }
+    };
 
     // 4. Reply SOCKS5 Success
     sock.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
 
     // 5. Bi-directional zero-copy relay between local app and SSH channel
     let mut ssh_stream = channel.into_stream();
-    tokio::io::copy_bidirectional(&mut sock, &mut ssh_stream).await?;
+    let relay_res = tokio::io::copy_bidirectional(&mut sock, &mut ssh_stream).await;
+
+    if let Ok((upload, download)) = relay_res {
+        crate::send_connection_log(
+            &log_tx,
+            "SOCKS5",
+            format!(
+                "Closed: [{}] -> {}:{} (sent {:.1} KB, received {:.1} KB)",
+                app_display,
+                target_host,
+                target_port,
+                (upload as f64) / 1024.0,
+                (download as f64) / 1024.0
+            ),
+            LogLevel::Info,
+            &target_host,
+            target_port,
+            app_name,
+            Some("Tunnel".into()),
+        )
+        .await;
+    }
 
     Ok(())
 }
