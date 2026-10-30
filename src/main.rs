@@ -496,6 +496,7 @@ pub struct NetrayApp {
     pub public_ip: Option<String>,
     pub is_checking_ip: bool,
     pub theme_preference: storage::ThemePreference,
+    pub effective_theme: theme::EffectiveTheme,
     pub profile_display_cache: HashMap<String, (String, String)>,
     pub cached_app_chips: Vec<String>,
 
@@ -684,6 +685,7 @@ impl NetrayApp {
             public_ip: None,
             is_checking_ip: false,
             theme_preference: saved.theme_preference,
+            effective_theme: theme::resolve_effective_theme(saved.theme_preference),
             profile_display_cache,
             cached_app_chips,
 
@@ -735,11 +737,11 @@ impl NetrayApp {
     }
 
     pub fn is_dark(&self) -> bool {
-        theme::resolve_effective_theme(self.theme_preference).is_dark()
+        self.effective_theme.is_dark()
     }
 
     pub fn theme(&self) -> Theme {
-        theme::resolve_effective_theme(self.theme_preference).to_iced_theme()
+        self.effective_theme.to_iced_theme()
     }
 
     pub fn text_primary(&self) -> Color {
@@ -1658,6 +1660,7 @@ impl NetrayApp {
             Message::ThemePreferenceChanged(pref) => {
                 theme::invalidate_system_theme_cache();
                 self.theme_preference = pref;
+                self.effective_theme = theme::resolve_effective_theme(pref);
                 self.push_log(
                     "SYSTEM",
                     format!("Theme appearance set to: {}", pref),
@@ -1847,8 +1850,15 @@ impl NetrayApp {
         .spacing(8)
         .padding(8)
         .align_y(Alignment::Center);
-        let content = container(column![titlebar, content].height(Length::Fill))
-            .style(|theme| {
+        let content = container(
+            iced::widget::stack![
+                column![titlebar, content].height(Length::Fill),
+                icons::keep_common_icons_warm(),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill),
+        )
+        .style(|theme| {
                 let is_dark = match theme {
                     Theme::Light => false,
                     _ => true,
@@ -2571,14 +2581,10 @@ impl NetrayApp {
                                     } else {
                                         Color::from_rgb(0.88, 0.90, 0.93)
                                     };
-                                    button(
-                                        container(icons::lucide_icon(icons::ACTIVITY, 16, ping_icon_color))
-                                            .center_x(Length::Fill)
-                                            .center_y(Length::Fill),
-                                    )
+                                    button(icons::lucide_icon(icons::ACTIVITY, 16, ping_icon_color))
                                     .width(32)
                                     .height(32)
-                                    .padding(0)
+                                    .padding(8)
                                     .style(move |_, status| {
                                         let bg = if !ping_active {
                                             ping_bg
@@ -2600,44 +2606,32 @@ impl NetrayApp {
                                     })
                                     .on_press_maybe(ping_press)
                                 },
-                                button(
-                                    container(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
-                                        .center_x(Length::Fill)
-                                        .center_y(Length::Fill),
-                                )
+                                button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
                                 .width(30)
                                 .height(30)
-                                .padding(0)
+                                .padding(7)
                                 .style(transparent_muted_btn)
                                 .on_press(Message::ShareProfile(p.id.clone())),
-                                button(
-                                    container(icons::lucide_icon(
-                                        icons::PENCIL,
-                                        16,
-                                        if !config_locked { TEXT_MUTED } else { self.icon_inactive() },
-                                    ))
-                                    .center_x(Length::Fill)
-                                    .center_y(Length::Fill),
-                                )
+                                button(icons::lucide_icon(
+                                    icons::PENCIL,
+                                    16,
+                                    if !config_locked { TEXT_MUTED } else { self.icon_inactive() },
+                                ))
                                 .width(30)
                                 .height(30)
-                                .padding(0)
+                                .padding(7)
                                 .style(rounded_icon_btn_style(is_dark, !config_locked))
                                 .on_press_maybe(
                                     (!config_locked).then(|| Message::EditProfile(p.id.clone()))
                                 ),
-                                button(
-                                    container(icons::lucide_icon(
-                                        icons::TRASH,
-                                        16,
-                                        if !config_locked { TEXT_MUTED } else { self.icon_inactive() },
-                                    ))
-                                    .center_x(Length::Fill)
-                                    .center_y(Length::Fill),
-                                )
+                                button(icons::lucide_icon(
+                                    icons::TRASH,
+                                    16,
+                                    if !config_locked { TEXT_MUTED } else { self.icon_inactive() },
+                                ))
                                 .width(30)
                                 .height(30)
-                                .padding(0)
+                                .padding(7)
                                 .style(if !config_locked { danger_rounded_btn } else { transparent_muted_btn })
                                 .on_press_maybe(
                                     (!config_locked).then(|| Message::DeleteProfile(p.id.clone()))
@@ -2676,6 +2670,7 @@ impl NetrayApp {
                 left: 12.0,
                 right: 12.0,
             }))
+            .id(scrollable::Id::new("profiles_scroll"))
             .height(Length::Fill)
             .into()
         };
@@ -3494,6 +3489,7 @@ impl NetrayApp {
                 right: 16.0,
             }),
         )
+        .id(scrollable::Id::new("settings_scroll"))
         .width(Length::Fill)
         .height(Length::Fill);
 
@@ -3808,15 +3804,32 @@ mod performance_tests {
         let _ = app.update(Message::WhitelistAppsChanged("firefox, chrome, discord".into()));
         assert_eq!(app.cached_app_chips, vec!["firefox", "chrome", "discord"]);
 
-        // 5. Simulate multiple scroll view frames for Profiles screen
+        // 5. Verify discovered apps catalog is curated and bounded to prevent pick_list layout lag
+        assert!(app.available_apps.len() <= 40);
+        assert!(!app.available_apps.is_empty());
+
+        // 6. Verify effective theme fast-path and consistency
+        assert_eq!(app.is_dark(), app.effective_theme.is_dark());
+
+        // 7. Simulate multiple scroll view frames for Profiles screen with 25 cards
+        for i in 0..25 {
+            let id = format!("test-scroll-card-{}", i);
+            app.v2ray_profiles.push(storage::V2RayProfile {
+                id: id.clone(),
+                name: format!("Fast Node {}", i),
+                config: "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0IjoiNDQzIn0=".to_string(),
+                created_at: "0".to_string(),
+            });
+            app.profile_display_cache.insert(id, ("127.0.0.1:443".into(), "(VMESS)".into()));
+        }
         app.view_mode = ViewMode::Profiles;
-        for _ in 0..10 {
+        for _ in 0..20 {
             let _element = app.view(window_id);
         }
 
-        // 6. Simulate multiple scroll view frames for Settings screen
+        // 8. Simulate multiple scroll view frames for Settings screen
         app.view_mode = ViewMode::SshSettings;
-        for _ in 0..10 {
+        for _ in 0..20 {
             let _element = app.view(window_id);
         }
     }

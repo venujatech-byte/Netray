@@ -22,34 +22,27 @@ impl EffectiveTheme {
     }
 }
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static CACHED_IS_DARK: AtomicBool = AtomicBool::new(true);
-static LAST_CHECK_SECS: AtomicU64 = AtomicU64::new(0);
+static SYSTEM_THEME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Detects whether the host desktop environment is currently in dark mode, cached to prevent lag.
+/// Zero subprocesses or syscalls on frame redraws: fast atomic read on every view loop.
 pub fn detect_system_is_dark() -> bool {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let last = LAST_CHECK_SECS.load(Ordering::Relaxed);
-
-    // Fast memory read if checked within last 10 seconds (avoids spawning processes on frame redraws)
-    if last != 0 && now.saturating_sub(last) < 10 {
-        return CACHED_IS_DARK.load(Ordering::Relaxed);
+    if !SYSTEM_THEME_INITIALIZED.load(Ordering::Acquire) {
+        let is_dark = query_system_is_dark_uncached();
+        CACHED_IS_DARK.store(is_dark, Ordering::Release);
+        SYSTEM_THEME_INITIALIZED.store(true, Ordering::Release);
+        is_dark
+    } else {
+        CACHED_IS_DARK.load(Ordering::Relaxed)
     }
-
-    let is_dark = query_system_is_dark_uncached();
-    CACHED_IS_DARK.store(is_dark, Ordering::Relaxed);
-    LAST_CHECK_SECS.store(now, Ordering::Relaxed);
-    is_dark
 }
 
 /// Force invalidate the cached theme (e.g. when user changes settings)
 pub fn invalidate_system_theme_cache() {
-    LAST_CHECK_SECS.store(0, Ordering::Relaxed);
+    SYSTEM_THEME_INITIALIZED.store(false, Ordering::Release);
 }
 
 fn query_system_is_dark_uncached() -> bool {

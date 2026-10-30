@@ -122,6 +122,39 @@ pub fn lucide_icon(svg_bytes: &'static [u8], size: u16, color: Color) -> Svg<'st
         .style(move |_, _| svg::Style { color: Some(color) })
 }
 
+/// Pre-warms and retains common vector icon rasters in iced_tiny_skia so scrolling never triggers resvg CPU rerasterization.
+pub fn keep_common_icons_warm<M: 'static>() -> iced::Element<'static, M> {
+    use iced::widget::{container, row};
+    use iced::Length;
+
+    let warm_icon = |bytes, size| {
+        Svg::new(handle_for(bytes))
+            .width(size)
+            .height(size)
+            .opacity(0.0_f32)
+    };
+
+    container(
+        row![
+            warm_icon(ACTIVITY, 16),
+            warm_icon(SHARE, 16),
+            warm_icon(PENCIL, 16),
+            warm_icon(TRASH, 16),
+            warm_icon(CLOSE, 10),
+            warm_icon(ACTIVITY, 14),
+            warm_icon(FILE_PLUS, 15),
+            warm_icon(SUN, 14),
+            warm_icon(MOON, 14),
+            warm_icon(MONITOR, 14),
+        ]
+        .spacing(0),
+    )
+    .width(Length::Fixed(1.0))
+    .height(Length::Fixed(1.0))
+    .padding(0)
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

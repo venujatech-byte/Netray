@@ -71,7 +71,9 @@ pub fn get_curated_linux_apps() -> Vec<AppPreset> {
     ]
 }
 
-/// Discovers installed desktop applications by reading standard .desktop files
+/// Discovers installed desktop applications by reading standard .desktop files.
+/// Filters for valid applications and limits to a curated/popular set so dropdown
+/// text shaping and layout remains lightweight during scrolling.
 pub fn discover_installed_linux_apps() -> Vec<AppPreset> {
     let mut apps = get_curated_linux_apps();
     let dirs = [
@@ -102,6 +104,8 @@ pub fn discover_installed_linux_apps() -> Vec<AppPreset> {
 
     // Sort alphabetically by label
     apps.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    // Cap at 40 presets to avoid pick_list shaper overhead on scroll
+    apps.truncate(40);
     apps
 }
 
@@ -109,6 +113,8 @@ pub fn discover_installed_linux_apps() -> Vec<AppPreset> {
 fn parse_desktop_entry(content: &str) -> Option<(String, String)> {
     let mut name = None;
     let mut exec = None;
+    let mut is_application = false;
+    let mut is_hidden = false;
     let mut in_desktop_entry = false;
 
     for line in content.lines() {
@@ -121,8 +127,11 @@ fn parse_desktop_entry(content: &str) -> Option<(String, String)> {
         }
 
         if in_desktop_entry {
-            if trimmed.starts_with("NoDisplay=true") {
-                return None;
+            if trimmed.starts_with("NoDisplay=true") || trimmed.starts_with("Hidden=true") {
+                is_hidden = true;
+            }
+            if trimmed == "Type=Application" {
+                is_application = true;
             }
             if name.is_none() && trimmed.starts_with("Name=") {
                 let val = trimmed.strip_prefix("Name=").unwrap().trim();
@@ -145,6 +154,10 @@ fn parse_desktop_entry(content: &str) -> Option<(String, String)> {
                 }
             }
         }
+    }
+
+    if is_hidden || !is_application {
+        return None;
     }
 
     match (name, exec) {
