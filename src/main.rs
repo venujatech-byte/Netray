@@ -455,6 +455,21 @@ impl LogEntry {
         self.route = route;
         self
     }
+
+    pub fn format_line(&self) -> String {
+        let mut line = format!("[{}] [{}]", self.timestamp, self.source);
+        if let Some(ref app) = self.app_name {
+            line.push_str(&format!(" [App: {}]", app));
+        }
+        if let (Some(ref host), Some(port)) = (&self.target_host, self.target_port) {
+            line.push_str(&format!(" [{}:{}]", host, port));
+        }
+        if let Some(ref route) = self.route {
+            line.push_str(&format!(" [{}]", route.to_uppercase()));
+        }
+        line.push_str(&format!(": {}", self.message));
+        line
+    }
 }
 
 pub async fn send_log(
@@ -652,6 +667,7 @@ pub enum Message {
     NewLog(LogEntry),
     UptimeTick,
     ClearLogs,
+    CopyLogs,
     AutoScrollLogs(bool),
     LogsFilterChanged(String),
     LogsPresetChanged(LogsFilterPreset),
@@ -1648,6 +1664,59 @@ impl NetrayApp {
             Message::ClearLogs => {
                 self.logs.clear();
                 Task::none()
+            }
+            Message::CopyLogs => {
+                let query = self.logs_filter.trim().to_lowercase();
+                let filtered_lines: Vec<String> = self
+                    .logs
+                    .iter()
+                    .filter(|entry| {
+                        let matches_preset = match self.logs_preset {
+                            LogsFilterPreset::All => true,
+                            LogsFilterPreset::Tunnel => entry
+                                .route
+                                .as_deref()
+                                .is_some_and(|r| !r.eq_ignore_ascii_case("bypass") && !r.eq_ignore_ascii_case("direct")),
+                            LogsFilterPreset::Bypass => entry
+                                .route
+                                .as_deref()
+                                .is_some_and(|r| r.eq_ignore_ascii_case("bypass") || r.eq_ignore_ascii_case("direct")),
+                            LogsFilterPreset::Apps => entry.app_name.is_some(),
+                            LogsFilterPreset::Errors => matches!(entry.level, LogLevel::Error | LogLevel::Warn),
+                        };
+                        if !matches_preset {
+                            return false;
+                        }
+
+                        if query.is_empty() {
+                            return true;
+                        }
+                        entry.message.to_lowercase().contains(&query)
+                            || entry.source.to_lowercase().contains(&query)
+                            || entry
+                                .app_name
+                                .as_deref()
+                                .is_some_and(|a| a.to_lowercase().contains(&query))
+                            || entry
+                                .target_host
+                                .as_deref()
+                                .is_some_and(|h| h.to_lowercase().contains(&query))
+                            || entry
+                                .route
+                                .as_deref()
+                                .is_some_and(|r| r.to_lowercase().contains(&query))
+                    })
+                    .map(|entry| entry.format_line())
+                    .collect();
+
+                let count = filtered_lines.len();
+                let output = filtered_lines.join("\n");
+                self.push_log(
+                    "Logs",
+                    format!("Copied {count} log entries to clipboard."),
+                    LogLevel::Success,
+                );
+                iced::clipboard::write(output)
             }
             Message::UptimeTick => Task::none(),
             Message::CloseRequested(id) => {
@@ -3063,6 +3132,16 @@ impl NetrayApp {
             Space::with_width(12),
             text("Tunnel Logs & Status").size(20).color(Color::WHITE),
             Space::with_width(Length::Fill),
+            button(text("Copy").size(13))
+                .padding(iced::Padding {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 14.0,
+                    right: 14.0,
+                })
+                .style(rounded_icon_btn_style(is_dark, true))
+                .on_press(Message::CopyLogs),
+            Space::with_width(8),
             button(text("Clear").size(13))
                 .padding(iced::Padding {
                     top: 6.0,
