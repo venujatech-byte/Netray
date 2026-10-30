@@ -552,6 +552,8 @@ pub struct NetrayApp {
     pub instant_import: bool,
     pub clipboard_import_candidate: Option<String>,
     pub share_modal: Option<ShareModalState>,
+    pub run_at_startup: bool,
+    pub connect_at_startup: bool,
 
     // TUN & System Routing Mode
     pub enable_tun: bool,
@@ -651,6 +653,8 @@ pub enum Message {
     RequestClipboardImport,
     ClipboardImported(Option<String>),
     ToggleInstantImport(bool),
+    ToggleRunAtStartup(bool),
+    ToggleConnectAtStartup(bool),
     ConfirmClipboardImport,
     CancelClipboardImport,
     ClipboardCandidateChanged(String),
@@ -750,6 +754,8 @@ impl NetrayApp {
             instant_import: saved.instant_import,
             clipboard_import_candidate: None,
             share_modal: None,
+            run_at_startup: saved.run_at_startup,
+            connect_at_startup: saved.connect_at_startup,
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
@@ -874,6 +880,8 @@ impl NetrayApp {
             whitelist_urls: &self.whitelist_urls,
             instant_import: self.instant_import,
             theme_preference: self.theme_preference,
+            run_at_startup: self.run_at_startup,
+            connect_at_startup: self.connect_at_startup,
         };
         storage::save_state_ref(&app_ref)
     }
@@ -1301,6 +1309,48 @@ impl NetrayApp {
             }
             Message::ToggleInstantImport(v) => {
                 self.instant_import = v;
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::ToggleRunAtStartup(v) => {
+                self.run_at_startup = v;
+                if let Err(e) = autostart::set_run_at_startup(v) {
+                    self.push_log(
+                        "System",
+                        format!("Failed to update autostart setting: {e}"),
+                        LogLevel::Warn,
+                    );
+                } else if v {
+                    self.push_log(
+                        "System",
+                        "Enabled run at system startup.",
+                        LogLevel::Info,
+                    );
+                } else {
+                    self.push_log(
+                        "System",
+                        "Disabled run at system startup.",
+                        LogLevel::Info,
+                    );
+                }
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::ToggleConnectAtStartup(v) => {
+                self.connect_at_startup = v;
+                if v {
+                    self.push_log(
+                        "System",
+                        "Enabled connect at startup (will prompt on launch).",
+                        LogLevel::Info,
+                    );
+                } else {
+                    self.push_log(
+                        "System",
+                        "Disabled connect at startup.",
+                        LogLevel::Info,
+                    );
+                }
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -3724,6 +3774,49 @@ impl NetrayApp {
         .style(form_card_style)
         .width(Length::Fill);
 
+        let startup_card = container(
+            column![
+                row![
+                    icons::lucide_icon(icons::MONITOR, 16, ACCENT_BLUE_LIGHT),
+                    Space::with_width(6),
+                    text("System & Startup").size(14).color(self.text_primary()),
+                ]
+                .align_y(Alignment::Center),
+                text("Configure automatic startup and connection behavior on system boot.")
+                    .size(12)
+                    .color(TEXT_MUTED),
+                Space::with_height(6),
+                row![
+                    toggler(self.run_at_startup)
+                        .label("Run at system startup")
+                        .size(18)
+                        .on_toggle(Message::ToggleRunAtStartup),
+                ]
+                .align_y(Alignment::Center),
+                Space::with_height(4),
+                row![
+                    toggler(self.connect_at_startup)
+                        .label("Connect at startup")
+                        .size(18)
+                        .on_toggle(Message::ToggleConnectAtStartup),
+                ]
+                .align_y(Alignment::Center),
+                Space::with_height(2),
+                text(if self.connect_at_startup {
+                    "Will ask: \"Do you want to connect to v2ray?\" and prompt for sudo password on launch."
+                } else {
+                    "Startup prompt disabled."
+                })
+                .size(11)
+                .color(if self.connect_at_startup { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
+            ]
+            .spacing(4)
+            .width(Length::Fill)
+        )
+        .padding(12)
+        .style(form_card_style)
+        .width(Length::Fill);
+
         let mut chips_col = column![].spacing(6);
         for chunk in self.cached_app_chips.chunks(3) {
             let mut r = row![].spacing(6);
@@ -3875,6 +3968,8 @@ impl NetrayApp {
         let content = scrollable(
             column![
                 theme_card,
+                Space::with_height(12),
+                startup_card,
                 Space::with_height(12),
                 ip_card,
                 Space::with_height(12),

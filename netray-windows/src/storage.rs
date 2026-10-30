@@ -165,6 +165,8 @@ pub struct AppDataRef<'a> {
     pub whitelist_urls: &'a str,
     pub instant_import: bool,
     pub theme_preference: ThemePreference,
+    pub run_at_startup: bool,
+    pub connect_at_startup: bool,
 }
 
 impl AppData {
@@ -190,6 +192,8 @@ impl AppData {
             whitelist_urls: &self.whitelist_urls,
             instant_import: self.instant_import,
             theme_preference: self.theme_preference,
+            run_at_startup: self.run_at_startup,
+            connect_at_startup: self.connect_at_startup,
         }
     }
 }
