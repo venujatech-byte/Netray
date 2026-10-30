@@ -142,6 +142,68 @@ fn card_strip_inactive(_: &Theme) -> container::Style {
     }
 }
 
+fn rounded_icon_btn_style(is_dark: bool, is_active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let bg = if !is_active {
+            None
+        } else {
+            match status {
+                button::Status::Hovered => Some(if is_dark {
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.12)
+                } else {
+                    Color::from_rgba(0.0, 0.0, 0.0, 0.08)
+                }.into()),
+                button::Status::Pressed => Some(if is_dark {
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.20)
+                } else {
+                    Color::from_rgba(0.0, 0.0, 0.0, 0.14)
+                }.into()),
+                _ => None,
+            }
+        };
+        button::Style {
+            background: bg,
+            border: iced::Border {
+                radius: 999.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+}
+
+fn primary_rounded_btn(_: &Theme, status: button::Status) -> button::Style {
+    button::Style {
+        background: match status {
+            button::Status::Hovered => Some(ACCENT_BLUE_LIGHT.into()),
+            button::Status::Pressed => Some(ACCENT_BLUE.into()),
+            _ => Some(ACCENT_BLUE.into()),
+        },
+        text_color: Color::WHITE,
+        border: iced::Border {
+            radius: 999.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn danger_rounded_btn(_: &Theme, status: button::Status) -> button::Style {
+    button::Style {
+        background: match status {
+            button::Status::Hovered => Some(Color::from_rgba(0.95, 0.35, 0.40, 0.20).into()),
+            button::Status::Pressed => Some(Color::from_rgba(0.95, 0.35, 0.40, 0.30).into()),
+            _ => None,
+        },
+        text_color: FAILURE_RED,
+        border: iced::Border {
+            radius: 999.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 fn transparent_profile_btn(_: &Theme, _: button::Status) -> button::Style {
     button::Style {
         background: None,
@@ -150,10 +212,18 @@ fn transparent_profile_btn(_: &Theme, _: button::Status) -> button::Style {
     }
 }
 
-fn transparent_muted_btn(_: &Theme, _: button::Status) -> button::Style {
+fn transparent_muted_btn(_: &Theme, status: button::Status) -> button::Style {
     button::Style {
-        background: None,
+        background: match status {
+            button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.10).into()),
+            button::Status::Pressed => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.18).into()),
+            _ => None,
+        },
         text_color: TEXT_MUTED,
+        border: iced::Border {
+            radius: 999.0.into(),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -177,11 +247,15 @@ fn whitelist_chip_style(_: &Theme) -> container::Style {
     }
 }
 
-fn primary_action_btn(_: &Theme, _: button::Status) -> button::Style {
+fn primary_action_btn(_: &Theme, status: button::Status) -> button::Style {
     button::Style {
-        background: Some(ACCENT_BLUE.into()),
+        background: match status {
+            button::Status::Hovered => Some(ACCENT_BLUE_LIGHT.into()),
+            _ => Some(ACCENT_BLUE.into()),
+        },
+        text_color: Color::WHITE,
         border: iced::Border {
-            radius: 6.0.into(),
+            radius: 999.0.into(),
             ..Default::default()
         },
         ..Default::default()
@@ -640,6 +714,14 @@ impl NetrayApp {
             theme::TEXT_PRIMARY_DARK
         } else {
             theme::TEXT_PRIMARY_LIGHT
+        }
+    }
+
+    pub fn icon_inactive(&self) -> Color {
+        if self.is_dark() {
+            theme::ICON_INACTIVE_DARK
+        } else {
+            theme::ICON_INACTIVE_LIGHT
         }
     }
 
@@ -1696,7 +1778,7 @@ impl NetrayApp {
                     },
                     text_color: Color::WHITE,
                     border: iced::Border {
-                        radius: 16.0.into(),
+                        radius: 999.0.into(),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -2241,49 +2323,39 @@ impl NetrayApp {
     // ========================================================================
 
     fn view_profiles_screen(&self) -> Element<'_, Message> {
+        let is_dark = self.is_dark();
         let config_locked = self.config_locked();
+
+        let top_icon_btn = |icon, size: u16, on_press: Option<Message>| {
+            let active = on_press.is_some();
+            button(
+                container(icons::lucide_icon(
+                    icon,
+                    size,
+                    if active { self.text_primary() } else { self.icon_inactive() },
+                ))
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
+            )
+            .width(36)
+            .height(36)
+            .padding(0)
+            .style(rounded_icon_btn_style(is_dark, active))
+            .on_press_maybe(on_press)
+        };
+
         // 1. Top App Bar
         let top_bar = row![
-            button(icons::lucide_icon(icons::MENU, 22, self.text_primary()))
-                .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
-                .on_press(Message::SetViewMode(ViewMode::SshSettings)),
-            Space::with_width(12),
+            top_icon_btn(icons::MENU, 22, Some(Message::SetViewMode(ViewMode::SshSettings))),
+            Space::with_width(8),
             text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
-            button(icons::lucide_icon(icons::FILE_PLUS, 20, self.text_primary()))
-                .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
-                .on_press_maybe((!config_locked).then(|| Message::LoadSampleV2Ray)),
-            button(icons::lucide_icon(icons::QR_CODE, 20, self.text_primary()))
-                .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
-                .on_press(Message::ValidateV2RayConfig),
-            button(icons::lucide_icon(icons::LINK, 20, self.text_primary()))
-                .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
-                .on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
-            button(icons::lucide_icon(icons::MORE_VERTICAL, 20, self.text_primary()))
-                .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
-                .on_press(Message::SetViewMode(ViewMode::Logs)),
+            top_icon_btn(icons::FILE_PLUS, 20, (!config_locked).then(|| Message::LoadSampleV2Ray)),
+            top_icon_btn(icons::QR_CODE, 20, Some(Message::ValidateV2RayConfig)),
+            top_icon_btn(icons::LINK, 20, (!config_locked).then(|| Message::RequestClipboardImport)),
+            top_icon_btn(icons::MORE_VERTICAL, 20, Some(Message::SetViewMode(ViewMode::Logs))),
         ]
-        .spacing(6)
+        .spacing(4)
         .align_y(Alignment::Center)
         .padding(iced::Padding {
             top: 8.0,
@@ -2294,9 +2366,20 @@ impl NetrayApp {
 
         // 2. Category Sub-Bar
         let sub_bar = row![
-            button(icons::lucide_icon(icons::PLUS, 18, Color::WHITE))
-                .padding(6)
-                .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
+            button(
+                container(icons::lucide_icon(
+                    icons::PLUS,
+                    18,
+                    if !config_locked { Color::WHITE } else { self.icon_inactive() },
+                ))
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
+            )
+            .width(32)
+            .height(32)
+            .padding(0)
+            .style(if !config_locked { primary_rounded_btn } else { transparent_muted_btn })
+            .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
             Space::with_width(12),
             text(format!("{} profiles", self.v2ray_profiles.len()))
                 .size(13)
@@ -2414,28 +2497,54 @@ impl NetrayApp {
                                         ),
                                         text_color: Color::WHITE,
                                         border: iced::Border {
-                                            radius: 24.0.into(),
+                                            radius: 999.0.into(),
                                             ..Default::default()
                                         },
                                         ..Default::default()
                                     })
                                     .on_press_maybe(ping_press),
-                                button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
-                                    .padding(6)
-                                    .style(transparent_muted_btn)
-                                    .on_press(Message::ShareProfile(p.id.clone())),
-                                button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED))
-                                    .padding(6)
-                                    .style(transparent_muted_btn)
-                                    .on_press_maybe(
-                                        (!config_locked).then(|| Message::EditProfile(p.id.clone()))
-                                    ),
-                                button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED))
-                                    .padding(6)
-                                    .style(transparent_muted_btn)
-                                    .on_press_maybe(
-                                        (!config_locked).then(|| Message::DeleteProfile(p.id.clone()))
-                                    ),
+                                button(
+                                    container(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
+                                        .center_x(Length::Fill)
+                                        .center_y(Length::Fill),
+                                )
+                                .width(30)
+                                .height(30)
+                                .padding(0)
+                                .style(transparent_muted_btn)
+                                .on_press(Message::ShareProfile(p.id.clone())),
+                                button(
+                                    container(icons::lucide_icon(
+                                        icons::PENCIL,
+                                        16,
+                                        if !config_locked { TEXT_MUTED } else { self.icon_inactive() },
+                                    ))
+                                    .center_x(Length::Fill)
+                                    .center_y(Length::Fill),
+                                )
+                                .width(30)
+                                .height(30)
+                                .padding(0)
+                                .style(rounded_icon_btn_style(is_dark, !config_locked))
+                                .on_press_maybe(
+                                    (!config_locked).then(|| Message::EditProfile(p.id.clone()))
+                                ),
+                                button(
+                                    container(icons::lucide_icon(
+                                        icons::TRASH,
+                                        16,
+                                        if !config_locked { TEXT_MUTED } else { self.icon_inactive() },
+                                    ))
+                                    .center_x(Length::Fill)
+                                    .center_y(Length::Fill),
+                                )
+                                .width(30)
+                                .height(30)
+                                .padding(0)
+                                .style(if !config_locked { danger_rounded_btn } else { transparent_muted_btn })
+                                .on_press_maybe(
+                                    (!config_locked).then(|| Message::DeleteProfile(p.id.clone()))
+                                ),
                             ]
                             .spacing(4)
                             .align_y(Alignment::Center),
@@ -2551,15 +2660,29 @@ impl NetrayApp {
         let is_dark = self.is_dark();
 
         let top_bar = row![
-            button(icons::lucide_icon(icons::CLOSE, 22, Color::WHITE))
-                .padding(6)
-                .on_press(Message::CancelEditNode),
-            Space::with_width(16),
+            button(
+                container(icons::lucide_icon(icons::CLOSE, 20, Color::WHITE))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
+            )
+            .width(36)
+            .height(36)
+            .padding(0)
+            .style(rounded_icon_btn_style(is_dark, true))
+            .on_press(Message::CancelEditNode),
+            Space::with_width(14),
             text("Edit VLess").size(20).color(Color::WHITE),
             Space::with_width(Length::Fill),
-            button(icons::lucide_icon(icons::CHECK, 24, ACCENT_BLUE_LIGHT))
-                .padding(6)
-                .on_press(Message::SaveEditedNode),
+            button(
+                container(icons::lucide_icon(icons::CHECK, 22, Color::WHITE))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
+            )
+            .width(36)
+            .height(36)
+            .padding(0)
+            .style(primary_rounded_btn)
+            .on_press(Message::SaveEditedNode),
         ]
         .align_y(Alignment::Center)
         .padding(iced::Padding {
@@ -2780,14 +2903,30 @@ impl NetrayApp {
     // ========================================================================
 
     fn view_logs_screen(&self) -> Element<'_, Message> {
+        let is_dark = self.is_dark();
         let top_bar = row![
-            button(icons::lucide_icon(icons::BACK, 22, Color::WHITE))
-                .padding(6)
-                .on_press(Message::SetViewMode(ViewMode::Profiles)),
+            button(
+                container(icons::lucide_icon(icons::BACK, 20, Color::WHITE))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
+            )
+            .width(36)
+            .height(36)
+            .padding(0)
+            .style(rounded_icon_btn_style(is_dark, true))
+            .on_press(Message::SetViewMode(ViewMode::Profiles)),
             Space::with_width(12),
             text("Tunnel Logs & Status").size(20).color(Color::WHITE),
             Space::with_width(Length::Fill),
-            button("Clear").on_press(Message::ClearLogs),
+            button(text("Clear").size(13))
+                .padding(iced::Padding {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 14.0,
+                    right: 14.0,
+                })
+                .style(primary_action_btn)
+                .on_press(Message::ClearLogs),
         ]
         .align_y(Alignment::Center)
         .padding(iced::Padding {
@@ -2906,14 +3045,18 @@ impl NetrayApp {
     // ========================================================================
 
     fn view_ssh_screen(&self) -> Element<'_, Message> {
+        let is_dark_active = self.is_dark();
         let top_bar = row![
-            button(icons::lucide_icon(icons::BACK, 22, self.text_primary()))
-                .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
-                .on_press(Message::SetViewMode(ViewMode::Profiles)),
+            button(
+                container(icons::lucide_icon(icons::BACK, 20, self.text_primary()))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
+            )
+            .width(36)
+            .height(36)
+            .padding(0)
+            .style(rounded_icon_btn_style(is_dark_active, true))
+            .on_press(Message::SetViewMode(ViewMode::Profiles)),
             Space::with_width(12),
             text("Settings & Routing").size(20).color(self.text_primary()),
         ]
