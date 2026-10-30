@@ -2,6 +2,7 @@ pub mod apps;
 pub mod autostart;
 pub mod icons;
 pub mod protocols;
+pub mod notifications;
 pub mod qr;
 pub mod storage;
 pub mod sysproxy;
