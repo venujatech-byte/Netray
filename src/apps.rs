@@ -3,7 +3,108 @@
 //! Provides a list of popular applications, scans installed desktop entries,
 //! and helpers to manage whitelist app chips.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
+use std::time::Instant;
+
+static PROCESS_PORT_CACHE: Mutex<Option<HashMap<u16, (String, Instant)>>> = Mutex::new(None);
+
+/// Parses the socket inode from `/proc/net/tcp` or `/proc/net/tcp6` table for a given local port.
+pub fn parse_inode_from_proc_net_tcp(content: &str, port: u16) -> Option<String> {
+    let hex_port = format!(":{:04X}", port);
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() > 9 {
+            // Match either local_address (column 1) or rem_address (column 2)
+            if parts[1].ends_with(&hex_port) || parts[2].ends_with(&hex_port) {
+                let inode = parts[9];
+                if inode != "0" {
+                    return Some(inode.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Resolves the process name of the local application connected to/from `port`.
+/// Uses `/proc/net/tcp` inode resolution and caches hits for up to 5 seconds.
+pub fn resolve_socket_process_name(port: u16) -> Option<String> {
+    if port == 0 {
+        return None;
+    }
+
+    // 1. Check fast in-memory cache
+    if let Ok(mut guard) = PROCESS_PORT_CACHE.lock() {
+        let cache = guard.get_or_insert_with(HashMap::new);
+        if let Some((name, ts)) = cache.get(&port) {
+            if ts.elapsed().as_secs() < 5 {
+                return Some(name.clone());
+            }
+        }
+    }
+
+    // 2. Query /proc/net/tcp and /proc/net/tcp6
+    let mut inode = None;
+    for table_path in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        if let Ok(content) = std::fs::read_to_string(table_path) {
+            if let Some(i) = parse_inode_from_proc_net_tcp(&content, port) {
+                inode = Some(i);
+                break;
+            }
+        }
+    }
+
+    let inode = inode?;
+    let target_socket = format!("socket:[{}]", inode);
+
+    // 3. Scan /proc for the matching fd
+    let mut proc_name = None;
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let pid_dir = entry.path();
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+            if !name_str.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+
+            let fd_dir = pid_dir.join("fd");
+            if let Ok(fd_entries) = std::fs::read_dir(fd_dir) {
+                for fd_entry in fd_entries.flatten() {
+                    if let Ok(target) = std::fs::read_link(fd_entry.path()) {
+                        if target.to_string_lossy() == target_socket {
+                            if let Ok(comm) = std::fs::read_to_string(pid_dir.join("comm")) {
+                                let clean = comm.trim().to_string();
+                                if !clean.is_empty() {
+                                    proc_name = Some(clean);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if proc_name.is_some() {
+                break;
+            }
+        }
+    }
+
+    if let Some(ref name) = proc_name {
+        if let Ok(mut guard) = PROCESS_PORT_CACHE.lock() {
+            if let Some(cache) = guard.as_mut() {
+                if cache.len() > 256 {
+                    cache.clear();
+                }
+                cache.insert(port, (name.clone(), Instant::now()));
+            }
+        }
+    }
+
+    proc_name
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPreset {
@@ -323,6 +424,26 @@ mod tests {
         assert!(!apps.is_empty());
         assert!(apps.iter().any(|a| a.executable == "firefox"));
         assert!(apps.iter().any(|a| a.executable == "google-chrome"));
+    }
+
+    #[test]
+    fn test_parse_inode_from_proc_net_tcp() {
+        let sample = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 998877 1 00000000 100 0 0 10 0
+   1: 0100007F:A001 0100007F:1F90 01 00000000:00000000 00:00000000 00000000  1000        0 112233 1 00000000 100 0 0 10 0
+";
+        // 0x1F90 = 8080
+        assert_eq!(parse_inode_from_proc_net_tcp(sample, 8080), Some("998877".to_string()));
+        // 0xA001 = 40961
+        assert_eq!(parse_inode_from_proc_net_tcp(sample, 40961), Some("112233".to_string()));
+        // Unmatched port
+        assert_eq!(parse_inode_from_proc_net_tcp(sample, 9999), None);
+    }
+
+    #[test]
+    fn test_resolve_socket_process_name_zero_port() {
+        assert_eq!(resolve_socket_process_name(0), None);
     }
 }
 
