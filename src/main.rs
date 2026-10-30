@@ -2888,6 +2888,24 @@ impl NetrayApp {
     fn view_edit_screen(&self) -> Element<'_, Message> {
         let is_dark = self.is_dark();
 
+        let proto_name = match self.node_edit_state.protocol.to_lowercase().as_str() {
+            "vless" => "VLess",
+            "vmess" => "VMess",
+            "trojan" => "Trojan",
+            "socks" => "Socks",
+            "shadowsocks" | "ss" => "Shadowsocks",
+            "shadowsocksr" | "ssr" => "ShadowsocksR",
+            "hysteria2" | "hy2" => "Hysteria2",
+            "wireguard" => "WireGuard",
+            "raw" => "RAW Config",
+            _ => "VLess",
+        };
+        let screen_title = if self.node_edit_state.is_new {
+            format!("Setup {}", proto_name)
+        } else {
+            format!("Edit {}", proto_name)
+        };
+
         let top_bar = row![
             button(
                 container(icons::lucide_icon(icons::CLOSE, 20, Color::WHITE))
@@ -2900,7 +2918,7 @@ impl NetrayApp {
             .style(rounded_icon_btn_style(is_dark, true))
             .on_press(Message::CancelEditNode),
             Space::with_width(14),
-            text("Edit VLess").size(20).color(Color::WHITE),
+            text(screen_title).size(20).color(Color::WHITE),
             Space::with_width(Length::Fill),
             button(
                 container(icons::lucide_icon(icons::CHECK, 22, Color::WHITE))
