@@ -76,6 +76,22 @@ where
         .into()
 }
 
+fn modern_text_input<'a>(
+    placeholder: &'a str,
+    value: &'a str,
+    is_dark: bool,
+) -> iced::widget::TextInput<'a, Message> {
+    text_input(placeholder, value)
+        .padding(iced::Padding {
+            top: 8.0,
+            bottom: 8.0,
+            left: 10.0,
+            right: 10.0,
+        })
+        .size(13)
+        .style(move |_, status| theme::text_input_style(is_dark, status))
+}
+
 fn form_card_style(theme: &Theme) -> container::Style {
     let is_dark = match theme {
         Theme::Light => false,
@@ -85,7 +101,7 @@ fn form_card_style(theme: &Theme) -> container::Style {
         container::Style {
             background: Some(theme::CARD_BG_DARK.into()),
             border: iced::Border {
-                radius: 8.0.into(),
+                radius: 12.0.into(),
                 width: 1.0,
                 color: theme::CARD_BORDER_DARK,
             },
@@ -95,7 +111,7 @@ fn form_card_style(theme: &Theme) -> container::Style {
         container::Style {
             background: Some(theme::CARD_BG_LIGHT.into()),
             border: iced::Border {
-                radius: 8.0.into(),
+                radius: 12.0.into(),
                 width: 1.0,
                 color: theme::CARD_BORDER_LIGHT,
             },
@@ -2556,9 +2572,8 @@ impl NetrayApp {
         let remarks_card = container(
             column![
                 text("Remarks").size(11).color(TEXT_MUTED),
-                text_input("Remarks", &self.node_edit_state.remarks)
-                    .on_input(Message::EditRemarksChanged)
-                    .padding(6),
+                modern_text_input("Remarks", &self.node_edit_state.remarks, is_dark)
+                    .on_input(Message::EditRemarksChanged),
             ]
             .spacing(4),
         )
@@ -2570,9 +2585,8 @@ impl NetrayApp {
             container(
                 column![
                     text("Address").size(11).color(TEXT_MUTED),
-                    text_input("example.com", &self.node_edit_state.address)
-                        .on_input(Message::EditAddressChanged)
-                        .padding(6),
+                    modern_text_input("example.com", &self.node_edit_state.address, is_dark)
+                        .on_input(Message::EditAddressChanged),
                 ]
                 .spacing(4)
             )
@@ -2583,9 +2597,8 @@ impl NetrayApp {
             container(
                 column![
                     text("Port").size(11).color(TEXT_MUTED),
-                    text_input("443", &self.node_edit_state.port)
-                        .on_input(Message::EditPortChanged)
-                        .padding(6),
+                    modern_text_input("443", &self.node_edit_state.port, is_dark)
+                        .on_input(Message::EditPortChanged),
                 ]
                 .spacing(4)
             )
@@ -2629,9 +2642,8 @@ impl NetrayApp {
         let uuid_card = container(
             column![
                 text("User ID").size(11).color(TEXT_MUTED),
-                text_input("User ID (UUID)", &self.node_edit_state.user_id)
-                    .on_input(Message::EditUserIdChanged)
-                    .padding(6),
+                modern_text_input("User ID (UUID)", &self.node_edit_state.user_id, is_dark)
+                    .on_input(Message::EditUserIdChanged),
             ]
             .spacing(4),
         )
@@ -2690,9 +2702,8 @@ impl NetrayApp {
         let sni_card = container(
             column![
                 text("Server name indication").size(11).color(TEXT_MUTED),
-                text_input("SNI (e.g. example.com)", &self.node_edit_state.sni)
-                    .on_input(Message::EditSniChanged)
-                    .padding(6),
+                modern_text_input("SNI (e.g. example.com)", &self.node_edit_state.sni, is_dark)
+                    .on_input(Message::EditSniChanged),
             ]
             .spacing(4),
         )
@@ -3091,18 +3102,16 @@ impl NetrayApp {
                 text("Whitelist Applications:").size(13).color(ACCENT_BLUE_LIGHT),
                 app_picker_row,
                 chips_col,
-                text_input("e.g. curl, firefox, chrome, discord", &self.whitelist_apps)
+                modern_text_input("e.g. curl, firefox, chrome, discord", &self.whitelist_apps, is_dark_active)
                     .on_input(Message::WhitelistAppsChanged)
-                    .padding(8)
                     .width(Length::Fill),
                 text("Select from catalog, browse executable, or enter comma/newline-separated names.")
                     .size(11)
                     .color(TEXT_MUTED),
                 Space::with_height(8),
                 text("Whitelist URLs & Domains:").size(13).color(ACCENT_BLUE_LIGHT),
-                text_input("e.g. *.internal.net, 10.0.0.0/8, https://work.com", &self.whitelist_urls)
+                modern_text_input("e.g. *.internal.net, 10.0.0.0/8, https://work.com", &self.whitelist_urls, is_dark_active)
                     .on_input(Message::WhitelistUrlsChanged)
-                    .padding(8)
                     .width(Length::Fill),
                 text("Comma or newline-separated URLs, domains, wildcards (*.site.com), or IP CIDRs.")
                     .size(11)
@@ -3192,9 +3201,8 @@ impl NetrayApp {
                 .menu_style(move |_| theme::pick_list_menu_style(is_dark_active)),
                 Space::with_height(10),
                 text("HTTP Payload Template:").size(14).color(TEXT_MUTED),
-                text_input("Enter HTTP payload...", &self.payload_text)
-                    .on_input(Message::PayloadChanged)
-                    .padding(8),
+                modern_text_input("Enter HTTP payload...", &self.payload_text, is_dark_active)
+                    .on_input(Message::PayloadChanged),
                 Space::with_height(6),
                 row![
                     checkbox("Keep-Alive", self.gen_keep_alive).on_toggle(Message::ToggleKeepAlive),
@@ -3207,38 +3215,32 @@ impl NetrayApp {
                 button("Generate Template Payload").on_press(Message::GeneratePayload),
                 Space::with_height(14),
                 text("Bug Host / CDN Host:").size(14).color(TEXT_MUTED),
-                text_input("cdn.host.com", &self.bug_host)
-                    .on_input(Message::BugHostChanged)
-                    .padding(8),
+                modern_text_input("cdn.host.com", &self.bug_host, is_dark_active)
+                    .on_input(Message::BugHostChanged),
                 Space::with_height(10),
                 text("TLS SNI Host:").size(14).color(TEXT_MUTED),
-                text_input("sni.host.com", &self.sni_host)
-                    .on_input(Message::SniChanged)
-                    .padding(8),
+                modern_text_input("sni.host.com", &self.sni_host, is_dark_active)
+                    .on_input(Message::SniChanged),
                 Space::with_height(14),
                 text("SSH Server Details:").size(14).color(TEXT_MUTED),
                 row![
-                    text_input("Host", &self.ssh_host)
+                    modern_text_input("Host", &self.ssh_host, is_dark_active)
                         .on_input(Message::SshHostChanged)
-                        .padding(8)
                         .width(Length::FillPortion(3)),
                     Space::with_width(8),
-                    text_input("Port", &self.ssh_port)
+                    modern_text_input("Port", &self.ssh_port, is_dark_active)
                         .on_input(Message::SshPortChanged)
-                        .padding(8)
                         .width(Length::FillPortion(1)),
                 ],
                 Space::with_height(8),
                 row![
-                    text_input("User", &self.ssh_user)
+                    modern_text_input("User", &self.ssh_user, is_dark_active)
                         .on_input(Message::SshUserChanged)
-                        .padding(8)
                         .width(Length::Fill),
                     Space::with_width(8),
-                    text_input("Pass", &self.ssh_pass)
+                    modern_text_input("Pass", &self.ssh_pass, is_dark_active)
                         .on_input(Message::SshPassChanged)
                         .secure(true)
-                        .padding(8)
                         .width(Length::Fill),
                 ],
                 Space::with_height(20),

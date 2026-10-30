@@ -1,6 +1,6 @@
 use crate::storage::ThemePreference;
 use iced::overlay::menu;
-use iced::widget::pick_list;
+use iced::widget::{pick_list, text_input};
 use iced::{Border, Color, Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +223,70 @@ pub fn pick_list_menu_style(is_dark: bool) -> menu::Style {
     }
 }
 
+/// Modern text input styling matching the rounded pick_list geometry and reactive focus states
+pub fn text_input_style(is_dark: bool, status: text_input::Status) -> text_input::Style {
+    let (bg, border_color, text_color) = if is_dark {
+        match status {
+            text_input::Status::Focused => (
+                Color::from_rgb(0.16, 0.18, 0.24),
+                Color::from_rgb(0.24, 0.58, 1.0),
+                Color::WHITE,
+            ),
+            text_input::Status::Hovered => (
+                Color::from_rgb(0.14, 0.16, 0.21),
+                Color::from_rgb(0.32, 0.36, 0.46),
+                Color::WHITE,
+            ),
+            text_input::Status::Active => (
+                Color::from_rgb(0.11, 0.12, 0.16),
+                Color::from_rgb(0.22, 0.25, 0.32),
+                Color::from_rgb(0.92, 0.94, 0.98),
+            ),
+            text_input::Status::Disabled => (
+                Color::from_rgb(0.09, 0.10, 0.13),
+                Color::from_rgb(0.18, 0.20, 0.25),
+                Color::from_rgb(0.40, 0.44, 0.50),
+            ),
+        }
+    } else {
+        match status {
+            text_input::Status::Focused => (
+                Color::from_rgb(0.96, 0.98, 1.0),
+                Color::from_rgb(0.15, 0.48, 0.98),
+                Color::from_rgb(0.09, 0.11, 0.15),
+            ),
+            text_input::Status::Hovered => (
+                Color::WHITE,
+                Color::from_rgb(0.65, 0.70, 0.80),
+                Color::from_rgb(0.09, 0.11, 0.15),
+            ),
+            text_input::Status::Active => (
+                Color::WHITE,
+                Color::from_rgb(0.80, 0.83, 0.88),
+                Color::from_rgb(0.09, 0.11, 0.15),
+            ),
+            text_input::Status::Disabled => (
+                Color::from_rgb(0.94, 0.95, 0.97),
+                Color::from_rgb(0.85, 0.87, 0.91),
+                Color::from_rgb(0.60, 0.64, 0.70),
+            ),
+        }
+    };
+
+    text_input::Style {
+        background: bg.into(),
+        border: Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: border_color,
+        },
+        icon: text_color,
+        placeholder: Color::from_rgb(0.50, 0.54, 0.62),
+        value: text_color,
+        selection: Color::from_rgba(0.24, 0.58, 1.0, 0.35),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +333,9 @@ mod tests {
         let dark_menu = pick_list_menu_style(true);
         let light_menu = pick_list_menu_style(false);
         assert_ne!(dark_menu.text_color, light_menu.text_color);
+
+        let input_active = text_input_style(true, text_input::Status::Active);
+        let input_focused = text_input_style(true, text_input::Status::Focused);
+        assert_ne!(input_active.border.color, input_focused.border.color);
     }
 }
