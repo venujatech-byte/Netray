@@ -1666,17 +1666,60 @@ pub struct NodeEditState {
     pub sni: String,
     pub fingerprint: String,
     pub alpn: String,
+    pub protocol: String,
+    pub is_new: bool,
+    pub path: String,
+    pub public_key: String,
+    pub short_id: String,
 }
 
 impl NodeEditState {
+    pub fn new_for_setup(id: &str, protocol: &str, name: &str, config: &str) -> Self {
+        let mut state = Self::from_profile(id, name, config);
+        state.is_new = true;
+        if !protocol.is_empty() {
+            state.protocol = protocol.to_lowercase();
+        }
+        state
+    }
+
     pub fn from_profile(id: &str, name: &str, raw_uri: &str) -> Self {
         let trimmed = raw_uri.trim();
+        let detected_proto = if trimmed.starts_with("vless://") {
+            "vless".to_string()
+        } else if trimmed.starts_with("vmess://") {
+            "vmess".to_string()
+        } else if trimmed.starts_with("trojan://") {
+            "trojan".to_string()
+        } else if trimmed.starts_with("socks://") {
+            "socks".to_string()
+        } else if trimmed.starts_with("ss://") {
+            "shadowsocks".to_string()
+        } else if trimmed.starts_with("ssr://") {
+            "shadowsocksr".to_string()
+        } else if trimmed.starts_with("hy2://") {
+            "hysteria2".to_string()
+        } else if trimmed.starts_with('{') {
+            if trimmed.contains("\"wireguard\"") {
+                "wireguard".to_string()
+            } else {
+                "raw".to_string()
+            }
+        } else {
+            "vless".to_string()
+        };
+
         if let Ok(url) = Url::parse(trimmed) {
             let query: HashMap<String, String> = url.query_pairs().into_owned().collect();
             let remarks = if !name.is_empty() {
                 name.to_string()
             } else {
                 extract_node_name(trimmed)
+            };
+            let proto = if !detected_proto.is_empty() && detected_proto != "vless" {
+                detected_proto
+            } else {
+                url.scheme().to_lowercase()
             };
             return Self {
                 id: id.to_string(),
@@ -1709,6 +1752,11 @@ impl NodeEditState {
                     .unwrap_or_default(),
                 fingerprint: query.get("fp").cloned().unwrap_or_else(|| "chrome".into()),
                 alpn: query.get("alpn").cloned().unwrap_or_else(|| "none".into()),
+                protocol: proto,
+                is_new: false,
+                path: query.get("path").cloned().unwrap_or_default(),
+                public_key: query.get("pbk").cloned().unwrap_or_default(),
+                short_id: query.get("sid").cloned().unwrap_or_default(),
             };
         }
 
@@ -1730,6 +1778,11 @@ impl NodeEditState {
             sni: "".into(),
             fingerprint: "chrome".into(),
             alpn: "none".into(),
+            protocol: detected_proto,
+            is_new: false,
+            path: "".into(),
+            public_key: "".into(),
+            short_id: "".into(),
         }
     }
 
