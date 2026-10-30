@@ -3855,5 +3855,75 @@ mod performance_tests {
             let _element = app.view();
         }
     }
+
+    #[test]
+    fn test_windows_startup_settings_and_connect_prompt_flow() {
+        let mut data = storage::AppData::default();
+        data.connect_at_startup = true;
+        data.run_at_startup = true;
+        let (mut app, _) = NetrayApp::from_saved(data);
+
+        // connect_at_startup is true and default has profiles => prompt should be active
+        assert!(app.run_at_startup);
+        assert!(app.connect_at_startup);
+        assert!(app.startup_connect_prompt);
+        assert!(app.sudo_auth_modal.is_none());
+
+        // Verify view renders confirmation prompt modal
+        drop(app.view());
+
+        // Toggle autostart settings
+        let _ = app.update_message(Message::ToggleRunAtStartup(false));
+        assert!(!app.run_at_startup);
+        let _ = app.update_message(Message::ToggleConnectAtStartup(false));
+        assert!(!app.connect_at_startup);
+
+        // Dismiss confirmation prompt
+        app.startup_connect_prompt = true;
+        let _ = app.update_message(Message::DismissStartupConnectPrompt);
+        assert!(!app.startup_connect_prompt);
+        assert!(app.sudo_auth_modal.is_none());
+
+        // Confirm confirmation prompt -> opens auth modal
+        app.startup_connect_prompt = true;
+        let _ = app.update_message(Message::ConfirmStartupConnectPrompt);
+        assert!(!app.startup_connect_prompt);
+        assert!(app.sudo_auth_modal.is_some());
+
+        // Verify view renders auth modal
+        drop(app.view());
+
+        // Test password input and empty password submission
+        let _ = app.update_message(Message::SudoPasswordInputChanged("   ".into()));
+        let _ = app.update_message(Message::SubmitSudoPassword);
+        assert_eq!(
+            app.sudo_auth_modal.as_ref().and_then(|a| a.error.clone()),
+            Some("Password cannot be empty.".to_string())
+        );
+
+        // Changing password clears error
+        let _ = app.update_message(Message::SudoPasswordInputChanged("my_password".into()));
+        assert_eq!(
+            app.sudo_auth_modal.as_ref().and_then(|a| a.error.clone()),
+            None
+        );
+
+        // Auth failure handling
+        let _ = app.update_message(Message::SudoAuthResult(Err("Incorrect password. Please try again.".into())));
+        assert_eq!(
+            app.sudo_auth_modal.as_ref().and_then(|a| a.error.clone()),
+            Some("Incorrect password. Please try again.".to_string())
+        );
+        assert!(!app.sudo_auth_modal.as_ref().unwrap().is_authenticating);
+
+        // Auth cancel
+        let _ = app.update_message(Message::CancelSudoAuth);
+        assert!(app.sudo_auth_modal.is_none());
+
+        // Auth success closes modal
+        app.sudo_auth_modal = Some(SudoAuthModalState::default());
+        let _ = app.update_message(Message::SudoAuthResult(Ok(())));
+        assert!(app.sudo_auth_modal.is_none());
+    }
 }
 
