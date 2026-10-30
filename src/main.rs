@@ -1239,6 +1239,14 @@ impl NetrayApp {
                 Task::none()
             }
             Message::CancelEditNode => {
+                if self.node_edit_state.is_new {
+                    self.push_log(
+                        "Netray",
+                        "Cancelled new profile setup.",
+                        LogLevel::Info,
+                    );
+                }
+                self.node_edit_state = v2ray::NodeEditState::default();
                 self.view_mode = ViewMode::Profiles;
                 Task::none()
             }
