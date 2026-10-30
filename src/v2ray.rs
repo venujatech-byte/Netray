@@ -617,7 +617,8 @@ fn assemble_xray_config(
 
     let mut config = json!({
         "log": {
-            "loglevel": "warning"
+            "loglevel": "info",
+            "access": ""
         },
         "inbounds": inbounds,
         "outbounds": [
@@ -809,7 +810,7 @@ fn handle_json_config(
     // If it already has inbounds and outbounds, ensure loglevel is present
     if parsed.get("inbounds").is_some() && parsed.get("outbounds").is_some() {
         if parsed.get("log").is_none() {
-            parsed["log"] = json!({ "loglevel": "warning" });
+            parsed["log"] = json!({ "loglevel": "info", "access": "" });
         }
         let whitelist_rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
         if !whitelist_rules.is_empty() {
@@ -2388,6 +2389,15 @@ mod tests {
         assert!(ss_link.starts_with("ss://"));
         assert!(ss_link.contains("@ss.server.org:9000"));
         assert!(ss_link.ends_with("#SSNode"));
+    }
+
+    #[test]
+    fn test_xray_config_access_logging_enabled() {
+        let uri = "vless://00000000-0000-0000-0000-000000000000@example.com:443?type=tcp&encryption=none#TestNode";
+        let config_str = parse_and_generate_xray_config_with_whitelist(uri, 10808, 10809, false, "", "").unwrap();
+        let val: serde_json::Value = serde_json::from_str(&config_str).unwrap();
+        assert_eq!(val["log"]["loglevel"], "info");
+        assert_eq!(val["log"]["access"], "");
     }
 }
 
