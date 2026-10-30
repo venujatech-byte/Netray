@@ -4158,5 +4158,66 @@ mod performance_tests {
             let _element = app.view(window_id);
         }
     }
+
+    #[test]
+    fn test_log_entry_connection_formatting() {
+        let entry = LogEntry::new("SOCKS5", "Connected to remote server", LogLevel::Info)
+            .with_connection("github.com", 443, Some("git".into()), Some("proxy".into()));
+
+        assert_eq!(entry.target_host.as_deref(), Some("github.com"));
+        assert_eq!(entry.target_port, Some(443));
+        assert_eq!(entry.app_name.as_deref(), Some("git"));
+        assert_eq!(entry.route.as_deref(), Some("proxy"));
+
+        let formatted = entry.format_line();
+        assert!(formatted.contains("[SOCKS5]"));
+        assert!(formatted.contains("[App: git]"));
+        assert!(formatted.contains("[github.com:443]"));
+        assert!(formatted.contains("[PROXY]"));
+        assert!(formatted.contains("Connected to remote server"));
+    }
+
+    #[test]
+    fn test_log_filtering_and_presets() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+
+        app.logs = vec![
+            LogEntry::new("Tunnel", "Tunnel initialized", LogLevel::Info),
+            LogEntry::new("SOCKS5", "TCP stream", LogLevel::Info)
+                .with_connection("google.com", 443, Some("firefox".into()), Some("proxy".into())),
+            LogEntry::new("SOCKS5", "Direct connection", LogLevel::Info)
+                .with_connection("internal.lan", 8080, Some("curl".into()), Some("bypass".into())),
+            LogEntry::new("V2Ray", "TLS handshake error", LogLevel::Error),
+        ];
+
+        // 1. Text filter for website
+        let _ = app.update(Message::LogsFilterChanged("google.com".into()));
+        assert_eq!(app.logs_filter, "google.com");
+
+        // 2. Preset filter for Tunnel
+        let _ = app.update(Message::LogsPresetChanged(LogsFilterPreset::Tunnel));
+        assert_eq!(app.logs_preset, LogsFilterPreset::Tunnel);
+
+        // 3. Preset filter for Bypass
+        let _ = app.update(Message::LogsPresetChanged(LogsFilterPreset::Bypass));
+        assert_eq!(app.logs_preset, LogsFilterPreset::Bypass);
+
+        // 4. Preset filter for Apps
+        let _ = app.update(Message::LogsPresetChanged(LogsFilterPreset::Apps));
+        assert_eq!(app.logs_preset, LogsFilterPreset::Apps);
+
+        // 5. Preset filter for Errors
+        let _ = app.update(Message::LogsPresetChanged(LogsFilterPreset::Errors));
+        assert_eq!(app.logs_preset, LogsFilterPreset::Errors);
+
+        // 6. Reset filter
+        let _ = app.update(Message::LogsFilterChanged(String::new()));
+        let _ = app.update(Message::LogsPresetChanged(LogsFilterPreset::All));
+
+        // 7. Verify view rendering with connection chips and badges
+        app.view_mode = ViewMode::Logs;
+        let window_id = iced::window::Id::unique();
+        let _element = app.view(window_id);
+    }
 }
 
