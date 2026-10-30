@@ -554,6 +554,7 @@ pub struct NetrayApp {
     pub share_modal: Option<ShareModalState>,
     pub run_at_startup: bool,
     pub connect_at_startup: bool,
+    pub startup_connect_prompt: bool,
 
     // TUN & System Routing Mode
     pub enable_tun: bool,
@@ -655,6 +656,8 @@ pub enum Message {
     ToggleInstantImport(bool),
     ToggleRunAtStartup(bool),
     ToggleConnectAtStartup(bool),
+    DismissStartupConnectPrompt,
+    ConfirmStartupConnectPrompt,
     ConfirmClipboardImport,
     CancelClipboardImport,
     ClipboardCandidateChanged(String),
@@ -721,6 +724,7 @@ impl NetrayApp {
             })
             .collect();
         let cached_app_chips = apps::extract_app_chips(&saved.whitelist_apps);
+        let has_profiles = !saved.v2ray_profiles.is_empty();
 
         let app = Self {
             view_mode: ViewMode::Profiles,
@@ -756,6 +760,7 @@ impl NetrayApp {
             share_modal: None,
             run_at_startup: saved.run_at_startup,
             connect_at_startup: saved.connect_at_startup,
+            startup_connect_prompt: saved.connect_at_startup && has_profiles,
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
@@ -1352,6 +1357,24 @@ impl NetrayApp {
                     );
                 }
                 let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::DismissStartupConnectPrompt => {
+                self.startup_connect_prompt = false;
+                self.push_log(
+                    "Supervisor",
+                    "Startup connection prompt dismissed.",
+                    LogLevel::Info,
+                );
+                Task::none()
+            }
+            Message::ConfirmStartupConnectPrompt => {
+                self.startup_connect_prompt = false;
+                self.push_log(
+                    "Supervisor",
+                    "Confirmed startup connection prompt; requesting authorization...",
+                    LogLevel::Info,
+                );
                 Task::none()
             }
             Message::CancelClipboardImport => {
@@ -2107,6 +2130,18 @@ impl NetrayApp {
             base_content
         };
 
+        let base_content = if self.startup_connect_prompt {
+            iced::widget::stack![
+                base_content,
+                self.view_startup_connect_prompt_modal(),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            base_content
+        };
+
         if self.close_confirmation.is_some() {
             let dialog = container(
                 column![
@@ -2242,6 +2277,84 @@ impl NetrayApp {
             .center_y(Length::Fill)
             .style(|_| container::Style {
                 background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.62).into()),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn view_startup_connect_prompt_modal(&self) -> Element<'_, Message> {
+        let active_name = self
+            .active_profile_id
+            .as_ref()
+            .and_then(|id| self.v2ray_profiles.iter().find(|p| &p.id == id))
+            .map(|p| p.name.as_str())
+            .unwrap_or("Active V2Ray Node");
+
+        let dialog = container(
+            column![
+                row![
+                    icons::lucide_icon(icons::ACTIVITY, 22, ACCENT_BLUE_LIGHT),
+                    Space::with_width(8),
+                    text("Connect to V2Ray").size(18).color(Color::WHITE),
+                ]
+                .align_y(Alignment::Center),
+                Space::with_height(6),
+                text("Do you want to connect to v2ray?")
+                    .size(15)
+                    .color(Color::WHITE),
+                Space::with_height(2),
+                text(format!("Target Node: {}", active_name))
+                    .size(12)
+                    .color(TEXT_MUTED),
+                Space::with_height(14),
+                row![
+                    button(text("Cancel").size(13).color(Color::WHITE))
+                        .padding(iced::Padding {
+                            top: 8.0,
+                            bottom: 8.0,
+                            left: 16.0,
+                            right: 16.0,
+                        })
+                        .style(|_, status| button::Style {
+                            background: match status {
+                                button::Status::Hovered | button::Status::Pressed => {
+                                    Some(Color::from_rgb(0.25, 0.28, 0.35).into())
+                                }
+                                _ => Some(Color::from_rgb(0.18, 0.20, 0.25).into()),
+                            },
+                            border: iced::Border {
+                                radius: 8.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        })
+                        .on_press(Message::DismissStartupConnectPrompt),
+                    Space::with_width(12),
+                    button(text("Connect").size(13).color(Color::WHITE))
+                        .padding(iced::Padding {
+                            top: 8.0,
+                            bottom: 8.0,
+                            left: 20.0,
+                            right: 20.0,
+                        })
+                        .style(primary_action_btn)
+                        .on_press(Message::ConfirmStartupConnectPrompt),
+                ]
+                .align_y(Alignment::Center),
+            ]
+            .spacing(4)
+            .padding(20)
+            .width(360),
+        )
+        .style(form_card_style);
+
+        container(dialog)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.70).into()),
                 ..Default::default()
             })
             .into()
