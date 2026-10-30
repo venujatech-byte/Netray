@@ -621,6 +621,9 @@ pub enum Message {
     EditSniChanged(String),
     EditFingerprintChanged(String),
     EditAlpnChanged(String),
+    EditPathChanged(String),
+    EditPublicKeyChanged(String),
+    EditShortIdChanged(String),
     SaveEditedNode,
     CancelEditNode,
 
@@ -949,6 +952,9 @@ impl NetrayApp {
                     | Message::EditSniChanged(_)
                     | Message::EditFingerprintChanged(_)
                     | Message::EditAlpnChanged(_)
+                    | Message::EditPathChanged(_)
+                    | Message::EditPublicKeyChanged(_)
+                    | Message::EditShortIdChanged(_)
             )
         {
             return Task::none();
@@ -1227,6 +1233,18 @@ impl NetrayApp {
             }
             Message::EditAlpnChanged(v) => {
                 self.node_edit_state.alpn = v;
+                Task::none()
+            }
+            Message::EditPathChanged(v) => {
+                self.node_edit_state.path = v;
+                Task::none()
+            }
+            Message::EditPublicKeyChanged(v) => {
+                self.node_edit_state.public_key = v;
+                Task::none()
+            }
+            Message::EditShortIdChanged(v) => {
+                self.node_edit_state.short_id = v;
                 Task::none()
             }
             Message::CancelEditNode => {
