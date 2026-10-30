@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 
-iced = { version = "0.13", default-features = false, features = ["tokio", "advanced", "svg", "tiny-skia"] }
+iced = { version = "0.13", default-features = false, features = ["tokio", "advanced", "svg", "wgpu"] }
 tokio = { version = "1", features = ["full"] }
 russh = "0.45"
 russh-keys = "0.45"

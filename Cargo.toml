@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = { version = "0.13", default-features = false, features = ["tokio", "advanced", "svg", "tiny-skia"] }
+iced = { version = "0.13", default-features = false, features = ["tokio", "advanced", "svg", "wgpu"] }
 tokio = { version = "1.40", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

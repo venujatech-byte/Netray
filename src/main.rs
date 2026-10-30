@@ -1973,12 +1973,9 @@ impl NetrayApp {
         .padding(8)
         .align_y(Alignment::Center);
         let content = container(
-            iced::widget::stack![
-                column![titlebar, content].height(Length::Fill),
-                icons::keep_common_icons_warm(),
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill),
+            column![titlebar, content]
+                .width(Length::Fill)
+                .height(Length::Fill),
         )
         .style(|theme| {
                 let is_dark = match theme {
