@@ -1,5 +1,7 @@
 use crate::storage::ThemePreference;
-use iced::{Color, Theme};
+use iced::overlay::menu;
+use iced::widget::pick_list;
+use iced::{Border, Color, Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectiveTheme {
@@ -142,6 +144,85 @@ pub const CARD_BG_LIGHT: Color = Color::WHITE;
 pub const CARD_BORDER_DARK: Color = Color::from_rgb(0.20, 0.22, 0.28);
 pub const CARD_BORDER_LIGHT: Color = Color::from_rgb(0.86, 0.88, 0.92);
 
+pub const ICON_INACTIVE_DARK: Color = Color::from_rgb(0.38, 0.42, 0.48);
+pub const ICON_INACTIVE_LIGHT: Color = Color::from_rgb(0.68, 0.72, 0.78);
+
+/// Modern pick_list styling with sleek rounded corners, surface elevation, and reactive hover/open border states
+pub fn pick_list_style(is_dark: bool, status: pick_list::Status) -> pick_list::Style {
+    let (bg, border_color, text_color, handle_color) = if is_dark {
+        match status {
+            pick_list::Status::Hovered | pick_list::Status::Opened => (
+                Color::from_rgb(0.16, 0.18, 0.24),
+                Color::from_rgb(0.24, 0.58, 1.0),
+                Color::WHITE,
+                Color::from_rgb(0.44, 0.72, 1.0),
+            ),
+            pick_list::Status::Active => (
+                Color::from_rgb(0.11, 0.12, 0.16),
+                Color::from_rgb(0.22, 0.25, 0.32),
+                Color::from_rgb(0.92, 0.94, 0.98),
+                Color::from_rgb(0.60, 0.65, 0.74),
+            ),
+        }
+    } else {
+        match status {
+            pick_list::Status::Hovered | pick_list::Status::Opened => (
+                Color::from_rgb(0.96, 0.98, 1.0),
+                Color::from_rgb(0.15, 0.48, 0.98),
+                Color::from_rgb(0.09, 0.11, 0.15),
+                Color::from_rgb(0.15, 0.48, 0.98),
+            ),
+            pick_list::Status::Active => (
+                Color::WHITE,
+                Color::from_rgb(0.80, 0.83, 0.88),
+                Color::from_rgb(0.09, 0.11, 0.15),
+                Color::from_rgb(0.40, 0.45, 0.52),
+            ),
+        }
+    };
+
+    pick_list::Style {
+        text_color,
+        placeholder_color: Color::from_rgb(0.55, 0.60, 0.68),
+        handle_color,
+        background: bg.into(),
+        border: Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: border_color,
+        },
+    }
+}
+
+/// Modern floating popup menu styling with elevated surfaces, rounded cards, and clean accent highlights
+pub fn pick_list_menu_style(is_dark: bool) -> menu::Style {
+    if is_dark {
+        menu::Style {
+            background: Color::from_rgb(0.13, 0.15, 0.20).into(),
+            border: Border {
+                radius: 10.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.25, 0.28, 0.36),
+            },
+            text_color: Color::from_rgb(0.90, 0.92, 0.96),
+            selected_text_color: Color::WHITE,
+            selected_background: Color::from_rgb(0.15, 0.48, 0.98).into(),
+        }
+    } else {
+        menu::Style {
+            background: Color::WHITE.into(),
+            border: Border {
+                radius: 10.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.82, 0.85, 0.90),
+            },
+            text_color: Color::from_rgb(0.09, 0.11, 0.15),
+            selected_text_color: Color::WHITE,
+            selected_background: Color::from_rgb(0.15, 0.48, 0.98).into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +258,16 @@ mod tests {
         invalidate_system_theme_cache();
         let third = detect_system_is_dark();
         assert_eq!(first, third);
+    }
+
+    #[test]
+    fn test_pick_list_styles() {
+        let dark_active = pick_list_style(true, pick_list::Status::Active);
+        let dark_hovered = pick_list_style(true, pick_list::Status::Hovered);
+        assert_ne!(dark_active.border.color, dark_hovered.border.color);
+
+        let dark_menu = pick_list_menu_style(true);
+        let light_menu = pick_list_menu_style(false);
+        assert_ne!(dark_menu.text_color, light_menu.text_color);
     }
 }

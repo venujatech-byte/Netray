@@ -48,6 +48,34 @@ fn format_uptime(elapsed: Duration) -> String {
     )
 }
 
+fn modern_pick_list<'a, T, L, V>(
+    options: L,
+    selected: Option<V>,
+    on_selected: impl Fn(T) -> Message + 'a,
+    is_dark: bool,
+) -> Element<'a, Message>
+where
+    T: ToString + PartialEq + Clone + 'a,
+    L: std::borrow::Borrow<[T]> + 'a,
+    V: std::borrow::Borrow<T> + 'a,
+{
+    pick_list(options, selected, on_selected)
+        .width(Length::Fill)
+        .padding(iced::Padding {
+            top: 8.0,
+            bottom: 8.0,
+            left: 10.0,
+            right: 8.0,
+        })
+        .text_size(13)
+        .handle(pick_list::Handle::Arrow {
+            size: Some(10.into()),
+        })
+        .style(move |_, status| theme::pick_list_style(is_dark, status))
+        .menu_style(move |_| theme::pick_list_menu_style(is_dark))
+        .into()
+}
+
 fn form_card_style(theme: &Theme) -> container::Style {
     let is_dark = match theme {
         Theme::Light => false,
@@ -2504,6 +2532,8 @@ impl NetrayApp {
     // ========================================================================
 
     fn view_edit_screen(&self) -> Element<'_, Message> {
+        let is_dark = self.is_dark();
+
         let top_bar = row![
             button(icons::lucide_icon(icons::CLOSE, 22, Color::WHITE))
                 .padding(6)
@@ -2567,12 +2597,12 @@ impl NetrayApp {
         let encrypt_card = container(
             column![
                 text("Encrypt method").size(11).color(TEXT_MUTED),
-                pick_list(
+                modern_pick_list(
                     ["none", "zero", "aes-128-gcm", "chacha20-poly1305"],
                     Some(self.node_edit_state.encrypt_method.as_str()),
-                    |s| Message::EditEncryptMethodChanged(s.to_string())
-                )
-                .width(Length::Fill),
+                    |s| Message::EditEncryptMethodChanged(s.to_string()),
+                    is_dark,
+                ),
             ]
             .spacing(4),
         )
@@ -2583,12 +2613,12 @@ impl NetrayApp {
         let flow_card = container(
             column![
                 text("Flow").size(11).color(TEXT_MUTED),
-                pick_list(
+                modern_pick_list(
                     ["none", "xtls-rprx-vision", "xtls-rprx-vision-udp443"],
                     Some(self.node_edit_state.flow.as_str()),
-                    |s| Message::EditFlowChanged(s.to_string())
-                )
-                .width(Length::Fill),
+                    |s| Message::EditFlowChanged(s.to_string()),
+                    is_dark,
+                ),
             ]
             .spacing(4),
         )
@@ -2612,12 +2642,12 @@ impl NetrayApp {
         let transport_card = container(
             column![
                 text("Transfer protocol").size(11).color(TEXT_MUTED),
-                pick_list(
+                modern_pick_list(
                     ["tcp", "ws", "grpc", "h2", "kcp"],
                     Some(self.node_edit_state.transport_protocol.as_str()),
-                    |s| Message::EditTransportChanged(s.to_string())
-                )
-                .width(Length::Fill),
+                    |s| Message::EditTransportChanged(s.to_string()),
+                    is_dark,
+                ),
             ]
             .spacing(4),
         )
@@ -2628,12 +2658,12 @@ impl NetrayApp {
         let header_card = container(
             column![
                 text("Header type").size(11).color(TEXT_MUTED),
-                pick_list(
+                modern_pick_list(
                     ["none", "http"],
                     Some(self.node_edit_state.header_type.as_str()),
-                    |s| Message::EditHeaderTypeChanged(s.to_string())
-                )
-                .width(Length::Fill),
+                    |s| Message::EditHeaderTypeChanged(s.to_string()),
+                    is_dark,
+                ),
             ]
             .spacing(4),
         )
@@ -2644,12 +2674,12 @@ impl NetrayApp {
         let tls_card = container(
             column![
                 text("TLS type").size(11).color(TEXT_MUTED),
-                pick_list(
+                modern_pick_list(
                     ["tls", "reality", "none"],
                     Some(self.node_edit_state.tls_type.as_str()),
-                    |s| Message::EditTlsTypeChanged(s.to_string())
-                )
-                .width(Length::Fill),
+                    |s| Message::EditTlsTypeChanged(s.to_string()),
+                    is_dark,
+                ),
             ]
             .spacing(4),
         )
@@ -2673,12 +2703,12 @@ impl NetrayApp {
         let fp_card = container(
             column![
                 text("Fingerprint").size(11).color(TEXT_MUTED),
-                pick_list(
+                modern_pick_list(
                     ["chrome", "firefox", "safari", "ios", "android", "random"],
                     Some(self.node_edit_state.fingerprint.as_str()),
-                    |s| Message::EditFingerprintChanged(s.to_string())
-                )
-                .width(Length::Fill),
+                    |s| Message::EditFingerprintChanged(s.to_string()),
+                    is_dark,
+                ),
             ]
             .spacing(4),
         )
@@ -2689,12 +2719,12 @@ impl NetrayApp {
         let alpn_card = container(
             column![
                 text("Alpn").size(11).color(TEXT_MUTED),
-                pick_list(
+                modern_pick_list(
                     ["none", "h2", "http/1.1", "h2,http/1.1"],
                     Some(self.node_edit_state.alpn.as_str()),
-                    |s| Message::EditAlpnChanged(s.to_string())
-                )
-                .width(Length::Fill),
+                    |s| Message::EditAlpnChanged(s.to_string()),
+                    is_dark,
+                ),
             ]
             .spacing(4),
         )
@@ -3017,7 +3047,19 @@ impl NetrayApp {
                 Message::PickAppSelected,
             )
             .placeholder("Choose app to whitelist...")
-            .width(Length::FillPortion(3)),
+            .width(Length::FillPortion(3))
+            .padding(iced::Padding {
+                top: 8.0,
+                bottom: 8.0,
+                left: 10.0,
+                right: 8.0,
+            })
+            .text_size(13)
+            .handle(pick_list::Handle::Arrow {
+                size: Some(10.into()),
+            })
+            .style(move |_, status| theme::pick_list_style(is_dark_active, status))
+            .menu_style(move |_| theme::pick_list_menu_style(is_dark_active)),
             Space::with_width(8),
             button(
                 row![
@@ -3135,7 +3177,19 @@ impl NetrayApp {
                     Some(self.tunnel_mode),
                     Message::TunnelModeChanged
                 )
-                .width(Length::Fill),
+                .width(Length::Fill)
+                .padding(iced::Padding {
+                    top: 8.0,
+                    bottom: 8.0,
+                    left: 10.0,
+                    right: 8.0,
+                })
+                .text_size(13)
+                .handle(pick_list::Handle::Arrow {
+                    size: Some(10.into()),
+                })
+                .style(move |_, status| theme::pick_list_style(is_dark_active, status))
+                .menu_style(move |_| theme::pick_list_menu_style(is_dark_active)),
                 Space::with_height(10),
                 text("HTTP Payload Template:").size(14).color(TEXT_MUTED),
                 text_input("Enter HTTP payload...", &self.payload_text)
