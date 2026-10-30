@@ -408,7 +408,7 @@ impl std::fmt::Display for TunnelMode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogLevel {
     Info,
     Success,
@@ -416,12 +416,45 @@ pub enum LogLevel {
     Error,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
     pub timestamp: String,
     pub source: String,
     pub message: String,
     pub level: LogLevel,
+    pub target_host: Option<String>,
+    pub target_port: Option<u16>,
+    pub app_name: Option<String>,
+    pub route: Option<String>,
+}
+
+impl LogEntry {
+    pub fn new(source: impl Into<String>, message: impl Into<String>, level: LogLevel) -> Self {
+        Self {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            source: source.into(),
+            message: message.into(),
+            level,
+            target_host: None,
+            target_port: None,
+            app_name: None,
+            route: None,
+        }
+    }
+
+    pub fn with_connection(
+        mut self,
+        target_host: impl Into<String>,
+        target_port: u16,
+        app_name: Option<String>,
+        route: Option<String>,
+    ) -> Self {
+        self.target_host = Some(target_host.into());
+        self.target_port = Some(target_port);
+        self.app_name = app_name;
+        self.route = route;
+        self
+    }
 }
 
 pub async fn send_log(
@@ -430,14 +463,22 @@ pub async fn send_log(
     msg: impl Into<String>,
     level: LogLevel,
 ) {
-    let _ = tx
-        .send(LogEntry {
-            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-            source: source.into(),
-            message: msg.into(),
-            level,
-        })
-        .await;
+    let _ = tx.send(LogEntry::new(source, msg, level)).await;
+}
+
+pub async fn send_connection_log(
+    tx: &mpsc::Sender<LogEntry>,
+    source: impl Into<String>,
+    msg: impl Into<String>,
+    level: LogLevel,
+    target_host: impl Into<String>,
+    target_port: u16,
+    app_name: Option<String>,
+    route: Option<String>,
+) {
+    let entry = LogEntry::new(source, msg, level)
+        .with_connection(target_host, target_port, app_name, route);
+    let _ = tx.send(entry).await;
 }
 
 #[derive(Debug, Clone)]
@@ -689,12 +730,7 @@ impl NetrayApp {
             profile_display_cache,
             cached_app_chips,
 
-            logs: vec![LogEntry {
-                timestamp: Local::now().format("%H:%M:%S").to_string(),
-                source: "Netray".into(),
-                message: "Ready to connect.".into(),
-                level: LogLevel::Info,
-            }],
+            logs: vec![LogEntry::new("Netray", "Ready to connect.", LogLevel::Info)],
             auto_scroll_logs: true,
             log_sender: None,
             stop_signal: None,
@@ -807,12 +843,7 @@ impl NetrayApp {
     }
 
     fn push_log(&mut self, source: &str, message: impl Into<String>, level: LogLevel) {
-        self.logs.push(LogEntry {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-            source: source.to_string(),
-            message: message.into(),
-            level,
-        });
+        self.logs.push(LogEntry::new(source, message, level));
         if self.logs.len() > 150 {
             self.logs.drain(0..30);
         }
@@ -1348,18 +1379,16 @@ impl NetrayApp {
                                 async move { v2ray::test_xray_config(&bin, &json_cfg).await },
                                 |res| {
                                     match res {
-                                    Ok(()) => Message::NewLog(LogEntry {
-                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                        source: "Config".into(),
-                                        message: "✓ Configuration is 100% valid and verified with Xray core!".into(),
-                                        level: LogLevel::Success,
-                                    }),
-                                    Err(e) => Message::NewLog(LogEntry {
-                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                        source: "Config".into(),
-                                        message: format!("✗ Config validation error: {}", e),
-                                        level: LogLevel::Error,
-                                    }),
+                                    Ok(()) => Message::NewLog(LogEntry::new(
+                                        "Config",
+                                        "✓ Configuration is 100% valid and verified with Xray core!",
+                                        LogLevel::Success,
+                                    )),
+                                    Err(e) => Message::NewLog(LogEntry::new(
+                                        "Config",
+                                        format!("✗ Config validation error: {}", e),
+                                        LogLevel::Error,
+                                    )),
                                 }
                                 },
                             )
@@ -3516,28 +3545,25 @@ mod performance_tests {
     fn xray_connecting_state_waits_for_the_successful_remote_ping() {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
         app.worker_active = true;
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Xray".into(),
-            message: "Core process started".into(),
-            level: LogLevel::Info,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Xray",
+            "Core process started",
+            LogLevel::Info,
+        )));
         assert!(!app.is_running);
         assert!(app.connected_at.is_none());
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Error".into(),
-            message: "Connection check failed: HTTP 502".into(),
-            level: LogLevel::Error,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Error",
+            "Connection check failed: HTTP 502",
+            LogLevel::Error,
+        )));
         assert!(!app.is_running);
         assert!(app.connected_at.is_none());
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Supervisor".into(),
-            message: "Tunnel ready · HTTP 204 through proxy in 73 ms.".into(),
-            level: LogLevel::Success,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Supervisor",
+            "Tunnel ready · HTTP 204 through proxy in 73 ms.",
+            LogLevel::Success,
+        )));
         assert!(app.is_running);
         assert!(app.connected_at.is_some());
         assert_eq!(app.ping_ms, Some(73));
@@ -3548,20 +3574,18 @@ mod performance_tests {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
         app.worker_active = true;
         app.is_running = true;
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Error".into(),
-            message: "Engine failed: test".into(),
-            level: LogLevel::Error,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Error",
+            "Engine failed: test",
+            LogLevel::Error,
+        )));
         assert!(app.worker_active);
         assert!(!app.is_running);
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Supervisor".into(),
-            message: "Tunnel is offline.".into(),
-            level: LogLevel::Info,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Supervisor",
+            "Tunnel is offline.",
+            LogLevel::Info,
+        )));
         assert!(!app.worker_active);
     }
 
@@ -3571,12 +3595,11 @@ mod performance_tests {
         let _ = app.update(Message::SetViewMode(ViewMode::Logs));
         let _ = app.update(Message::AutoScrollLogs(false));
         let count = app.logs.len();
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Test".into(),
-            message: "still collected".into(),
-            level: LogLevel::Info,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Test",
+            "still collected",
+            LogLevel::Info,
+        )));
         assert!(!app.auto_scroll_logs);
         assert_eq!(app.logs.len(), count + 1);
         let _ = app.update(Message::AutoScrollLogs(true));
