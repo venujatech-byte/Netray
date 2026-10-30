@@ -3095,28 +3095,73 @@ impl NetrayApp {
         .width(Length::Fill)
         .style(form_card_style);
 
-        let form_content = scrollable(
+        let path_card = container(
             column![
-                remarks_card,
-                addr_port_card,
-                encrypt_card,
-                flow_card,
-                uuid_card,
-                transport_card,
-                header_card,
-                tls_card,
-                sni_card,
-                fp_card,
-                alpn_card,
-                Space::with_height(20),
+                text("Path / Service name").size(11).color(TEXT_MUTED),
+                modern_text_input("/path (e.g. /ws)", &self.node_edit_state.path, is_dark)
+                    .on_input(Message::EditPathChanged),
             ]
-            .spacing(10)
-            .padding(iced::Padding {
-                top: 0.0,
-                bottom: 20.0,
-                left: 16.0,
-                right: 16.0,
-            }),
+            .spacing(4),
+        )
+        .padding(10)
+        .width(Length::Fill)
+        .style(form_card_style);
+
+        let mut form_items = vec![
+            remarks_card.into(),
+            addr_port_card.into(),
+            encrypt_card.into(),
+            flow_card.into(),
+            uuid_card.into(),
+            transport_card.into(),
+            header_card.into(),
+            path_card.into(),
+            tls_card.into(),
+        ];
+
+        if self.node_edit_state.tls_type == "reality" {
+            let reality_row = row![
+                container(
+                    column![
+                        text("Reality Public Key").size(11).color(TEXT_MUTED),
+                        modern_text_input("PublicKey", &self.node_edit_state.public_key, is_dark)
+                            .on_input(Message::EditPublicKeyChanged),
+                    ]
+                    .spacing(4)
+                )
+                .padding(10)
+                .width(Length::FillPortion(2))
+                .style(form_card_style),
+                Space::with_width(10),
+                container(
+                    column![
+                        text("Short ID").size(11).color(TEXT_MUTED),
+                        modern_text_input("ShortId", &self.node_edit_state.short_id, is_dark)
+                            .on_input(Message::EditShortIdChanged),
+                    ]
+                    .spacing(4)
+                )
+                .padding(10)
+                .width(Length::FillPortion(1))
+                .style(form_card_style),
+            ];
+            form_items.push(reality_row.into());
+        }
+
+        form_items.push(sni_card.into());
+        form_items.push(fp_card.into());
+        form_items.push(alpn_card.into());
+        form_items.push(Space::with_height(20).into());
+
+        let form_content = scrollable(
+            column(form_items)
+                .spacing(10)
+                .padding(iced::Padding {
+                    top: 0.0,
+                    bottom: 20.0,
+                    left: 16.0,
+                    right: 16.0,
+                }),
         )
         .height(Length::Fill);
 
