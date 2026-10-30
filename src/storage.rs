@@ -55,6 +55,10 @@ pub struct AppData {
     pub instant_import: bool,
     #[serde(default)]
     pub theme_preference: ThemePreference,
+    #[serde(default)]
+    pub run_at_startup: bool,
+    #[serde(default)]
+    pub connect_at_startup: bool,
 }
 
 impl Default for AppData {
@@ -88,6 +92,8 @@ impl Default for AppData {
             whitelist_urls: "".to_string(),
             instant_import: false,
             theme_preference: ThemePreference::System,
+            run_at_startup: false,
+            connect_at_startup: false,
         }
     }
 }
