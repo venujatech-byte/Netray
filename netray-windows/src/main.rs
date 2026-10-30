@@ -540,7 +540,7 @@ impl NetrayApp {
             sudo_auth_modal: None,
 
             enable_tun: saved.enable_tun,
-            enable_sysproxy: saved.enable_sysproxy && !saved.enable_tun,
+            enable_sysproxy: saved.enable_sysproxy,
             whitelist_apps: saved.whitelist_apps,
             whitelist_urls: saved.whitelist_urls,
             available_apps: apps::get_curated_windows_apps(),
@@ -1254,17 +1254,11 @@ impl NetrayApp {
             }
             Message::ToggleTunMode(v) => {
                 self.enable_tun = v;
-                if v {
-                    self.enable_sysproxy = false;
-                }
                 let _ = self.save_current_state();
                 Task::none()
             }
             Message::ToggleSysProxy(v) => {
                 self.enable_sysproxy = v;
-                if v {
-                    self.enable_tun = false;
-                }
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -4374,6 +4368,41 @@ mod performance_tests {
         assert!(!app.auto_reconnect);
         let _ = app.update_message(Message::ToggleAutoReconnect(true));
         assert!(app.auto_reconnect);
+    }
+
+    #[test]
+    fn test_windows_both_tun_and_proxy_can_be_selected_simultaneously() {
+        let mut data = storage::AppData::default();
+        data.enable_tun = true;
+        data.enable_sysproxy = true;
+        let (mut app, _) = NetrayApp::from_saved(data);
+
+        // 1. Initial state from saved preserves both flags
+        assert!(app.enable_tun);
+        assert!(app.enable_sysproxy);
+
+        // 2. Toggle proxy off -> tun remains true
+        let _ = app.update_message(Message::ToggleSysProxy(false));
+        assert!(app.enable_tun);
+        assert!(!app.enable_sysproxy);
+
+        // 3. Toggle proxy on -> tun remains true (both active)
+        let _ = app.update_message(Message::ToggleSysProxy(true));
+        assert!(app.enable_tun);
+        assert!(app.enable_sysproxy);
+
+        // 4. Toggle tun off -> proxy remains true
+        let _ = app.update_message(Message::ToggleTunMode(false));
+        assert!(!app.enable_tun);
+        assert!(app.enable_sysproxy);
+
+        // 5. Toggle tun on -> proxy remains true (both active)
+        let _ = app.update_message(Message::ToggleTunMode(true));
+        assert!(app.enable_tun);
+        assert!(app.enable_sysproxy);
+
+        // 6. View rendering check for both selected
+        drop(app.view());
     }
 }
 
