@@ -1142,8 +1142,9 @@ impl NetrayApp {
                         .unwrap_or_default()
                         .as_millis()
                 );
+                let (name, config) = protocols::ProfileType::VLess.generate_template();
                 self.node_edit_state =
-                    v2ray::NodeEditState::from_profile(&id, "New VLess Node", "");
+                    v2ray::NodeEditState::new_for_setup(&id, "VLess", &name, &config);
                 self.view_mode = ViewMode::EditNode;
                 Task::none()
             }
@@ -1167,24 +1168,14 @@ impl NetrayApp {
                         .as_millis()
                 );
                 let (name, config) = proto.generate_template();
-                let profile = storage::V2RayProfile {
-                    id: id.clone(),
-                    name,
-                    config: config.clone(),
-                    created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                };
+                self.node_edit_state =
+                    v2ray::NodeEditState::new_for_setup(&id, proto.title(), &name, &config);
                 self.push_log(
                     "Netray",
-                    format!("Added new {} profile '{}'.", proto.title(), profile.name),
+                    format!("Opening setup for new {} profile...", proto.title()),
                     LogLevel::Info,
                 );
-                self.active_profile_id = Some(id);
-                self.v2ray_uri_or_json = config;
-                self.node_edit_state =
-                    v2ray::NodeEditState::from_profile(&profile.id, &profile.name, &profile.config);
-                self.v2ray_profiles.push(profile);
-                self.sync_profile_display_cache();
-                let _ = self.save_current_state();
+                self.view_mode = ViewMode::EditNode;
                 Task::none()
             }
             Message::EditRemarksChanged(v) => {
