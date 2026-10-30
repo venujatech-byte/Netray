@@ -144,25 +144,58 @@ fn card_strip_inactive(_: &Theme) -> container::Style {
 
 fn rounded_icon_btn_style(is_dark: bool, is_active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
-        let bg = if !is_active {
-            None
+        let (bg, text_color) = if !is_active {
+            (
+                None,
+                if is_dark {
+                    theme::ICON_INACTIVE_DARK
+                } else {
+                    theme::ICON_INACTIVE_LIGHT
+                },
+            )
         } else {
+            let col = if is_dark {
+                theme::TEXT_PRIMARY_DARK
+            } else {
+                theme::TEXT_PRIMARY_LIGHT
+            };
             match status {
-                button::Status::Hovered => Some(if is_dark {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.12)
-                } else {
-                    Color::from_rgba(0.0, 0.0, 0.0, 0.08)
-                }.into()),
-                button::Status::Pressed => Some(if is_dark {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.20)
-                } else {
-                    Color::from_rgba(0.0, 0.0, 0.0, 0.14)
-                }.into()),
-                _ => None,
+                button::Status::Hovered => (
+                    Some(
+                        if is_dark {
+                            Color::from_rgba(1.0, 1.0, 1.0, 0.12)
+                        } else {
+                            Color::from_rgba(0.0, 0.0, 0.0, 0.08)
+                        }
+                        .into(),
+                    ),
+                    col,
+                ),
+                button::Status::Pressed => (
+                    Some(
+                        if is_dark {
+                            Color::from_rgba(1.0, 1.0, 1.0, 0.20)
+                        } else {
+                            Color::from_rgba(0.0, 0.0, 0.0, 0.14)
+                        }
+                        .into(),
+                    ),
+                    col,
+                ),
+                button::Status::Disabled => (
+                    None,
+                    if is_dark {
+                        theme::ICON_INACTIVE_DARK
+                    } else {
+                        theme::ICON_INACTIVE_LIGHT
+                    },
+                ),
+                _ => (None, col),
             }
         };
         button::Style {
             background: bg,
+            text_color,
             border: iced::Border {
                 radius: 999.0.into(),
                 ..Default::default()
@@ -2365,12 +2398,25 @@ impl NetrayApp {
         });
 
         // 2. Category Sub-Bar
+        let add_btn_active = !config_locked;
+        let add_btn_icon_color = if add_btn_active {
+            Color::WHITE
+        } else {
+            self.icon_inactive()
+        };
+        let add_btn_bg = if add_btn_active {
+            ACCENT_BLUE
+        } else if is_dark {
+            Color::from_rgb(0.18, 0.20, 0.25)
+        } else {
+            Color::from_rgb(0.88, 0.90, 0.93)
+        };
         let sub_bar = row![
             button(
                 container(icons::lucide_icon(
                     icons::PLUS,
                     18,
-                    if !config_locked { Color::WHITE } else { self.icon_inactive() },
+                    add_btn_icon_color,
                 ))
                 .center_x(Length::Fill)
                 .center_y(Length::Fill),
@@ -2378,7 +2424,25 @@ impl NetrayApp {
             .width(32)
             .height(32)
             .padding(0)
-            .style(if !config_locked { primary_rounded_btn } else { transparent_muted_btn })
+            .style(move |_, status| {
+                let bg = if !add_btn_active {
+                    add_btn_bg
+                } else {
+                    match status {
+                        button::Status::Hovered => ACCENT_BLUE_LIGHT,
+                        _ => add_btn_bg,
+                    }
+                };
+                button::Style {
+                    background: Some(bg.into()),
+                    text_color: add_btn_icon_color,
+                    border: iced::Border {
+                        radius: 999.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            })
             .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
             Space::with_width(12),
             text(format!("{} profiles", self.v2ray_profiles.len()))
@@ -2484,25 +2548,53 @@ impl NetrayApp {
                                 text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
                                 text(ping_result).size(11).color(ping_color),
                                 Space::with_width(Length::Fill),
-                                button(icons::lucide_icon(icons::ACTIVITY, 18, Color::WHITE))
-                                    .padding(10)
-                                    .style(move |_, _| button::Style {
-                                        background: Some(
-                                            if pinging {
-                                                ACCENT_BLUE_LIGHT
-                                            } else {
-                                                ACCENT_BLUE
+                                {
+                                    let ping_active = ping_press.is_some() || pinging;
+                                    let ping_icon_color = if ping_active {
+                                        Color::WHITE
+                                    } else {
+                                        self.icon_inactive()
+                                    };
+                                    let ping_bg = if ping_active {
+                                        if pinging {
+                                            ACCENT_BLUE_LIGHT
+                                        } else {
+                                            ACCENT_BLUE
+                                        }
+                                    } else if is_dark {
+                                        Color::from_rgb(0.18, 0.20, 0.25)
+                                    } else {
+                                        Color::from_rgb(0.88, 0.90, 0.93)
+                                    };
+                                    button(
+                                        container(icons::lucide_icon(icons::ACTIVITY, 16, ping_icon_color))
+                                            .center_x(Length::Fill)
+                                            .center_y(Length::Fill),
+                                    )
+                                    .width(32)
+                                    .height(32)
+                                    .padding(0)
+                                    .style(move |_, status| {
+                                        let bg = if !ping_active {
+                                            ping_bg
+                                        } else {
+                                            match status {
+                                                button::Status::Hovered => ACCENT_BLUE_LIGHT,
+                                                _ => ping_bg,
                                             }
-                                            .into()
-                                        ),
-                                        text_color: Color::WHITE,
-                                        border: iced::Border {
-                                            radius: 999.0.into(),
+                                        };
+                                        button::Style {
+                                            background: Some(bg.into()),
+                                            text_color: ping_icon_color,
+                                            border: iced::Border {
+                                                radius: 999.0.into(),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
-                                        },
-                                        ..Default::default()
+                                        }
                                     })
-                                    .on_press_maybe(ping_press),
+                                    .on_press_maybe(ping_press)
+                                },
                                 button(
                                     container(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
                                         .center_x(Length::Fill)

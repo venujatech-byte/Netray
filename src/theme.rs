@@ -147,6 +147,21 @@ pub const CARD_BORDER_LIGHT: Color = Color::from_rgb(0.86, 0.88, 0.92);
 pub const ICON_INACTIVE_DARK: Color = Color::from_rgb(0.38, 0.42, 0.48);
 pub const ICON_INACTIVE_LIGHT: Color = Color::from_rgb(0.68, 0.72, 0.78);
 
+/// Resolves appropriate icon tint based on theme and active/inactive state
+pub fn icon_color_for_state(is_dark: bool, is_active: bool) -> Color {
+    if is_active {
+        if is_dark {
+            TEXT_PRIMARY_DARK
+        } else {
+            TEXT_PRIMARY_LIGHT
+        }
+    } else if is_dark {
+        ICON_INACTIVE_DARK
+    } else {
+        ICON_INACTIVE_LIGHT
+    }
+}
+
 /// Modern pick_list styling with sleek rounded corners, surface elevation, and reactive hover/open border states
 pub fn pick_list_style(is_dark: bool, status: pick_list::Status) -> pick_list::Style {
     let (bg, border_color, text_color, handle_color) = if is_dark {
@@ -337,5 +352,10 @@ mod tests {
         let input_active = text_input_style(true, text_input::Status::Active);
         let input_focused = text_input_style(true, text_input::Status::Focused);
         assert_ne!(input_active.border.color, input_focused.border.color);
+
+        let active_icon = icon_color_for_state(true, true);
+        let inactive_icon = icon_color_for_state(true, false);
+        assert_ne!(active_icon, inactive_icon);
+        assert_eq!(inactive_icon, ICON_INACTIVE_DARK);
     }
 }
