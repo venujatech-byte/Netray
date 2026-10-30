@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod autostart;
 pub mod icons;
 pub mod protocols;
 pub mod qr;

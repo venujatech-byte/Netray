@@ -1,6 +1,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 pub mod apps;
+pub mod autostart;
 pub mod icons;
 pub mod protocols;
 pub mod qr;
