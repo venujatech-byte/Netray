@@ -543,6 +543,7 @@ pub struct NetrayApp {
 
     // Real-time Logs & Background Worker Control
     pub logs: Vec<LogEntry>,
+    pub logs_filter: String,
     auto_scroll_logs: bool,
     pub log_sender: Option<mpsc::Sender<LogEntry>>,
     pub stop_signal: Option<tokio::sync::oneshot::Sender<()>>,
@@ -641,6 +642,7 @@ pub enum Message {
     UptimeTick,
     ClearLogs,
     AutoScrollLogs(bool),
+    LogsFilterChanged(String),
     CloseRequested(iced::window::Id),
     WindowOpened(iced::window::Id),
     ShowWindow,
@@ -731,6 +733,7 @@ impl NetrayApp {
             cached_app_chips,
 
             logs: vec![LogEntry::new("Netray", "Ready to connect.", LogLevel::Info)],
+            logs_filter: String::new(),
             auto_scroll_logs: true,
             log_sender: None,
             stop_signal: None,
@@ -1619,6 +1622,10 @@ impl NetrayApp {
             }
             Message::AutoScrollLogs(enabled) => {
                 self.auto_scroll_logs = enabled;
+                Task::none()
+            }
+            Message::LogsFilterChanged(query) => {
+                self.logs_filter = query;
                 Task::none()
             }
             Message::ClearLogs => {
@@ -3128,13 +3135,37 @@ impl NetrayApp {
                 .into()
         };
 
-        let log_rows: Vec<Element<Message>> = self
+        let query = self.logs_filter.trim().to_lowercase();
+        let filtered_logs: Vec<&LogEntry> = self
             .logs
+            .iter()
+            .filter(|entry| {
+                if query.is_empty() {
+                    return true;
+                }
+                entry.message.to_lowercase().contains(&query)
+                    || entry.source.to_lowercase().contains(&query)
+                    || entry
+                        .app_name
+                        .as_deref()
+                        .is_some_and(|a| a.to_lowercase().contains(&query))
+                    || entry
+                        .target_host
+                        .as_deref()
+                        .is_some_and(|h| h.to_lowercase().contains(&query))
+                    || entry
+                        .route
+                        .as_deref()
+                        .is_some_and(|r| r.to_lowercase().contains(&query))
+            })
+            .collect();
+
+        let log_rows: Vec<Element<Message>> = filtered_logs
             .iter()
             .rev()
             .take(80)
             .rev()
-            .map(|entry| {
+            .map(|&entry| {
                 let color = match entry.level {
                     LogLevel::Info => Color::from_rgb(0.75, 0.82, 0.9),
                     LogLevel::Success => Color::from_rgb(0.25, 0.9, 0.45),
@@ -3211,13 +3242,51 @@ impl NetrayApp {
             ..Default::default()
         });
 
+        let search_input = modern_text_input(
+            "Filter logs by app, website, or keyword...",
+            &self.logs_filter,
+            is_dark,
+        )
+        .on_input(Message::LogsFilterChanged)
+        .width(Length::Fixed(280.0));
+
+        let mut controls_row = row![
+            checkbox("Auto-scroll", self.auto_scroll_logs).on_toggle(Message::AutoScrollLogs),
+            Space::with_width(12),
+            search_input,
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+
+        if !self.logs_filter.is_empty() {
+            controls_row = controls_row.push(
+                button(text("Clear Filter").size(11))
+                    .padding(iced::Padding {
+                        top: 4.0,
+                        bottom: 4.0,
+                        left: 8.0,
+                        right: 8.0,
+                    })
+                    .style(rounded_icon_btn_style(is_dark, true))
+                    .on_press(Message::LogsFilterChanged(String::new())),
+            );
+        }
+
+        controls_row = controls_row.push(Space::with_width(Length::Fill));
+        controls_row = controls_row.push(
+            text(format!(
+                "Showing {} of {}",
+                filtered_logs.len(),
+                self.logs.len()
+            ))
+            .size(11)
+            .color(TEXT_MUTED),
+        );
+
         column![
             top_bar,
             status_bar,
-            container(
-                checkbox("Auto-scroll", self.auto_scroll_logs).on_toggle(Message::AutoScrollLogs)
-            )
-            .padding([4, 12]),
+            container(controls_row).padding([4, 12]),
             container(terminal)
                 .padding(iced::Padding {
                     top: 8.0,
