@@ -54,6 +54,7 @@ pub fn record_connection_end() {
     }
 }
 
+#[allow(dead_code)]
 pub fn reset_tunnel_metrics() {
     METRICS.active_connections.store(0, Ordering::Relaxed);
     METRICS.total_proxied_connections.store(0, Ordering::Relaxed);
@@ -156,6 +157,7 @@ pub async fn run_real_tunnel_worker(
         let _ = Command::new("ip").args(["link", "delete", "netray0"]).output().await;
     }
 
+    reset_tunnel_metrics();
     send_log(&log_tx, "Supervisor", "Tunnel is offline.", LogLevel::Info).await;
 }
 

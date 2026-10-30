@@ -3063,18 +3063,32 @@ impl NetrayApp {
             .unwrap_or(10808)
             .saturating_add(1);
 
+        let (active_conns, proxied_total, bypassed_total) = crate::tunnel::get_tunnel_metrics();
+
         let status_bar = container(
             row![
                 text(format!("SOCKS5: 127.0.0.1:{}", self.local_socks_port))
-                    .size(12)
+                    .size(11)
                     .color(ACCENT_BLUE_LIGHT),
-                Space::with_width(16),
+                Space::with_width(12),
                 text(format!("HTTP: 127.0.0.1:{}", http_port))
-                    .size(12)
+                    .size(11)
                     .color(ACCENT_BLUE_LIGHT),
+                Space::with_width(12),
+                text(format!("Active: {}", active_conns))
+                    .size(11)
+                    .color(if active_conns > 0 { SUCCESS_GREEN } else { TEXT_MUTED }),
+                Space::with_width(12),
+                text(format!("Routed: {}", proxied_total))
+                    .size(11)
+                    .color(Color::from_rgb(0.40, 0.85, 1.0)),
+                Space::with_width(12),
+                text(format!("Bypassed: {}", bypassed_total))
+                    .size(11)
+                    .color(Color::from_rgb(1.0, 0.75, 0.20)),
                 Space::with_width(Length::Fill),
                 text(if self.is_running { "ACTIVE" } else { "STOPPED" })
-                    .size(12)
+                    .size(11)
                     .color(if self.is_running {
                         Color::from_rgb(0.2, 0.9, 0.4)
                     } else {
@@ -3094,11 +3108,31 @@ impl NetrayApp {
             ..Default::default()
         });
 
+        let log_chip = |label: String, text_col: Color, bg_col: Color, border_col: Color| -> Element<'_, Message> {
+            container(text(label).size(10).color(text_col))
+                .padding(iced::Padding {
+                    top: 2.0,
+                    bottom: 2.0,
+                    left: 6.0,
+                    right: 6.0,
+                })
+                .style(move |_| container::Style {
+                    background: Some(bg_col.into()),
+                    border: iced::Border {
+                        radius: 999.0.into(),
+                        width: 1.0,
+                        color: border_col,
+                    },
+                    ..Default::default()
+                })
+                .into()
+        };
+
         let log_rows: Vec<Element<Message>> = self
             .logs
             .iter()
             .rev()
-            .take(60)
+            .take(80)
             .rev()
             .map(|entry| {
                 let color = match entry.level {
@@ -3108,17 +3142,54 @@ impl NetrayApp {
                     LogLevel::Error => Color::from_rgb(0.95, 0.35, 0.35),
                 };
 
-                row![
+                let mut row_items = row![
                     text(format!("[{}]", entry.timestamp))
-                        .size(12)
+                        .size(11)
                         .color(Color::from_rgb(0.5, 0.5, 0.5)),
                     text(format!("[{}]", entry.source))
-                        .size(12)
+                        .size(11)
                         .color(ACCENT_BLUE_LIGHT),
-                    text(&entry.message).size(12).color(color),
                 ]
-                .spacing(8)
-                .into()
+                .spacing(6)
+                .align_y(Alignment::Center);
+
+                if let Some(ref app) = entry.app_name {
+                    row_items = row_items.push(log_chip(
+                        format!("App: {}", app),
+                        Color::from_rgb(0.40, 0.85, 1.0),
+                        Color::from_rgba(0.0, 0.60, 1.0, 0.14),
+                        Color::from_rgba(0.0, 0.60, 1.0, 0.35),
+                    ));
+                }
+
+                if let (Some(ref host), Some(port)) = (&entry.target_host, entry.target_port) {
+                    row_items = row_items.push(log_chip(
+                        format!("{}:{}", host, port),
+                        Color::WHITE,
+                        Color::from_rgba(0.50, 0.55, 0.65, 0.18),
+                        Color::from_rgba(0.50, 0.55, 0.65, 0.35),
+                    ));
+                }
+
+                if let Some(ref route) = entry.route {
+                    let is_bypass = route.eq_ignore_ascii_case("bypass") || route.eq_ignore_ascii_case("direct");
+                    let (t_col, bg_col, b_col) = if is_bypass {
+                        (
+                            Color::from_rgb(1.0, 0.75, 0.20),
+                            Color::from_rgba(1.0, 0.75, 0.20, 0.14),
+                            Color::from_rgba(1.0, 0.75, 0.20, 0.35),
+                        )
+                    } else {
+                        (
+                            Color::from_rgb(0.25, 0.95, 0.45),
+                            Color::from_rgba(0.25, 0.95, 0.45, 0.14),
+                            Color::from_rgba(0.25, 0.95, 0.45, 0.35),
+                        )
+                    };
+                    row_items = row_items.push(log_chip(route.to_uppercase(), t_col, bg_col, b_col));
+                }
+
+                row_items.push(text(&entry.message).size(12).color(color)).into()
             })
             .collect();
 
