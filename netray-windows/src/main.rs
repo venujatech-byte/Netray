@@ -239,7 +239,7 @@ impl std::fmt::Display for TunnelMode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Info,
     Success,
@@ -288,6 +288,19 @@ pub struct SudoAuthModalState {
     pub is_authenticating: bool,
 }
 
+pub const MAX_RECONNECT_ATTEMPTS: u32 = 5;
+pub const RECONNECT_COUNTDOWN_SECONDS: u32 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorNotification {
+    pub title: String,
+    pub message: String,
+    pub attempt: u32,
+    pub max_attempts: u32,
+    pub countdown_secs: Option<u32>,
+    pub is_reconnecting: bool,
+}
+
 pub struct NetrayApp {
     pub view_mode: ViewMode,
     pub is_running: bool,
@@ -321,6 +334,9 @@ pub struct NetrayApp {
     pub run_at_startup: bool,
     pub connect_at_startup: bool,
     pub auto_reconnect: bool,
+    pub user_stopped: bool,
+    pub reconnect_attempts: u32,
+    pub error_notification: Option<ErrorNotification>,
     pub startup_connect_prompt: bool,
     pub sudo_auth_modal: Option<SudoAuthModalState>,
 
@@ -432,6 +448,12 @@ pub enum Message {
     SubmitSudoPassword,
     CancelSudoAuth,
     SudoAuthResult(Result<(), String>),
+    TriggerErrorAutoReconnect(String),
+    ReconnectCountdownTick,
+    ExecuteAutoReconnect,
+    CancelAutoReconnect,
+    DismissNotification,
+    ToggleAutoReconnect(bool),
 
     LoggerReady(mpsc::Sender<LogEntry>),
     NewLog(LogEntry),
@@ -511,6 +533,9 @@ impl NetrayApp {
             run_at_startup: saved.run_at_startup,
             connect_at_startup: saved.connect_at_startup,
             auto_reconnect: saved.auto_reconnect,
+            user_stopped: false,
+            reconnect_attempts: 0,
+            error_notification: None,
             startup_connect_prompt: saved.connect_at_startup && has_profiles,
             sudo_auth_modal: None,
 
@@ -644,6 +669,72 @@ impl NetrayApp {
 
     fn config_locked(&self) -> bool {
         self.is_running || self.worker_active
+    }
+
+    fn handle_detected_error(&mut self, err_msg: &str) -> Task<Message> {
+        if self.user_stopped {
+            return Task::none();
+        }
+        if let Some(notif) = &self.error_notification {
+            if notif.countdown_secs.is_some() || notif.is_reconnecting {
+                return Task::none();
+            }
+        }
+
+        self.reconnect_attempts = self.reconnect_attempts.saturating_add(1);
+        let attempt = self.reconnect_attempts;
+
+        let clean_err = err_msg.trim().trim_start_matches("Connection check failed:").trim();
+        let display_err = if clean_err.is_empty() {
+            "Connection lost or unreachable".to_string()
+        } else {
+            clean_err.to_string()
+        };
+
+        let title = "Tunnel Connection Error".to_string();
+
+        notifications::send_desktop_notification(
+            &title,
+            &format!("Error: {}. Attempting auto-reconnect ({}/{})", display_err, attempt, MAX_RECONNECT_ATTEMPTS),
+            notifications::NotificationUrgency::Critical,
+        );
+
+        if self.auto_reconnect && attempt <= MAX_RECONNECT_ATTEMPTS {
+            self.error_notification = Some(ErrorNotification {
+                title: "Connection Error Detected".to_string(),
+                message: display_err,
+                attempt,
+                max_attempts: MAX_RECONNECT_ATTEMPTS,
+                countdown_secs: Some(RECONNECT_COUNTDOWN_SECONDS),
+                is_reconnecting: false,
+            });
+
+            self.push_log(
+                "Supervisor",
+                format!(
+                    "Automatic reconnect scheduled in {} seconds (Attempt {} of {})...",
+                    RECONNECT_COUNTDOWN_SECONDS, attempt, MAX_RECONNECT_ATTEMPTS
+                ),
+                LogLevel::Warn,
+            );
+        } else {
+            let reason = if !self.auto_reconnect {
+                "Auto-reconnect disabled in settings."
+            } else {
+                "Maximum retry attempts reached. Please check node configuration."
+            };
+            self.error_notification = Some(ErrorNotification {
+                title: "Tunnel Error".to_string(),
+                message: format!("{} ({})", display_err, reason),
+                attempt,
+                max_attempts: MAX_RECONNECT_ATTEMPTS,
+                countdown_secs: None,
+                is_reconnecting: false,
+            });
+            self.push_log("Supervisor", reason, LogLevel::Error);
+        }
+
+        Task::none()
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -1318,8 +1409,20 @@ impl NetrayApp {
                     self.is_running = true;
                     self.connected_at = Some(Instant::now());
                     self.ping_ms = ready_ping;
+                    self.reconnect_attempts = 0;
+                    if let Some(notif) = &self.error_notification {
+                        if notif.is_reconnecting {
+                            notifications::send_desktop_notification(
+                                "Netray Connected",
+                                "Tunnel reconnected successfully.",
+                                notifications::NotificationUrgency::Normal,
+                            );
+                        }
+                    }
+                    self.error_notification = None;
                 }
                 let stopped = entry.source == "Supervisor" && entry.message.contains("offline");
+                let was_running = self.is_running;
                 if stopped || (entry.source == "Error" && entry.message.contains("Engine failed")) {
                     self.is_running = false;
                     self.connected_at = None;
@@ -1330,6 +1433,19 @@ impl NetrayApp {
                     self.stop_signal = None;
                     self.worker_active = false;
                 }
+
+                let is_error = entry.level == LogLevel::Error
+                    || entry.source == "Error"
+                    || entry.message.contains("Core process exited with:")
+                    || entry.message.contains("Connection check failed");
+                let unexpected_stop = stopped && !self.user_stopped && was_running;
+
+                let auto_task = if (is_error || unexpected_stop) && !self.user_stopped {
+                    self.handle_detected_error(&entry.message)
+                } else {
+                    Task::none()
+                };
+
                 self.logs.push(entry);
                 if self.logs.len() > 150 {
                     self.logs.drain(0..30);
@@ -1341,7 +1457,7 @@ impl NetrayApp {
                         .map(iced::window::close)
                         .unwrap_or_else(Task::none)
                 } else {
-                    Task::none()
+                    auto_task
                 }
             }
             Message::AutoScrollLogs(enabled) => {
@@ -1634,11 +1750,87 @@ impl NetrayApp {
                 self.close_confirmation = None;
                 Task::none()
             }
+            Message::ToggleAutoReconnect(enabled) => {
+                self.auto_reconnect = enabled;
+                let msg = if enabled {
+                    "Automatic reconnect on error enabled."
+                } else {
+                    "Automatic reconnect on error disabled."
+                };
+                self.push_log("Supervisor", msg, LogLevel::Info);
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::TriggerErrorAutoReconnect(err) => self.handle_detected_error(&err),
+            Message::ReconnectCountdownTick => {
+                if let Some(notif) = &mut self.error_notification {
+                    if let Some(secs) = notif.countdown_secs {
+                        if secs > 1 {
+                            notif.countdown_secs = Some(secs - 1);
+                            Task::none()
+                        } else {
+                            let attempt = notif.attempt;
+                            let max_attempts = notif.max_attempts;
+                            notif.countdown_secs = None;
+                            notif.is_reconnecting = true;
+                            self.push_log(
+                                "Supervisor",
+                                format!(
+                                    "Auto-reconnect countdown finished. Attempting reconnect ({}/{})...",
+                                    attempt, max_attempts
+                                ),
+                                LogLevel::Info,
+                            );
+                            self.user_stopped = false;
+                            if !self.is_running && !self.worker_active {
+                                self.update_message(Message::ToggleTunnel)
+                            } else {
+                                Task::none()
+                            }
+                        }
+                    } else {
+                        Task::none()
+                    }
+                } else {
+                    Task::none()
+                }
+            }
+            Message::ExecuteAutoReconnect => {
+                if let Some(notif) = &mut self.error_notification {
+                    notif.countdown_secs = None;
+                    notif.is_reconnecting = true;
+                }
+                self.push_log("Supervisor", "Reconnect triggered by user...", LogLevel::Info);
+                self.user_stopped = false;
+                if !self.is_running && !self.worker_active {
+                    self.update_message(Message::ToggleTunnel)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::CancelAutoReconnect => {
+                self.error_notification = None;
+                self.reconnect_attempts = 0;
+                self.user_stopped = true;
+                self.push_log(
+                    "Supervisor",
+                    "Automatic reconnect cancelled by user.",
+                    LogLevel::Warn,
+                );
+                Task::none()
+            }
+            Message::DismissNotification => {
+                self.error_notification = None;
+                Task::none()
+            }
             Message::ToggleTunnel => {
                 if self.worker_active && !self.is_running {
                     if let Some(stop) = self.stop_signal.take() {
                         let _ = stop.send(());
                     }
+                    self.user_stopped = true;
+                    self.error_notification = None;
+                    self.reconnect_attempts = 0;
                     self.push_log(
                         "Supervisor",
                         "Connection cancelled while verifying the tunnel.",
@@ -1650,12 +1842,16 @@ impl NetrayApp {
                     if let Some(stop_tx) = self.stop_signal.take() {
                         let _ = stop_tx.send(());
                     }
+                    self.user_stopped = true;
+                    self.error_notification = None;
+                    self.reconnect_attempts = 0;
                     self.is_running = false;
                     self.connected_at = None;
                     self.ping_ms = None;
                     self.push_log("Supervisor", "Tunnel stopped by user.", LogLevel::Warn);
                     Task::none()
                 } else {
+                    self.user_stopped = false;
                     self.is_running = false;
                     self.worker_active = true;
                     self.connected_at = None;
@@ -1735,6 +1931,12 @@ impl NetrayApp {
             subscriptions
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick));
         }
+        if let Some(notif) = &self.error_notification {
+            if notif.countdown_secs.is_some() {
+                subscriptions
+                    .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::ReconnectCountdownTick));
+            }
+        }
         Subscription::batch(subscriptions)
     }
 
@@ -1745,7 +1947,16 @@ impl NetrayApp {
             ViewMode::Logs => self.view_logs_screen(),
             ViewMode::SshSettings => self.view_ssh_screen(),
         };
-        let content = container(content)
+        let main_col = if self.error_notification.is_some() {
+            column![self.view_notification_toast(), content]
+                .width(Length::Fill)
+                .height(Length::Fill)
+        } else {
+            column![content]
+                .width(Length::Fill)
+                .height(Length::Fill)
+        };
+        let content = container(main_col)
             .style(|theme| {
                 let is_dark = match theme {
                     Theme::Light => false,
@@ -2336,6 +2547,125 @@ impl NetrayApp {
                 background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.70).into()),
                 ..Default::default()
             })
+            .into()
+    }
+
+    fn view_notification_toast(&self) -> Element<'_, Message> {
+        let Some(notif) = &self.error_notification else {
+            return Space::with_width(0).into();
+        };
+        let is_countdown = notif.countdown_secs.is_some();
+        let status_desc = if let Some(secs) = notif.countdown_secs {
+            format!("Auto-reconnecting in {}s (Attempt {} of {})...", secs, notif.attempt, notif.max_attempts)
+        } else if notif.is_reconnecting {
+            format!("Reconnecting to tunnel (Attempt {} of {})...", notif.attempt, notif.max_attempts)
+        } else {
+            format!("Attempt {} of {} failed.", notif.attempt, notif.max_attempts)
+        };
+
+        let action_row = if is_countdown {
+            row![
+                button(text("Cancel").size(11).color(Color::from_rgb(0.9, 0.9, 0.9)))
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 10.0, right: 10.0 })
+                    .style(|_, status| button::Style {
+                        background: match status {
+                            button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.12).into()),
+                            _ => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.06).into()),
+                        },
+                        border: iced::Border {
+                            radius: 6.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+                    .on_press(Message::CancelAutoReconnect),
+                Space::with_width(6),
+                button(text("Reconnect Now").size(11).color(Color::WHITE))
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 10.0, right: 10.0 })
+                    .style(primary_action_btn)
+                    .on_press(Message::ExecuteAutoReconnect),
+            ]
+            .align_y(Alignment::Center)
+        } else if !notif.is_reconnecting {
+            row![
+                button(text("Retry Now").size(11).color(Color::WHITE))
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .style(primary_action_btn)
+                    .on_press(Message::ExecuteAutoReconnect),
+            ]
+            .align_y(Alignment::Center)
+        } else {
+            row![
+                text("Connecting...").size(11).color(ACCENT_BLUE_LIGHT),
+            ]
+            .align_y(Alignment::Center)
+        };
+
+        let toast = container(
+            row![
+                icons::lucide_icon(icons::INFO, 18, FAILURE_RED),
+                Space::with_width(10),
+                column![
+                    row![
+                        text(&notif.title).size(13).color(Color::WHITE),
+                        Space::with_width(8),
+                        container(text(format!("{}/{}", notif.attempt, notif.max_attempts)).size(10).color(FAILURE_RED))
+                            .padding(iced::Padding { top: 1.0, bottom: 1.0, left: 6.0, right: 6.0 })
+                            .style(|_| container::Style {
+                                background: Some(Color::from_rgba(0.95, 0.35, 0.40, 0.15).into()),
+                                border: iced::Border {
+                                    radius: 4.0.into(),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            }),
+                    ]
+                    .align_y(Alignment::Center),
+                    text(&notif.message).size(11).color(Color::from_rgb(0.85, 0.85, 0.85)),
+                    text(status_desc).size(11).color(ACCENT_BLUE_LIGHT),
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+                Space::with_width(10),
+                action_row,
+                Space::with_width(8),
+                button(icons::lucide_icon(icons::CLOSE, 14, TEXT_MUTED))
+                    .padding(4)
+                    .style(|_, status| button::Style {
+                        background: match status {
+                            button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.1).into()),
+                            _ => None,
+                        },
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+                    .on_press(Message::DismissNotification),
+            ]
+            .align_y(Alignment::Center)
+            .padding(10)
+        )
+        .style(|_| container::Style {
+            background: Some(Color::from_rgb(0.12, 0.13, 0.17).into()),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.75, 0.25, 0.25),
+            },
+            ..Default::default()
+        })
+        .width(Length::Fill);
+
+        container(toast)
+            .padding(iced::Padding {
+                top: 4.0,
+                bottom: 4.0,
+                left: 12.0,
+                right: 12.0,
+            })
+            .width(Length::Fill)
             .into()
     }
 
@@ -3311,6 +3641,12 @@ impl NetrayApp {
                     self.connect_at_startup,
                 )
                 .on_toggle(Message::ToggleConnectAtStartup),
+                Space::with_height(2),
+                checkbox(
+                    "Automatic reconnect on error (Auto-detect dropped tunnel & reconnect)",
+                    self.auto_reconnect,
+                )
+                .on_toggle(Message::ToggleAutoReconnect),
             ]
             .spacing(6)
             .width(Length::Fill)
