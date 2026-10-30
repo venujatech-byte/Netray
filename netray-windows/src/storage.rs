@@ -93,20 +93,24 @@ impl Default for AppData {
 }
 
 pub fn get_config_dir() -> PathBuf {
-    // Windows APPDATA, or fallback to current dir netray_data
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let p = PathBuf::from(appdata).join("Netray");
-        let _ = fs::create_dir_all(&p);
-        p
-    } else if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
-        let p = PathBuf::from(home).join(".config").join("netray");
-        let _ = fs::create_dir_all(&p);
-        p
-    } else {
-        let p = PathBuf::from("./netray_data");
-        let _ = fs::create_dir_all(&p);
-        p
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let p = PathBuf::from(appdata).join("Netray");
+            let _ = fs::create_dir_all(&p);
+            return p;
+        }
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            let p = PathBuf::from(profile).join("AppData").join("Roaming").join("Netray");
+            let _ = fs::create_dir_all(&p);
+            return p;
+        }
     }
+
+    // Portable fallback / isolated non-Windows environment (never touches Linux ~/.config/netray)
+    let p = PathBuf::from("./netray_data");
+    let _ = fs::create_dir_all(&p);
+    p
 }
 
 pub fn get_config_path() -> PathBuf {
