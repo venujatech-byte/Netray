@@ -5,7 +5,60 @@ use russh_keys::key;
 use rustls_pki_types::ServerName;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+
+#[derive(Debug, Default)]
+pub struct TunnelMetrics {
+    pub active_connections: AtomicUsize,
+    pub total_proxied_connections: AtomicU64,
+    pub total_bypassed_connections: AtomicU64,
+}
+
+static METRICS: TunnelMetrics = TunnelMetrics {
+    active_connections: AtomicUsize::new(0),
+    total_proxied_connections: AtomicU64::new(0),
+    total_bypassed_connections: AtomicU64::new(0),
+};
+
+/// Returns (active_connections, total_proxied, total_bypassed)
+pub fn get_tunnel_metrics() -> (usize, u64, u64) {
+    (
+        METRICS.active_connections.load(Ordering::Relaxed),
+        METRICS.total_proxied_connections.load(Ordering::Relaxed),
+        METRICS.total_bypassed_connections.load(Ordering::Relaxed),
+    )
+}
+
+pub fn record_connection_start(is_direct: bool) {
+    METRICS.active_connections.fetch_add(1, Ordering::Relaxed);
+    if is_direct {
+        METRICS.total_bypassed_connections.fetch_add(1, Ordering::Relaxed);
+    } else {
+        METRICS.total_proxied_connections.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub fn record_connection_end() {
+    let mut current = METRICS.active_connections.load(Ordering::Relaxed);
+    while current > 0 {
+        match METRICS.active_connections.compare_exchange_weak(
+            current,
+            current - 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+pub fn reset_tunnel_metrics() {
+    METRICS.active_connections.store(0, Ordering::Relaxed);
+    METRICS.total_proxied_connections.store(0, Ordering::Relaxed);
+    METRICS.total_bypassed_connections.store(0, Ordering::Relaxed);
+}
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
@@ -285,6 +338,8 @@ async fn handle_socks5_client(
     let app_name = crate::apps::resolve_socket_process_name(client_addr.port());
     let app_display = app_name.as_deref().unwrap_or("app");
 
+    record_connection_start(false);
+
     crate::send_connection_log(
         &log_tx,
         "SOCKS5",
@@ -305,6 +360,7 @@ async fn handle_socks5_client(
     let channel = match channel_result {
         Ok(c) => c,
         Err(e) => {
+            record_connection_end();
             crate::send_connection_log(
                 &log_tx,
                 "SOCKS5",
@@ -326,6 +382,7 @@ async fn handle_socks5_client(
     // 5. Bi-directional zero-copy relay between local app and SSH channel
     let mut ssh_stream = channel.into_stream();
     let relay_res = tokio::io::copy_bidirectional(&mut sock, &mut ssh_stream).await;
+    record_connection_end();
 
     if let Ok((upload, download)) = relay_res {
         crate::send_connection_log(
@@ -442,6 +499,9 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
                 let app_display = app_name.as_deref().unwrap_or("app");
                 let is_direct = conn.route.eq_ignore_ascii_case("direct");
                 let route_tag = if is_direct { "Bypass" } else { "Tunnel" };
+
+                record_connection_start(is_direct);
+
                 let msg = format!(
                     "Connection: [{}] -> {}:{} [{}] ({})",
                     app_display,
@@ -756,5 +816,23 @@ mod tests {
     fn test_parse_xray_connection_non_matching_lines() {
         assert_eq!(parse_xray_connection("Xray 1.8.23 started"), None);
         assert_eq!(parse_xray_connection("[Warning] defaultroute failed"), None);
+    }
+
+    #[test]
+    fn test_tunnel_metrics_lifecycle() {
+        reset_tunnel_metrics();
+        assert_eq!(get_tunnel_metrics(), (0, 0, 0));
+
+        record_connection_start(false);
+        assert_eq!(get_tunnel_metrics(), (1, 1, 0));
+
+        record_connection_start(true);
+        assert_eq!(get_tunnel_metrics(), (2, 1, 1));
+
+        record_connection_end();
+        assert_eq!(get_tunnel_metrics(), (1, 1, 1));
+
+        reset_tunnel_metrics();
+        assert_eq!(get_tunnel_metrics(), (0, 0, 0));
     }
 }
