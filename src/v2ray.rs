@@ -1685,6 +1685,107 @@ impl NodeEditState {
 
     pub fn from_profile(id: &str, name: &str, raw_uri: &str) -> Self {
         let trimmed = raw_uri.trim();
+
+        if trimmed.starts_with("vmess://") {
+            let b64 = trimmed.trim_start_matches("vmess://").trim();
+            if let Ok(bytes) = base64::prelude::BASE64_STANDARD.decode(b64) {
+                if let Ok(val) = serde_json::from_slice::<Value>(&bytes) {
+                    let remarks = if !name.is_empty() {
+                        name.to_string()
+                    } else {
+                        val.get("ps")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("New VMess Node")
+                            .to_string()
+                    };
+                    return Self {
+                        id: id.to_string(),
+                        remarks,
+                        address: val.get("add").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        port: val
+                            .get("port")
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "443".into()),
+                        encrypt_method: "auto".into(),
+                        flow: "none".into(),
+                        user_id: val.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        transport_protocol: val
+                            .get("net")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("ws")
+                            .to_string(),
+                        header_type: val
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("none")
+                            .to_string(),
+                        tls_type: val
+                            .get("tls")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("tls")
+                            .to_string(),
+                        sni: val.get("host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        fingerprint: "chrome".into(),
+                        alpn: "none".into(),
+                        protocol: "vmess".into(),
+                        is_new: false,
+                        path: val.get("path").and_then(|v| v.as_str()).unwrap_or("/").to_string(),
+                        public_key: "".into(),
+                        short_id: "".into(),
+                    };
+                }
+            }
+        }
+
+        if trimmed.starts_with("ss://") {
+            if let Some((content, tag)) = trimmed.trim_start_matches("ss://").split_once('#') {
+                let remarks = if !name.is_empty() {
+                    name.to_string()
+                } else {
+                    percent_encoding::percent_decode_str(tag)
+                        .decode_utf8_lossy()
+                        .to_string()
+                };
+                if let Some((user_info, host_port)) = content.split_once('@') {
+                    if let Some((h, p)) = host_port.split_once(':') {
+                        let (method, pass) = if let Ok(decoded) =
+                            base64::prelude::BASE64_STANDARD.decode(user_info)
+                        {
+                            let s = String::from_utf8_lossy(&decoded).to_string();
+                            s.split_once(':')
+                                .map(|(m, p)| (m.to_string(), p.to_string()))
+                                .unwrap_or(("chacha20-poly1305".into(), user_info.to_string()))
+                        } else {
+                            user_info
+                                .split_once(':')
+                                .map(|(m, p)| (m.to_string(), p.to_string()))
+                                .unwrap_or(("chacha20-poly1305".into(), user_info.to_string()))
+                        };
+                        return Self {
+                            id: id.to_string(),
+                            remarks,
+                            address: h.to_string(),
+                            port: p.to_string(),
+                            encrypt_method: method,
+                            flow: "none".into(),
+                            user_id: pass,
+                            transport_protocol: "tcp".into(),
+                            header_type: "none".into(),
+                            tls_type: "none".into(),
+                            sni: "".into(),
+                            fingerprint: "none".into(),
+                            alpn: "none".into(),
+                            protocol: "shadowsocks".into(),
+                            is_new: false,
+                            path: "".into(),
+                            public_key: "".into(),
+                            short_id: "".into(),
+                        };
+                    }
+                }
+            }
+        }
+
         let detected_proto = if trimmed.starts_with("vless://") {
             "vless".to_string()
         } else if trimmed.starts_with("vmess://") {
@@ -1823,6 +1924,19 @@ impl NodeEditState {
         if !self.alpn.is_empty() && self.alpn != "none" {
             u.push_str(&format!("&alpn={}", self.alpn.trim()));
         }
+        if self.tls_type == "reality" {
+            if !self.public_key.is_empty() {
+                u.push_str(&format!("&pbk={}", self.public_key.trim()));
+            }
+            if !self.short_id.is_empty() {
+                u.push_str(&format!("&sid={}", self.short_id.trim()));
+            }
+        }
+        if !self.path.is_empty() {
+            let p = self.path.trim();
+            let enc = percent_encoding::percent_encode(p.as_bytes(), percent_encoding::NON_ALPHANUMERIC);
+            u.push_str(&format!("&path={}", enc));
+        }
         if !self.remarks.is_empty() {
             let encoded = percent_encoding::percent_encode(
                 self.remarks.as_bytes(),
@@ -1831,6 +1945,111 @@ impl NodeEditState {
             u.push_str(&format!("#{}", encoded));
         }
         u
+    }
+
+    pub fn to_config(&self) -> String {
+        match self.protocol.to_lowercase().as_str() {
+            "vmess" => {
+                let vmess_json = serde_json::json!({
+                    "v": "2",
+                    "ps": self.remarks.trim(),
+                    "add": self.address.trim(),
+                    "port": self.port.trim().parse::<u16>().unwrap_or(443),
+                    "id": self.user_id.trim(),
+                    "aid": 0,
+                    "net": if self.transport_protocol.is_empty() { "ws" } else { self.transport_protocol.trim() },
+                    "type": if self.header_type.is_empty() { "none" } else { self.header_type.trim() },
+                    "host": if self.sni.is_empty() { self.address.trim() } else { self.sni.trim() },
+                    "path": if self.path.is_empty() { "/" } else { self.path.trim() },
+                    "tls": if self.tls_type.is_empty() { "tls" } else { self.tls_type.trim() }
+                });
+                let encoded = base64::prelude::BASE64_STANDARD.encode(vmess_json.to_string().as_bytes());
+                format!("vmess://{}", encoded)
+            }
+            "trojan" => {
+                let mut u = format!(
+                    "trojan://{}@{}:{}?security={}",
+                    self.user_id.trim(),
+                    self.address.trim(),
+                    self.port.trim(),
+                    if self.tls_type.is_empty() { "tls" } else { self.tls_type.trim() }
+                );
+                if !self.sni.is_empty() {
+                    u.push_str(&format!("&sni={}", self.sni.trim()));
+                }
+                if !self.transport_protocol.is_empty() && self.transport_protocol != "tcp" {
+                    u.push_str(&format!("&type={}", self.transport_protocol.trim()));
+                }
+                if !self.path.is_empty() {
+                    u.push_str(&format!("&path={}", self.path.trim()));
+                }
+                if !self.alpn.is_empty() && self.alpn != "none" {
+                    u.push_str(&format!("&alpn={}", self.alpn.trim()));
+                }
+                if !self.remarks.is_empty() {
+                    let encoded = percent_encoding::percent_encode(
+                        self.remarks.as_bytes(),
+                        percent_encoding::NON_ALPHANUMERIC,
+                    );
+                    u.push_str(&format!("#{}", encoded));
+                }
+                u
+            }
+            "socks" => {
+                let mut u = if !self.user_id.is_empty() {
+                    format!("socks://{}@{}:{}", self.user_id.trim(), self.address.trim(), self.port.trim())
+                } else {
+                    format!("socks://{}:{}", self.address.trim(), self.port.trim())
+                };
+                if !self.remarks.is_empty() {
+                    let encoded = percent_encoding::percent_encode(
+                        self.remarks.as_bytes(),
+                        percent_encoding::NON_ALPHANUMERIC,
+                    );
+                    u.push_str(&format!("#{}", encoded));
+                }
+                u
+            }
+            "hysteria2" | "hy2" => {
+                let mut u = format!(
+                    "hy2://{}@{}:{}?",
+                    self.user_id.trim(),
+                    self.address.trim(),
+                    self.port.trim()
+                );
+                if !self.sni.is_empty() {
+                    u.push_str(&format!("sni={}&", self.sni.trim()));
+                }
+                if self.tls_type == "none" {
+                    u.push_str("insecure=1&");
+                }
+                let clean = u.trim_end_matches('&').trim_end_matches('?');
+                let mut res = clean.to_string();
+                if !self.remarks.is_empty() {
+                    let encoded = percent_encoding::percent_encode(
+                        self.remarks.as_bytes(),
+                        percent_encoding::NON_ALPHANUMERIC,
+                    );
+                    res.push_str(&format!("#{}", encoded));
+                }
+                res
+            }
+            "shadowsocks" | "ss" => {
+                let method = if self.encrypt_method.is_empty() { "chacha20-poly1305" } else { self.encrypt_method.trim() };
+                let auth = format!("{}:{}", method, self.user_id.trim());
+                let encoded = base64::prelude::BASE64_STANDARD.encode(auth.as_bytes());
+                let mut u = format!("ss://{}@{}:{}", encoded, self.address.trim(), self.port.trim());
+                if !self.remarks.is_empty() {
+                    let encoded_rem = percent_encoding::percent_encode(
+                        self.remarks.as_bytes(),
+                        percent_encoding::NON_ALPHANUMERIC,
+                    );
+                    u.push_str(&format!("#{}", encoded_rem));
+                }
+                u
+            }
+            _ => self.to_vless_uri(),
+        }
     }
 }
 
