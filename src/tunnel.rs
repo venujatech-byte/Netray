@@ -480,8 +480,10 @@ pub fn parse_xray_connection(line: &str) -> Option<XrayConnectionInfo> {
 fn classify_xray_log(line: &str) -> LogLevel {
     if line.contains("[Warning]") {
         LogLevel::Warn
-    } else if line.contains("[Error]") || line.contains("failed") || line.contains("Failed") {
+    } else if line.contains("[Error]") {
         LogLevel::Error
+    } else if line.contains("failed") || line.contains("Failed") {
+        LogLevel::Warn
     } else if line.contains("Configuration OK") || line.contains("started") {
         LogLevel::Success
     } else {

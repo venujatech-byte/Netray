@@ -35,11 +35,35 @@ const TEXT_MUTED: Color = Color::from_rgb(0.55, 0.60, 0.68);
 const INACTIVE_STRIP: Color = Color::from_rgb(0.30, 0.33, 0.38);
 const SUCCESS_GREEN: Color = Color::from_rgb(0.22, 0.78, 0.49);
 const FAILURE_RED: Color = Color::from_rgb(0.95, 0.35, 0.40);
+const WARNING_AMBER: Color = Color::from_rgb(0.96, 0.62, 0.22);
 const CORAL_ACCENT: Color = Color::from_rgb(0.98, 0.52, 0.48); // #FA857A
 const APP_VERSION: &str = match option_env!("NETRAY_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };
+
+pub fn format_friendly_error(err: &str) -> String {
+    let clean = err.trim().trim_start_matches("Connection check failed:").trim();
+    if clean.contains("failed to lookup ip") || clean.contains("DOH//") || clean.contains("features/dns") {
+        "DNS resolution timeout · Retrying connection".to_string()
+    } else if clean.contains("Connection check failed") || clean.contains("unreachable") || clean.contains("503") || clean.contains("502") {
+        "Remote proxy endpoint is unreachable".to_string()
+    } else if clean.contains("Core process exited") || clean.contains("Engine failed") {
+        "V2Ray core process stopped unexpectedly".to_string()
+    } else if clean.contains("handshake") || clean.contains("Handshake") || clean.contains("TLS") {
+        "TLS handshake error with server node".to_string()
+    } else if clean.contains("connection refused") || clean.contains("reset by peer") {
+        "Remote server refused or reset connection".to_string()
+    } else if clean.contains("Timeout") || clean.contains("timeout") {
+        "Network connection timed out".to_string()
+    } else if clean.len() > 65 {
+        "Continuous network errors detected".to_string()
+    } else if clean.is_empty() {
+        "Connection lost or unreachable".to_string()
+    } else {
+        clean.to_string()
+    }
+}
 
 fn format_uptime(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
@@ -400,10 +424,11 @@ fn toast_close_btn(_: &Theme, status: button::Status) -> button::Style {
 
 fn toast_attempt_pill(_: &Theme) -> container::Style {
     container::Style {
-        background: Some(Color::from_rgba(0.95, 0.35, 0.40, 0.15).into()),
+        background: Some(Color::from_rgba(0.96, 0.62, 0.22, 0.15).into()),
         border: iced::Border {
-            radius: 4.0.into(),
-            ..Default::default()
+            radius: 8.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.96, 0.62, 0.22, 0.40),
         },
         ..Default::default()
     }
@@ -415,7 +440,7 @@ fn toast_container_style(_: &Theme) -> container::Style {
         border: iced::Border {
             radius: 8.0.into(),
             width: 1.0,
-            color: Color::from_rgb(0.75, 0.25, 0.25),
+            color: Color::from_rgba(0.96, 0.62, 0.22, 0.35),
         },
         ..Default::default()
     }
@@ -934,6 +959,7 @@ pub struct NetrayApp {
     pub auto_reconnect: bool,
     pub user_stopped: bool,
     pub reconnect_attempts: u32,
+    pub consecutive_errors: u32,
     pub error_notification: Option<ErrorNotification>,
     pub startup_connect_prompt: bool,
     pub qr_scan_modal: QrScanModalState,
@@ -1167,6 +1193,7 @@ impl NetrayApp {
             auto_reconnect: saved.auto_reconnect,
             user_stopped: false,
             reconnect_attempts: 0,
+            consecutive_errors: 0,
             error_notification: None,
             startup_connect_prompt: saved.connect_at_startup && has_profiles,
             qr_scan_modal: QrScanModalState::default(),
@@ -1205,7 +1232,18 @@ impl NetrayApp {
     }
 
     pub fn refresh_status_badge(&mut self) {
-        self.status_badge_text = if self.is_running {
+        let is_reconnecting = self
+            .error_notification
+            .as_ref()
+            .map_or(false, |n| n.countdown_secs.is_some() || n.is_reconnecting);
+
+        self.status_badge_text = if is_reconnecting {
+            if let Some(secs) = self.error_notification.as_ref().and_then(|n| n.countdown_secs) {
+                format!("CONNECTING · RETRY IN {}s", secs)
+            } else {
+                "CONNECTING...".to_string()
+            }
+        } else if self.is_running {
             let uptime = format_uptime(
                 self.connected_at.map(|at| at.elapsed()).unwrap_or_default(),
             );
@@ -1345,24 +1383,24 @@ impl NetrayApp {
         self.reconnect_attempts = self.reconnect_attempts.saturating_add(1);
         let attempt = self.reconnect_attempts;
 
-        let clean_err = err_msg.trim().trim_start_matches("Connection check failed:").trim();
-        let display_err = if clean_err.is_empty() {
-            "Connection lost or unreachable".to_string()
-        } else {
-            clean_err.to_string()
-        };
+        let display_err = format_friendly_error(err_msg);
+
+        // Transition status from Connected to Connecting when error occurs
+        self.is_running = false;
+        self.worker_active = true;
+        self.refresh_status_badge();
 
         let title = "Tunnel Connection Error".to_string();
 
         notifications::send_desktop_notification(
             &title,
             &format!("Error: {}. Attempting auto-reconnect ({}/{})", display_err, attempt, MAX_RECONNECT_ATTEMPTS),
-            notifications::NotificationUrgency::Critical,
+            notifications::NotificationUrgency::Normal,
         );
 
         if self.auto_reconnect && attempt <= MAX_RECONNECT_ATTEMPTS {
             self.error_notification = Some(ErrorNotification {
-                title: "Connection Error Detected".to_string(),
+                title: "Reconnecting to Tunnel".to_string(),
                 message: display_err,
                 attempt,
                 max_attempts: MAX_RECONNECT_ATTEMPTS,
@@ -1384,6 +1422,8 @@ impl NetrayApp {
             } else {
                 "Maximum retry attempts reached. Please check node configuration."
             };
+            self.worker_active = false;
+            self.refresh_status_badge();
             self.error_notification = Some(ErrorNotification {
                 title: "Tunnel Error".to_string(),
                 message: format!("{} ({})", display_err, reason),
@@ -2288,6 +2328,7 @@ impl NetrayApp {
                     self.connected_at = Some(Instant::now());
                     self.ping_ms = ready_ping;
                     self.reconnect_attempts = 0;
+                    self.consecutive_errors = 0;
                     if let Some(notif) = &self.error_notification {
                         if notif.is_reconnecting {
                             notifications::send_desktop_notification(
@@ -2315,13 +2356,35 @@ impl NetrayApp {
                     self.refresh_status_badge();
                 }
 
-                let is_error = entry.level == LogLevel::Error
-                    || entry.source == "Error"
-                    || entry.message.contains("Core process exited with:")
-                    || entry.message.contains("Connection check failed");
-                let unexpected_stop = stopped && !self.user_stopped && was_running;
+                let is_healthy_event = (entry.source == "Supervisor" && entry.message.contains("Tunnel ready"))
+                    || entry.message.contains("HTTP 204 through proxy")
+                    || entry.message.contains("got answer")
+                    || (entry.source == "DNS" && entry.message.contains("resolved"))
+                    || entry.level == LogLevel::Success;
 
-                let auto_task = if (is_error || unexpected_stop) && !self.user_stopped {
+                if is_healthy_event {
+                    self.consecutive_errors = 0;
+                }
+
+                let unexpected_stop = stopped && !self.user_stopped && was_running;
+                let is_crash = entry.message.contains("Core process exited with:");
+                let is_conn_fail = entry.message.contains("Connection check failed");
+                let is_log_error = entry.level == LogLevel::Error || entry.source == "Error";
+
+                let should_reconnect = if unexpected_stop || is_crash {
+                    self.consecutive_errors = 3;
+                    true
+                } else if is_conn_fail {
+                    self.consecutive_errors = self.consecutive_errors.saturating_add(1);
+                    self.consecutive_errors >= 2
+                } else if is_log_error {
+                    self.consecutive_errors = self.consecutive_errors.saturating_add(1);
+                    self.consecutive_errors >= 3
+                } else {
+                    false
+                };
+
+                let auto_task = if should_reconnect && !self.user_stopped {
                     self.handle_detected_error(&entry.message)
                 } else {
                     Task::none()
@@ -3198,32 +3261,37 @@ impl NetrayApp {
 
         let toast = container(
             row![
-                icons::lucide_icon(icons::INFO, 18, FAILURE_RED),
+                icons::lucide_icon(icons::REFRESH_CW, 16, WARNING_AMBER),
                 Space::with_width(10),
                 column![
                     row![
-                        text(&notif.title).size(13).color(Color::WHITE),
+                        text(&notif.title).size(12).color(Color::WHITE),
                         Space::with_width(8),
-                        container(text(format!("{}/{}", notif.attempt, notif.max_attempts)).size(10).color(FAILURE_RED))
+                        container(text(format!("Retry {}/{}", notif.attempt, notif.max_attempts)).size(10).color(WARNING_AMBER))
                             .padding(iced::Padding { top: 1.0, bottom: 1.0, left: 6.0, right: 6.0 })
                             .style(toast_attempt_pill),
                     ]
                     .align_y(Alignment::Center),
-                    text(&notif.message).size(11).color(Color::from_rgb(0.85, 0.85, 0.85)),
-                    text(status_desc).size(11).color(ACCENT_BLUE_LIGHT),
+                    row![
+                        text(&notif.message).size(11).color(TEXT_MUTED),
+                        Space::with_width(8),
+                        text(status_desc).size(11).color(WARNING_AMBER),
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
                 ]
                 .spacing(2)
                 .width(Length::Fill),
-                Space::with_width(10),
-                action_row,
                 Space::with_width(8),
+                action_row,
+                Space::with_width(6),
                 button(icons::lucide_icon(icons::CLOSE, 14, TEXT_MUTED))
                     .padding(4)
                     .style(toast_close_btn)
                     .on_press(Message::DismissNotification),
             ]
             .align_y(Alignment::Center)
-            .padding(10)
+            .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 12.0, right: 10.0 })
         )
         .style(toast_container_style)
         .width(Length::Fill);
@@ -3850,6 +3918,11 @@ impl NetrayApp {
         } else {
             self.icon_inactive()
         };
+        let is_reconnecting = self
+            .error_notification
+            .as_ref()
+            .map_or(false, |n| n.countdown_secs.is_some() || n.is_reconnecting);
+
         let sub_bar = row![
             button(
                 container(icons::lucide_icon(
@@ -3870,7 +3943,9 @@ impl NetrayApp {
                 .size(13)
                 .color(TEXT_MUTED),
             Space::with_width(Length::Fill),
-            text(if self.is_running {
+            text(if is_reconnecting {
+                "Reconnecting…"
+            } else if self.is_running {
                 "Tunnel active"
             } else if self.worker_active {
                 "Connecting…"
@@ -3878,8 +3953,12 @@ impl NetrayApp {
                 "Offline"
             })
             .size(12)
-            .color(if self.is_running {
+            .color(if is_reconnecting {
+                WARNING_AMBER
+            } else if self.is_running {
                 SUCCESS_GREEN
+            } else if self.worker_active {
+                WARNING_AMBER
             } else {
                 TEXT_MUTED
             }),
@@ -4060,17 +4139,21 @@ impl NetrayApp {
             icons::lucide_icon(icons::PLAY, 26, Color::WHITE)
         };
 
+        let (dot_color, status_text_color) = if self.is_running {
+            (SUCCESS_GREEN, TEXT_MUTED)
+        } else if is_reconnecting || self.worker_active {
+            (WARNING_AMBER, WARNING_AMBER)
+        } else {
+            (TEXT_MUTED, TEXT_MUTED)
+        };
+
         let fab_row = row![
             button(
                 row![
-                    text("●").color(if self.is_running {
-                        SUCCESS_GREEN
-                    } else {
-                        TEXT_MUTED
-                    }),
+                    text("●").color(dot_color),
                     text(self.status_badge_text.as_str())
                         .size(12)
-                        .color(TEXT_MUTED),
+                        .color(status_text_color),
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -5640,6 +5723,8 @@ mod performance_tests {
         )));
 
         assert_eq!(app.reconnect_attempts, 1);
+        assert!(!app.is_running);
+        assert!(app.status_badge_text.contains("CONNECTING"));
         let notif = app.error_notification.as_ref().expect("Notification toast should be present");
         assert_eq!(notif.attempt, 1);
         assert_eq!(notif.max_attempts, MAX_RECONNECT_ATTEMPTS);
@@ -5716,6 +5801,51 @@ mod performance_tests {
         assert!(!app.auto_reconnect);
         let _ = app.update(Message::ToggleAutoReconnect(true));
         assert!(app.auto_reconnect);
+    }
+
+    #[test]
+    fn test_transient_dns_error_does_not_reconnect_but_continuous_errors_reconnect() {
+        let mut data = storage::AppData::default();
+        data.auto_reconnect = true;
+        let (mut app, _) = NetrayApp::from_saved(data);
+
+        app.is_running = true;
+        app.worker_active = true;
+        app.refresh_status_badge();
+        assert!(app.status_badge_text.contains("CONNECTED"));
+
+        // 1. A single DNS lookup timeout/empty response (transient error)
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Xray",
+            "app/dns: failed to lookup ip for domain alive.github.com at server DOH//1.1.1.1 in serial query mode > features/dns: empty response",
+            LogLevel::Warn,
+        )));
+        // Should NOT trigger reconnect
+        assert_eq!(app.reconnect_attempts, 0);
+        assert!(app.error_notification.is_none());
+        assert!(app.is_running);
+
+        // 2. DNS query answered shortly after resets any error count
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Xray",
+            "app/dns: DOH//1.1.1.1 got answer: alive.github.com. Type[140.82.113.26], rtt: 86.444767ms",
+            LogLevel::Info,
+        )));
+        assert_eq!(app.consecutive_errors, 0);
+        assert!(app.is_running);
+
+        // 3. Continuous errors (3 consecutive) trigger reconnect and change status to CONNECTING
+        for i in 1..=3 {
+            let _ = app.update(Message::NewLog(LogEntry::new(
+                "Error",
+                format!("Connection handshake timeout attempt {}", i),
+                LogLevel::Error,
+            )));
+        }
+        assert_eq!(app.reconnect_attempts, 1);
+        assert!(app.error_notification.is_some());
+        assert!(!app.is_running);
+        assert!(app.status_badge_text.contains("CONNECTING"));
     }
 
     #[test]
