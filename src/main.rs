@@ -402,6 +402,124 @@ fn toast_container_style(_: &Theme) -> container::Style {
     }
 }
 
+fn log_status_active(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.2, 0.9, 0.4, 0.12).into()),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.2, 0.9, 0.4, 0.3),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_status_stopped(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.5, 0.5, 0.5, 0.12).into()),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.5, 0.5, 0.5, 0.25),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_status_bar_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(SURFACE_CARD.into()),
+        ..Default::default()
+    }
+}
+
+fn log_chip_app_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.0, 0.60, 1.0, 0.14).into()),
+        border: iced::Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.0, 0.60, 1.0, 0.35),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_chip_endpoint_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.50, 0.55, 0.65, 0.18).into()),
+        border: iced::Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.50, 0.55, 0.65, 0.35),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_chip_bypass_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(1.0, 0.75, 0.20, 0.14).into()),
+        border: iced::Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(1.0, 0.75, 0.20, 0.35),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_chip_proxy_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.25, 0.95, 0.45, 0.14).into()),
+        border: iced::Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.25, 0.95, 0.45, 0.35),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_terminal_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
+        border: iced::Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: Color::from_rgb(0.18, 0.20, 0.25),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_chip_app(app: &str) -> Element<'_, Message> {
+    container(text(format!("App: {}", app)).size(10).color(Color::from_rgb(0.40, 0.85, 1.0)))
+        .padding(iced::Padding { top: 2.0, bottom: 2.0, left: 6.0, right: 6.0 })
+        .style(log_chip_app_style)
+        .into()
+}
+
+fn log_chip_endpoint(host: &str, port: u16) -> Element<'_, Message> {
+    container(text(format!("{}:{}", host, port)).size(10).color(Color::WHITE))
+        .padding(iced::Padding { top: 2.0, bottom: 2.0, left: 6.0, right: 6.0 })
+        .style(log_chip_endpoint_style)
+        .into()
+}
+
+fn log_chip_route(route: &str) -> Element<'_, Message> {
+    let is_bypass = route.eq_ignore_ascii_case("bypass") || route.eq_ignore_ascii_case("direct");
+    let (t_col, style_fn): (Color, fn(&Theme) -> container::Style) = if is_bypass {
+        (Color::from_rgb(1.0, 0.75, 0.20), log_chip_bypass_style)
+    } else {
+        (Color::from_rgb(0.25, 0.95, 0.45), log_chip_proxy_style)
+    };
+    container(text(route.to_ascii_uppercase()).size(10).color(t_col))
+        .padding(iced::Padding { top: 2.0, bottom: 2.0, left: 6.0, right: 6.0 })
+        .style(style_fn)
+        .into()
+}
+
 fn primary_rounded_btn(_: &Theme, status: button::Status) -> button::Style {
     button::Style {
         background: match status {
@@ -4574,23 +4692,7 @@ impl NetrayApp {
             left: 7.0,
             right: 7.0,
         })
-        .style(move |_| container::Style {
-            background: Some(if self.is_running {
-                Color::from_rgba(0.2, 0.9, 0.4, 0.12).into()
-            } else {
-                Color::from_rgba(0.5, 0.5, 0.5, 0.12).into()
-            }),
-            border: iced::Border {
-                radius: 4.0.into(),
-                width: 1.0,
-                color: if self.is_running {
-                    Color::from_rgba(0.2, 0.9, 0.4, 0.3)
-                } else {
-                    Color::from_rgba(0.5, 0.5, 0.5, 0.25)
-                },
-            },
-            ..Default::default()
-        });
+        .style(if self.is_running { log_status_active } else { log_status_stopped });
 
         let status_bar = container(
             row![
@@ -4624,30 +4726,7 @@ impl NetrayApp {
             left: 14.0,
             right: 14.0,
         })
-        .style(|_| container::Style {
-            background: Some(SURFACE_CARD.into()),
-            ..Default::default()
-        });
-
-        let log_chip = |label: String, text_col: Color, bg_col: Color, border_col: Color| -> Element<'_, Message> {
-            container(text(label).size(10).color(text_col))
-                .padding(iced::Padding {
-                    top: 2.0,
-                    bottom: 2.0,
-                    left: 6.0,
-                    right: 6.0,
-                })
-                .style(move |_| container::Style {
-                    background: Some(bg_col.into()),
-                    border: iced::Border {
-                        radius: 999.0.into(),
-                        width: 1.0,
-                        color: border_col,
-                    },
-                    ..Default::default()
-                })
-                .into()
-        };
+        .style(log_status_bar_style);
 
         let query = self.logs_filter.trim().to_lowercase();
         let filtered_logs: Vec<&LogEntry> = self
@@ -4716,39 +4795,15 @@ impl NetrayApp {
                 .align_y(Alignment::Center);
 
                 if let Some(ref app) = entry.app_name {
-                    row_items = row_items.push(log_chip(
-                        format!("App: {}", app),
-                        Color::from_rgb(0.40, 0.85, 1.0),
-                        Color::from_rgba(0.0, 0.60, 1.0, 0.14),
-                        Color::from_rgba(0.0, 0.60, 1.0, 0.35),
-                    ));
+                    row_items = row_items.push(log_chip_app(app));
                 }
 
                 if let (Some(ref host), Some(port)) = (&entry.target_host, entry.target_port) {
-                    row_items = row_items.push(log_chip(
-                        format!("{}:{}", host, port),
-                        Color::WHITE,
-                        Color::from_rgba(0.50, 0.55, 0.65, 0.18),
-                        Color::from_rgba(0.50, 0.55, 0.65, 0.35),
-                    ));
+                    row_items = row_items.push(log_chip_endpoint(host, port));
                 }
 
                 if let Some(ref route) = entry.route {
-                    let is_bypass = route.eq_ignore_ascii_case("bypass") || route.eq_ignore_ascii_case("direct");
-                    let (t_col, bg_col, b_col) = if is_bypass {
-                        (
-                            Color::from_rgb(1.0, 0.75, 0.20),
-                            Color::from_rgba(1.0, 0.75, 0.20, 0.14),
-                            Color::from_rgba(1.0, 0.75, 0.20, 0.35),
-                        )
-                    } else {
-                        (
-                            Color::from_rgb(0.25, 0.95, 0.45),
-                            Color::from_rgba(0.25, 0.95, 0.45, 0.14),
-                            Color::from_rgba(0.25, 0.95, 0.45, 0.35),
-                        )
-                    };
-                    row_items = row_items.push(log_chip(route.to_uppercase(), t_col, bg_col, b_col));
+                    row_items = row_items.push(log_chip_route(route));
                 }
 
                 row_items.push(text(&entry.message).size(12).color(color)).into()
@@ -4763,15 +4818,7 @@ impl NetrayApp {
         .padding(12)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
-            border: iced::Border {
-                radius: 6.0.into(),
-                width: 1.0,
-                color: Color::from_rgb(0.18, 0.20, 0.25),
-            },
-            ..Default::default()
-        });
+        .style(log_terminal_style);
 
         let make_preset_btn = |preset: LogsFilterPreset, label: &'static str| -> Element<'_, Message> {
             let is_selected = self.logs_preset == preset;
