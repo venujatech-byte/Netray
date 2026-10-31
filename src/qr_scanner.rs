@@ -176,6 +176,97 @@ pub fn scan_qr_from_desktop() -> Result<String, String> {
     decode_qr_from_image_bytes(&bytes)
 }
 
+/// Captures a single snapshot frame from connected PC webcam / camera.
+pub fn capture_webcam_snapshot() -> Result<Vec<u8>, String> {
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!(
+        "netray_qr_cam_{}_{}.jpg",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let temp_path = temp_dir.join(file_name);
+    let path_str = temp_path.to_string_lossy().to_string();
+
+    #[cfg(target_os = "linux")]
+    {
+        // Search available /dev/video* devices
+        let video_devices = ["/dev/video0", "/dev/video1", "/dev/video2", "/dev/video3"];
+        let mut success = false;
+        let mut last_error = String::new();
+
+        for dev in &video_devices {
+            if !std::path::Path::new(dev).exists() {
+                continue;
+            }
+
+            // Attempt capture with ffmpeg v4l2
+            let output = std::process::Command::new("ffmpeg")
+                .args(["-y", "-f", "v4l2", "-i", dev, "-vframes", "1", path_str.as_str()])
+                .output();
+
+            match output {
+                Ok(out) if out.status.success() && temp_path.exists() => {
+                    success = true;
+                    break;
+                }
+                Ok(out) => {
+                    last_error = format!("ffmpeg on {} exited with {}: {}", dev, out.status, String::from_utf8_lossy(&out.stderr));
+                }
+                Err(e) => {
+                    last_error = format!("Failed to spawn ffmpeg: {e}");
+                    break;
+                }
+            }
+        }
+
+        // If ffmpeg failed or not found, try fswebcam
+        if !success {
+            let output = std::process::Command::new("fswebcam")
+                .args(["-r", "1280x720", "--no-banner", path_str.as_str()])
+                .output();
+            if let Ok(out) = output {
+                if out.status.success() && temp_path.exists() {
+                    success = true;
+                }
+            }
+        }
+
+        if !success || !temp_path.exists() {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(format!("Unable to capture camera snapshot. Please check that your webcam is connected and accessible. ({last_error})"));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let dshow_out = std::process::Command::new("ffmpeg")
+            .args(["-y", "-f", "dshow", "-i", "video=Integrated Camera", "-vframes", "1", path_str.as_str()])
+            .output();
+
+        let success = matches!(dshow_out, Ok(ref out) if out.status.success() && temp_path.exists());
+
+        if !success || !temp_path.exists() {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err("Unable to capture camera frame. Ensure webcam is connected and camera permissions are granted.".to_string());
+        }
+    }
+
+    let bytes = std::fs::read(&temp_path)
+        .map_err(|e| format!("Failed to read webcam frame: {e}"))?;
+    let _ = std::fs::remove_file(&temp_path);
+
+    Ok(bytes)
+}
+
+/// Convenience function to capture webcam snapshot and immediately decode any QR code.
+pub fn scan_qr_from_webcam() -> Result<String, String> {
+    let bytes = capture_webcam_snapshot()?;
+    decode_qr_from_image_bytes(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
