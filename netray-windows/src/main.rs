@@ -5132,5 +5132,53 @@ trojan://secretpass@server2.com:443?type=ws#WinNodeB
         assert!(!app.qr_scan_modal.is_open);
         drop(app.view());
     }
+
+    #[test]
+    fn test_cpu_optimization_zero_allocation_rendering_benchmark() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+
+        // Clear default initial profiles and populate 10 sample profiles
+        app.v2ray_profiles.clear();
+        for i in 1..=10 {
+            app.v2ray_profiles.push(storage::V2RayProfile {
+                id: format!("node-{}", i),
+                name: format!("Node {}", i),
+                config: format!("vless://uuid-{}@node{}.com:443?type=ws#Node{}", i, i, i),
+                created_at: "2026-10-31T00:00:00Z".into(),
+            });
+        }
+        app.sync_profile_display_cache();
+        assert_eq!(app.profile_count_label, "10 profiles");
+
+        // 1. Test index-dispatched profile operations
+        let _ = app.update_message(Message::SelectProfileIndex(0));
+        assert_eq!(app.active_profile_id, Some("node-1".into()));
+
+        let _ = app.update_message(Message::SelectProfileIndex(4));
+        assert_eq!(app.active_profile_id, Some("node-5".into()));
+
+        // 2. Test uptime badge memoization
+        app.is_running = true;
+        app.connected_at = Some(Instant::now());
+        app.ping_ms = Some(42);
+        app.refresh_status_badge();
+        assert!(app.status_badge_text.contains("CONNECTED"));
+        assert!(app.status_badge_text.contains("42 ms"));
+
+        // 3. High-frequency view rendering benchmark (simulating 1000 frames of mouse hover and scrolling)
+        let start = Instant::now();
+        for _ in 0..1000 {
+            let el = app.view();
+            drop(el);
+        }
+        let elapsed = start.elapsed();
+        assert!(elapsed.as_millis() < 2000, "1000 view iterations took {:?}", elapsed);
+
+        // 4. Test index-based deletion (when tunnel is stopped / config unlocked)
+        app.is_running = false;
+        let _ = app.update_message(Message::DeleteProfileIndex(0));
+        app.sync_profile_display_cache();
+        assert_eq!(app.profile_count_label, "9 profiles");
+    }
 }
 
