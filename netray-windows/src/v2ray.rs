@@ -5,7 +5,7 @@ mod latency;
 use base64::prelude::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use url::Url;
 
 /// Locate xray.exe or v2ray.exe on Windows
@@ -80,6 +80,164 @@ pub fn extract_node_name(raw_input: &str) -> String {
     "Node Profile".to_string()
 }
 
+/// Extracts clean domain and IP rule matchers from user-specified URLs and domains.
+/// Supports full URLs (e.g. `https://mywork.com/login`), wildcards (`*.internal.net`),
+/// standard domains (`github.com`), IP addresses (`192.168.1.1`), and CIDRs (`10.0.0.0/8`).
+pub fn parse_whitelist_domains_and_ips(raw: &str) -> (Vec<String>, Vec<String>) {
+    let mut domains = Vec::new();
+    let mut ips = Vec::new();
+
+    for token in raw.split(|c| c == ',' || c == ';' || c == '\n' || c == '\r' || c == '\t') {
+        let trimmed = token.trim().trim_matches(&['"', '\'', '`'][..]).trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Case 1: Full URL (http://... or https://...)
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            if let Ok(parsed_url) = url::Url::parse(trimmed) {
+                if let Some(host) = parsed_url.host_str() {
+                    let host_clean = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+                    if host_clean.parse::<std::net::IpAddr>().is_ok() {
+                        if !ips.contains(&host_clean) {
+                            ips.push(host_clean);
+                        }
+                    } else if !domains
+                        .iter()
+                        .any(|d| d == &host_clean || d == &format!("domain:{host_clean}"))
+                    {
+                        domains.push(format!("domain:{host_clean}"));
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Case 2: Direct IP address or CIDR
+        if trimmed.parse::<std::net::IpAddr>().is_ok()
+            || (trimmed.contains('/')
+                && trimmed
+                    .split('/')
+                    .next()
+                    .and_then(|ip| ip.parse::<std::net::IpAddr>().ok())
+                    .is_some())
+        {
+            if !ips.contains(&trimmed.to_string()) {
+                ips.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        // Case 3: GeoIP or special Xray IP matcher
+        if trimmed.starts_with("geoip:") {
+            if !ips.contains(&trimmed.to_string()) {
+                ips.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        // Case 4: Xray domain match prefixes (domain:, full:, regexp:, keyword:, geosite:)
+        if trimmed.starts_with("domain:")
+            || trimmed.starts_with("full:")
+            || trimmed.starts_with("regexp:")
+            || trimmed.starts_with("keyword:")
+            || trimmed.starts_with("geosite:")
+        {
+            let normalized = trimmed.to_ascii_lowercase();
+            if !domains.contains(&normalized) {
+                domains.push(normalized);
+            }
+            continue;
+        }
+
+        // Case 5: Wildcard domain (*.example.com -> domain:example.com)
+        let domain_clean = if let Some(stripped) = trimmed.strip_prefix("*.") {
+            format!("domain:{}", stripped.to_ascii_lowercase())
+        } else {
+            format!("domain:{}", trimmed.to_ascii_lowercase())
+        };
+
+        if !domains.contains(&domain_clean) {
+            domains.push(domain_clean);
+        }
+    }
+
+    (domains, ips)
+}
+
+/// Extracts clean process executable names from user-specified app list.
+/// Handles file paths (e.g. `/usr/bin/curl` -> `curl`, `C:\...\app.exe` -> `app.exe`),
+/// whitespace, commas, semicolons, quotes, and newlines.
+pub fn parse_whitelist_processes(raw: &str) -> Vec<String> {
+    let mut processes = Vec::new();
+
+    for token in raw.split(|c| c == ',' || c == ';' || c == '\n' || c == '\r' || c == '\t') {
+        let trimmed = token.trim().trim_matches(&['"', '\'', '`'][..]).trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Strip file path components if user entered a full path
+        let file_name = if let Some((_, name)) = trimmed.rsplit_once('/') {
+            name
+        } else if let Some((_, name)) = trimmed.rsplit_once('\\') {
+            name
+        } else {
+            trimmed
+        };
+
+        let file_name = file_name.trim();
+        if !file_name.is_empty() && !processes.contains(&file_name.to_string()) {
+            processes.push(file_name.to_string());
+        }
+    }
+
+    processes
+}
+
+/// Builds routing rules targeting direct outbound for whitelisted domains, URLs, and IPs
+pub fn build_whitelist_domain_and_ip_rules(whitelist_urls: &str) -> Vec<Value> {
+    let mut rules = Vec::new();
+    let (domains, ips) = parse_whitelist_domains_and_ips(whitelist_urls);
+
+    if !domains.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "domain": domains
+        }));
+    }
+
+    if !ips.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "ip": ips
+        }));
+    }
+
+    rules
+}
+
+/// Builds routing rules targeting direct outbound for whitelisted applications, domains, URLs, and IPs
+pub fn build_whitelist_routing_rules(
+    whitelist_apps: &str,
+    whitelist_urls: &str,
+) -> Vec<Value> {
+    let mut rules = build_whitelist_domain_and_ip_rules(whitelist_urls);
+    let processes = parse_whitelist_processes(whitelist_apps);
+
+    if !processes.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "process": processes
+        }));
+    }
+
+    rules
+}
+
 /// Helper to extract protocol tag string like "(VLESS + TCP + TLS)"
 pub fn extract_protocol_tag(raw: &str) -> String {
     let trimmed = raw.trim();
@@ -114,7 +272,19 @@ pub fn extract_protocol_tag(raw: &str) -> String {
         }
         "(TROJAN)".to_string()
     } else if trimmed.starts_with("ss://") {
-        "(SHADOWSOCKS)".to_string()
+        if trimmed.to_lowercase().contains("2022-") {
+            "(SHADOWSOCKS-2022)".to_string()
+        } else {
+            "(SHADOWSOCKS)".to_string()
+        }
+    } else if trimmed.starts_with("socks://") || trimmed.starts_with("socks5://") {
+        "(SOCKS5)".to_string()
+    } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
+        "(WIREGUARD)".to_string()
+    } else if trimmed.starts_with("hy2://") || trimmed.starts_with("hysteria2://") {
+        "(HYSTERIA2)".to_string()
+    } else if trimmed.starts_with("ssr://") {
+        "(SHADOWSOCKSR)".to_string()
     } else {
         "(CUSTOM JSON)".to_string()
     }
@@ -147,6 +317,186 @@ pub fn extract_node_address(raw: &str) -> String {
     "127.0.0.1:443".to_string()
 }
 
+/// Generate a shareable protocol URI link from a profile config and remark.
+/// If the config is already a URI, returns it (adding the remark if missing).
+/// If the config is a raw JSON configuration, extracts the outbound parameters
+/// and generates the appropriate protocol link (VLESS, VMess, Trojan, Shadowsocks, Socks5, WireGuard, Hysteria2).
+pub fn generate_share_link(config: &str, remark: &str) -> String {
+    let trimmed = config.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let encoded_remark = percent_encoding::utf8_percent_encode(
+        if remark.trim().is_empty() { "Netray-Node" } else { remark.trim() },
+        percent_encoding::NON_ALPHANUMERIC,
+    )
+    .to_string();
+
+    // 1. If it's already a standard protocol URI
+    let known_schemes = [
+        "vless://", "vmess://", "trojan://", "ss://", "socks://", "socks5://",
+        "wireguard://", "wg://", "hy2://", "hysteria2://", "ssr://", "ssh://",
+        "dnstt+ssh://", "http://", "https://",
+    ];
+
+    for scheme in known_schemes {
+        if trimmed.starts_with(scheme) {
+            if !trimmed.contains('#') {
+                return format!("{}#{}", trimmed, encoded_remark);
+            }
+            return trimmed.to_string();
+        }
+    }
+
+    // 2. If it's a JSON configuration, parse outbounds and construct the appropriate link
+    if trimmed.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+            if let Some(link) = extract_link_from_json(&v, remark, &encoded_remark) {
+                return link;
+            }
+            // Fallback for custom raw JSON: generate compact base64 v2ray URI
+            let b64 = BASE64_STANDARD.encode(trimmed.as_bytes());
+            return format!("v2ray://config?data={}#{}", b64, encoded_remark);
+        }
+    }
+
+    // 3. Fallback for host:port or custom text
+    format!("vless://{}#{}", trimmed, encoded_remark)
+}
+
+fn extract_link_from_json(v: &Value, remark: &str, encoded_remark: &str) -> Option<String> {
+    let outbounds = v
+        .get("outbounds")
+        .and_then(|o| o.as_array())
+        .or_else(|| v.get("outbound").and_then(|o| o.as_array()))?;
+
+    // Find the primary proxy outbound (exclude freedom, blackhole, dns)
+    let outbound = outbounds
+        .iter()
+        .find(|o| {
+            let proto = o.get("protocol").and_then(|p| p.as_str()).unwrap_or("");
+            proto != "freedom" && proto != "blackhole" && proto != "dns"
+        })
+        .or_else(|| outbounds.first())?;
+
+    let proto = outbound.get("protocol").and_then(|p| p.as_str())?;
+    let settings = outbound.get("settings").unwrap_or(&Value::Null);
+    let stream = outbound.get("streamSettings").unwrap_or(&Value::Null);
+
+    let network = stream.get("network").and_then(|n| n.as_str()).unwrap_or("tcp");
+    let security = stream.get("security").and_then(|s| s.as_str()).unwrap_or("none");
+
+    match proto {
+        "vless" => {
+            let vnext = settings.get("vnext").and_then(|vn| vn.as_array())?.first()?;
+            let address = vnext.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = vnext.get("port").and_then(|p| p.as_u64()).unwrap_or(443);
+            let user = vnext.get("users").and_then(|u| u.as_array())?.first()?;
+            let uuid = user.get("id").and_then(|i| i.as_str()).unwrap_or("00000000-0000-0000-0000-000000000000");
+            let flow = user.get("flow").and_then(|f| f.as_str()).unwrap_or("");
+
+            let mut query_params = Vec::new();
+            if network != "tcp" {
+                query_params.push(format!("type={}", network));
+            }
+            if security != "none" {
+                query_params.push(format!("security={}", security));
+            }
+            if !flow.is_empty() {
+                query_params.push(format!("flow={}", flow));
+            }
+            if let Some(sni) = stream.get("tlsSettings").and_then(|t| t.get("serverName")).and_then(|s| s.as_str()) {
+                query_params.push(format!("sni={}", sni));
+            } else if let Some(sni) = stream.get("realitySettings").and_then(|r| r.get("serverName")).and_then(|s| s.as_str()) {
+                query_params.push(format!("sni={}", sni));
+            }
+            if let Some(pbk) = stream.get("realitySettings").and_then(|r| r.get("publicKey")).and_then(|s| s.as_str()) {
+                query_params.push(format!("pbk={}", pbk));
+            }
+            if let Some(sid) = stream.get("realitySettings").and_then(|r| r.get("shortId")).and_then(|s| s.as_str()) {
+                query_params.push(format!("sid={}", sid));
+            }
+            if let Some(ws_path) = stream.get("wsSettings").and_then(|w| w.get("path")).and_then(|s| s.as_str()) {
+                query_params.push(format!("path={}", percent_encoding::utf8_percent_encode(ws_path, percent_encoding::NON_ALPHANUMERIC)));
+            }
+            let query_str = if query_params.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", query_params.join("&"))
+            };
+            Some(format!("vless://{}@{}:{}{}#{}", uuid, address, port, query_str, encoded_remark))
+        }
+        "vmess" => {
+            let vnext = settings.get("vnext").and_then(|vn| vn.as_array())?.first()?;
+            let address = vnext.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = vnext.get("port").and_then(|p| p.as_u64()).unwrap_or(443);
+            let user = vnext.get("users").and_then(|u| u.as_array())?.first()?;
+            let uuid = user.get("id").and_then(|i| i.as_str()).unwrap_or("00000000-0000-0000-0000-000000000000");
+            let alter_id = user.get("alterId").and_then(|a| a.as_u64()).unwrap_or(0);
+            let sni = stream.get("tlsSettings").and_then(|t| t.get("serverName")).and_then(|s| s.as_str()).unwrap_or("");
+            let path = stream.get("wsSettings").and_then(|w| w.get("path")).and_then(|s| s.as_str()).unwrap_or("/");
+
+            let vmess_obj = json!({
+                "v": "2",
+                "ps": remark,
+                "add": address,
+                "port": port,
+                "id": uuid,
+                "aid": alter_id,
+                "scy": "auto",
+                "net": network,
+                "type": "none",
+                "host": sni,
+                "path": path,
+                "tls": if security == "tls" { "tls" } else { "" },
+                "sni": sni,
+            });
+            let b64 = BASE64_STANDARD.encode(vmess_obj.to_string().as_bytes());
+            Some(format!("vmess://{}", b64))
+        }
+        "trojan" => {
+            let server = settings.get("servers").and_then(|s| s.as_array())?.first()?;
+            let address = server.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = server.get("port").and_then(|p| p.as_u64()).unwrap_or(443);
+            let password = server.get("password").and_then(|p| p.as_str()).unwrap_or("");
+            let sni = stream.get("tlsSettings").and_then(|t| t.get("serverName")).and_then(|s| s.as_str()).unwrap_or("");
+
+            Some(format!("trojan://{}@{}:{}?security=tls&sni={}#{}", password, address, port, sni, encoded_remark))
+        }
+        "shadowsocks" => {
+            let server = settings.get("servers").and_then(|s| s.as_array())?.first()?;
+            let address = server.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = server.get("port").and_then(|p| p.as_u64()).unwrap_or(8388);
+            let method = server.get("method").and_then(|m| m.as_str()).unwrap_or("aes-128-gcm");
+            let password = server.get("password").and_then(|p| p.as_str()).unwrap_or("");
+            let auth = BASE64_STANDARD.encode(format!("{}:{}", method, password).as_bytes());
+
+            Some(format!("ss://{}@{}:{}#{}", auth, address, port, encoded_remark))
+        }
+        "socks" => {
+            let server = settings.get("servers").and_then(|s| s.as_array())?.first()?;
+            let address = server.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = server.get("port").and_then(|p| p.as_u64()).unwrap_or(1080);
+            Some(format!("socks5://{}:{}#{}", address, port, encoded_remark))
+        }
+        "wireguard" => {
+            let secret_key = settings.get("secretKey").and_then(|s| s.as_str()).unwrap_or("");
+            let address = settings.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = settings.get("port").and_then(|p| p.as_u64()).unwrap_or(51820);
+            Some(format!("wireguard://{}@{}:{}#{}", secret_key, address, port, encoded_remark))
+        }
+        "hysteria2" | "hy2" => {
+            let server = settings.get("servers").and_then(|s| s.as_array())?.first()?;
+            let address = server.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1");
+            let port = server.get("port").and_then(|p| p.as_u64()).unwrap_or(443);
+            let password = server.get("password").and_then(|p| p.as_str()).unwrap_or("");
+            Some(format!("hy2://{}@{}:{}#{}", password, address, port, encoded_remark))
+        }
+        _ => None,
+    }
+}
+
 pub async fn pin_proxy_dns(config: &mut Value) -> Result<(), String> {
     bootstrap_dns::pin_proxy_address(config).await
 }
@@ -171,6 +521,47 @@ pub async fn ping_profile(raw: &str) -> Result<u128, String> {
     latency::measure(&find_xray_binary()?, config).await
 }
 
+/// Queries the current external public IP address using `curl ifconfig.me`
+pub async fn check_public_ip() -> Result<String, String> {
+    tokio::task::spawn_blocking(|| {
+        let output = std::process::Command::new("curl")
+            .args(["-s", "-m", "5", "https://ifconfig.me"])
+            .output()
+            .or_else(|_| {
+                std::process::Command::new("curl")
+                    .args(["-s", "-m", "5", "http://ifconfig.me"])
+                    .output()
+            })
+            .map_err(|e| format!("curl execution failed: {e}"))?;
+
+        if !output.status.success() {
+            return Err(format!("curl exited with code {:?}", output.status.code()));
+        }
+
+        let raw = String::from_utf8_lossy(&output.stdout);
+        parse_ifconfig_output(&raw)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task execution error: {e}")))
+}
+
+/// Parses and validates the IP address returned by ifconfig.me
+pub fn parse_ifconfig_output(raw: &str) -> Result<String, String> {
+    let clean = raw.trim();
+    if clean.is_empty() {
+        return Err("Empty response from ifconfig.me".to_string());
+    }
+    // Validate if it is a valid IPv4 or IPv6 address
+    if clean.parse::<std::net::IpAddr>().is_ok() {
+        Ok(clean.to_string())
+    } else if clean.len() <= 45 && !clean.contains('\n') && !clean.contains(' ') {
+        Ok(clean.to_string())
+    } else {
+        Err(format!("Invalid IP format received: {clean}"))
+    }
+}
+
+
 #[derive(Debug, Clone, Default)]
 pub struct NodeEditState {
     pub id: String,
@@ -186,17 +577,161 @@ pub struct NodeEditState {
     pub sni: String,
     pub fingerprint: String,
     pub alpn: String,
+    pub protocol: String,
+    pub is_new: bool,
+    pub path: String,
+    pub public_key: String,
+    pub short_id: String,
 }
 
 impl NodeEditState {
+    pub fn new_for_setup(id: &str, protocol: &str, name: &str, config: &str) -> Self {
+        let mut state = Self::from_profile(id, name, config);
+        state.is_new = true;
+        if !protocol.is_empty() {
+            state.protocol = protocol.to_lowercase();
+        }
+        state
+    }
+
     pub fn from_profile(id: &str, name: &str, raw_uri: &str) -> Self {
         let trimmed = raw_uri.trim();
+
+        if trimmed.starts_with("vmess://") {
+            let b64 = trimmed.trim_start_matches("vmess://").trim();
+            if let Ok(bytes) = base64::prelude::BASE64_STANDARD.decode(b64) {
+                if let Ok(val) = serde_json::from_slice::<Value>(&bytes) {
+                    let remarks = if !name.is_empty() {
+                        name.to_string()
+                    } else {
+                        val.get("ps")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("New VMess Node")
+                            .to_string()
+                    };
+                    return Self {
+                        id: id.to_string(),
+                        remarks,
+                        address: val.get("add").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        port: val
+                            .get("port")
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "443".into()),
+                        encrypt_method: "auto".into(),
+                        flow: "none".into(),
+                        user_id: val.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        transport_protocol: val
+                            .get("net")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("ws")
+                            .to_string(),
+                        header_type: val
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("none")
+                            .to_string(),
+                        tls_type: val
+                            .get("tls")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("tls")
+                            .to_string(),
+                        sni: val.get("host").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        fingerprint: "chrome".into(),
+                        alpn: "none".into(),
+                        protocol: "vmess".into(),
+                        is_new: false,
+                        path: val.get("path").and_then(|v| v.as_str()).unwrap_or("/").to_string(),
+                        public_key: "".into(),
+                        short_id: "".into(),
+                    };
+                }
+            }
+        }
+
+        if trimmed.starts_with("ss://") {
+            if let Some((content, tag)) = trimmed.trim_start_matches("ss://").split_once('#') {
+                let remarks = if !name.is_empty() {
+                    name.to_string()
+                } else {
+                    percent_encoding::percent_decode_str(tag)
+                        .decode_utf8_lossy()
+                        .to_string()
+                };
+                if let Some((user_info, host_port)) = content.split_once('@') {
+                    if let Some((h, p)) = host_port.split_once(':') {
+                        let (method, pass) = if let Ok(decoded) =
+                            base64::prelude::BASE64_STANDARD.decode(user_info)
+                        {
+                            let s = String::from_utf8_lossy(&decoded).to_string();
+                            s.split_once(':')
+                                .map(|(m, p)| (m.to_string(), p.to_string()))
+                                .unwrap_or(("chacha20-poly1305".into(), user_info.to_string()))
+                        } else {
+                            user_info
+                                .split_once(':')
+                                .map(|(m, p)| (m.to_string(), p.to_string()))
+                                .unwrap_or(("chacha20-poly1305".into(), user_info.to_string()))
+                        };
+                        return Self {
+                            id: id.to_string(),
+                            remarks,
+                            address: h.to_string(),
+                            port: p.to_string(),
+                            encrypt_method: method,
+                            flow: "none".into(),
+                            user_id: pass,
+                            transport_protocol: "tcp".into(),
+                            header_type: "none".into(),
+                            tls_type: "none".into(),
+                            sni: "".into(),
+                            fingerprint: "none".into(),
+                            alpn: "none".into(),
+                            protocol: "shadowsocks".into(),
+                            is_new: false,
+                            path: "".into(),
+                            public_key: "".into(),
+                            short_id: "".into(),
+                        };
+                    }
+                }
+            }
+        }
+
+        let detected_proto = if trimmed.starts_with("vless://") {
+            "vless".to_string()
+        } else if trimmed.starts_with("vmess://") {
+            "vmess".to_string()
+        } else if trimmed.starts_with("trojan://") {
+            "trojan".to_string()
+        } else if trimmed.starts_with("socks://") {
+            "socks".to_string()
+        } else if trimmed.starts_with("ss://") {
+            "shadowsocks".to_string()
+        } else if trimmed.starts_with("ssr://") {
+            "shadowsocksr".to_string()
+        } else if trimmed.starts_with("hy2://") {
+            "hysteria2".to_string()
+        } else if trimmed.starts_with('{') {
+            if trimmed.contains("\"wireguard\"") {
+                "wireguard".to_string()
+            } else {
+                "raw".to_string()
+            }
+        } else {
+            "vless".to_string()
+        };
+
         if let Ok(url) = Url::parse(trimmed) {
             let query: HashMap<String, String> = url.query_pairs().into_owned().collect();
             let remarks = if !name.is_empty() {
                 name.to_string()
             } else {
                 extract_node_name(trimmed)
+            };
+            let proto = if !detected_proto.is_empty() && detected_proto != "vless" {
+                detected_proto
+            } else {
+                url.scheme().to_lowercase()
             };
             return Self {
                 id: id.to_string(),
@@ -229,6 +764,11 @@ impl NodeEditState {
                     .unwrap_or_default(),
                 fingerprint: query.get("fp").cloned().unwrap_or_else(|| "chrome".into()),
                 alpn: query.get("alpn").cloned().unwrap_or_else(|| "none".into()),
+                protocol: proto,
+                is_new: false,
+                path: query.get("path").cloned().unwrap_or_default(),
+                public_key: query.get("pbk").cloned().unwrap_or_default(),
+                short_id: query.get("sid").cloned().unwrap_or_default(),
             };
         }
 
@@ -250,6 +790,11 @@ impl NodeEditState {
             sni: "".into(),
             fingerprint: "chrome".into(),
             alpn: "none".into(),
+            protocol: detected_proto,
+            is_new: false,
+            path: "".into(),
+            public_key: "".into(),
+            short_id: "".into(),
         }
     }
 
@@ -290,6 +835,19 @@ impl NodeEditState {
         if !self.alpn.is_empty() && self.alpn != "none" {
             u.push_str(&format!("&alpn={}", self.alpn.trim()));
         }
+        if self.tls_type == "reality" {
+            if !self.public_key.is_empty() {
+                u.push_str(&format!("&pbk={}", self.public_key.trim()));
+            }
+            if !self.short_id.is_empty() {
+                u.push_str(&format!("&sid={}", self.short_id.trim()));
+            }
+        }
+        if !self.path.is_empty() {
+            let p = self.path.trim();
+            let enc = percent_encoding::percent_encode(p.as_bytes(), percent_encoding::NON_ALPHANUMERIC);
+            u.push_str(&format!("&path={}", enc));
+        }
         if !self.remarks.is_empty() {
             let encoded = percent_encoding::percent_encode(
                 self.remarks.as_bytes(),
@@ -298,6 +856,111 @@ impl NodeEditState {
             u.push_str(&format!("#{}", encoded));
         }
         u
+    }
+
+    pub fn to_config(&self) -> String {
+        match self.protocol.to_lowercase().as_str() {
+            "vmess" => {
+                let vmess_json = serde_json::json!({
+                    "v": "2",
+                    "ps": self.remarks.trim(),
+                    "add": self.address.trim(),
+                    "port": self.port.trim().parse::<u16>().unwrap_or(443),
+                    "id": self.user_id.trim(),
+                    "aid": 0,
+                    "net": if self.transport_protocol.is_empty() { "ws" } else { self.transport_protocol.trim() },
+                    "type": if self.header_type.is_empty() { "none" } else { self.header_type.trim() },
+                    "host": if self.sni.is_empty() { self.address.trim() } else { self.sni.trim() },
+                    "path": if self.path.is_empty() { "/" } else { self.path.trim() },
+                    "tls": if self.tls_type.is_empty() { "tls" } else { self.tls_type.trim() }
+                });
+                let encoded = base64::prelude::BASE64_STANDARD.encode(vmess_json.to_string().as_bytes());
+                format!("vmess://{}", encoded)
+            }
+            "trojan" => {
+                let mut u = format!(
+                    "trojan://{}@{}:{}?security={}",
+                    self.user_id.trim(),
+                    self.address.trim(),
+                    self.port.trim(),
+                    if self.tls_type.is_empty() { "tls" } else { self.tls_type.trim() }
+                );
+                if !self.sni.is_empty() {
+                    u.push_str(&format!("&sni={}", self.sni.trim()));
+                }
+                if !self.transport_protocol.is_empty() && self.transport_protocol != "tcp" {
+                    u.push_str(&format!("&type={}", self.transport_protocol.trim()));
+                }
+                if !self.path.is_empty() {
+                    u.push_str(&format!("&path={}", self.path.trim()));
+                }
+                if !self.alpn.is_empty() && self.alpn != "none" {
+                    u.push_str(&format!("&alpn={}", self.alpn.trim()));
+                }
+                if !self.remarks.is_empty() {
+                    let encoded = percent_encoding::percent_encode(
+                        self.remarks.as_bytes(),
+                        percent_encoding::NON_ALPHANUMERIC,
+                    );
+                    u.push_str(&format!("#{}", encoded));
+                }
+                u
+            }
+            "socks" => {
+                let mut u = if !self.user_id.is_empty() {
+                    format!("socks://{}@{}:{}", self.user_id.trim(), self.address.trim(), self.port.trim())
+                } else {
+                    format!("socks://{}:{}", self.address.trim(), self.port.trim())
+                };
+                if !self.remarks.is_empty() {
+                    let encoded = percent_encoding::percent_encode(
+                        self.remarks.as_bytes(),
+                        percent_encoding::NON_ALPHANUMERIC,
+                    );
+                    u.push_str(&format!("#{}", encoded));
+                }
+                u
+            }
+            "hysteria2" | "hy2" => {
+                let mut u = format!(
+                    "hy2://{}@{}:{}?",
+                    self.user_id.trim(),
+                    self.address.trim(),
+                    self.port.trim()
+                );
+                if !self.sni.is_empty() {
+                    u.push_str(&format!("sni={}&", self.sni.trim()));
+                }
+                if self.tls_type == "none" {
+                    u.push_str("insecure=1&");
+                }
+                let clean = u.trim_end_matches('&').trim_end_matches('?');
+                let mut res = clean.to_string();
+                if !self.remarks.is_empty() {
+                    let encoded = percent_encoding::percent_encode(
+                        self.remarks.as_bytes(),
+                        percent_encoding::NON_ALPHANUMERIC,
+                    );
+                    res.push_str(&format!("#{}", encoded));
+                }
+                res
+            }
+            "shadowsocks" | "ss" => {
+                let method = if self.encrypt_method.is_empty() { "chacha20-poly1305" } else { self.encrypt_method.trim() };
+                let auth = format!("{}:{}", method, self.user_id.trim());
+                let encoded = base64::prelude::BASE64_STANDARD.encode(auth.as_bytes());
+                let mut u = format!("ss://{}@{}:{}", encoded, self.address.trim(), self.port.trim());
+                if !self.remarks.is_empty() {
+                    let encoded_rem = percent_encoding::percent_encode(
+                        self.remarks.as_bytes(),
+                        percent_encoding::NON_ALPHANUMERIC,
+                    );
+                    u.push_str(&format!("#{}", encoded_rem));
+                }
+                u
+            }
+            _ => self.to_vless_uri(),
+        }
     }
 }
 
@@ -308,6 +971,26 @@ pub fn parse_and_generate_xray_config(
     http_port: u16,
     enable_tun: bool,
 ) -> Result<String, String> {
+    parse_and_generate_xray_config_with_whitelist(
+        input,
+        socks_port,
+        http_port,
+        enable_tun,
+        "",
+        "",
+    )
+}
+
+/// Convert input link or JSON into complete Xray config JSON with Windows WinTun support
+/// and split-tunneling whitelist rules for processes and URLs/domains.
+pub fn parse_and_generate_xray_config_with_whitelist(
+    input: &str,
+    socks_port: u16,
+    http_port: u16,
+    enable_tun: bool,
+    whitelist_apps: &str,
+    whitelist_urls: &str,
+) -> Result<String, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err("Configuration or URI is empty.".into());
@@ -317,8 +1000,26 @@ pub fn parse_and_generate_xray_config(
         let mut val: Value =
             serde_json::from_str(trimmed).map_err(|e| format!("Invalid JSON config: {}", e))?;
         inject_inbounds(&mut val, socks_port, http_port, enable_tun)?;
+        if let Some(outbounds) = val.get_mut("outbounds").and_then(Value::as_array_mut) {
+            if !outbounds.iter().any(|o| o["tag"] == "direct") {
+                outbounds.push(json!({ "tag": "direct", "protocol": "freedom" }));
+            }
+        }
+        let whitelist_rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
+        if !whitelist_rules.is_empty() {
+            let routing = val
+                .as_object_mut()
+                .ok_or("Xray config must be an object")?
+                .entry("routing")
+                .or_insert_with(|| json!({ "rules": [] }));
+            if let Some(rules) = routing.get_mut("rules").and_then(Value::as_array_mut) {
+                for (i, r) in whitelist_rules.into_iter().enumerate() {
+                    rules.insert(i, r);
+                }
+            }
+        }
         if enable_tun {
-            configure_tun(&mut val)?;
+            configure_tun(&mut val, whitelist_apps, whitelist_urls)?;
         }
         return serde_json::to_string_pretty(&val)
             .map_err(|e| format!("Serialization error: {}", e));
@@ -332,9 +1033,17 @@ pub fn parse_and_generate_xray_config(
         parse_trojan_uri(trimmed)?
     } else if trimmed.starts_with("ss://") {
         parse_shadowsocks_uri(trimmed)?
+    } else if trimmed.starts_with("socks://") || trimmed.starts_with("socks5://") {
+        parse_socks_uri(trimmed)?
+    } else if trimmed.starts_with("wireguard://") || trimmed.starts_with("wg://") {
+        parse_wireguard_uri(trimmed)?
+    } else if trimmed.starts_with("hy2://") || trimmed.starts_with("hysteria2://") {
+        parse_hysteria2_uri(trimmed)?
+    } else if trimmed.starts_with("ssr://") {
+        parse_shadowsocksr_uri(trimmed)?
     } else {
         return Err(
-            "Unsupported format. Please provide a VLESS, VMess, Trojan, Shadowsocks link, or JSON."
+            "Unsupported format. Please provide a VLESS, VMess, Trojan, Shadowsocks, ShadowsocksR, Socks, WireGuard, Hysteria2 link, or JSON."
                 .into(),
         );
     };
@@ -369,6 +1078,13 @@ pub fn parse_and_generate_xray_config(
         }),
     ];
 
+    let mut rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
+    rules.push(json!({
+        "type": "field",
+        "inboundTag": ["socks-in", "http-in", "tun-in"],
+        "outboundTag": "proxy"
+    }));
+
     let mut root_cfg = json!({
         "log": {
             "loglevel": "warning"
@@ -386,18 +1102,12 @@ pub fn parse_and_generate_xray_config(
             }
         ],
         "routing": {
-            "domainStrategy": "AsIs",
-            "rules": [
-                {
-                    "type": "field",
-                    "inboundTag": ["socks-in", "http-in", "tun-in"],
-                    "outboundTag": "proxy"
-                }
-            ]
+            "domainStrategy": "IPIfNonMatch",
+            "rules": rules
         }
     });
     if enable_tun {
-        configure_tun(&mut root_cfg)?;
+        configure_tun(&mut root_cfg, whitelist_apps, whitelist_urls)?;
     }
 
     serde_json::to_string_pretty(&root_cfg)
@@ -458,7 +1168,11 @@ fn inject_inbounds(
     Ok(())
 }
 
-fn configure_tun(config: &mut Value) -> Result<(), String> {
+fn configure_tun(
+    config: &mut Value,
+    whitelist_apps: &str,
+    whitelist_urls: &str,
+) -> Result<(), String> {
     let inbounds = config
         .get_mut("inbounds")
         .and_then(Value::as_array_mut)
@@ -558,14 +1272,25 @@ fn configure_tun(config: &mut Value) -> Result<(), String> {
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .ok_or("Xray routing rules must be an array for TUN mode.")?;
+    // 1. DNS
     rules.insert(
         0,
         json!({
-            "type": "field", "inboundTag": [tag], "port": 53, "outboundTag": dns_tag
+            "type": "field", "inboundTag": [tag.clone()], "port": 53, "outboundTag": dns_tag
         }),
     );
+
+    // 2. Direct whitelist routing rules
+    let whitelist_rules = build_whitelist_routing_rules(whitelist_apps, whitelist_urls);
+    let mut insert_idx = 1;
+    for rule in whitelist_rules {
+        rules.insert(insert_idx, rule);
+        insert_idx += 1;
+    }
+
+    // 3. Fallback
     rules.insert(
-        1,
+        insert_idx,
         json!({
             "type": "field", "inboundTag": [tag], "outboundTag": primary_tag
         }),
@@ -773,6 +1498,188 @@ fn parse_shadowsocks_uri(uri_str: &str) -> Result<Value, String> {
     }))
 }
 
+/// Parse ShadowsocksR URI: ssr://base64
+fn parse_shadowsocksr_uri(uri_str: &str) -> Result<Value, String> {
+    let body = uri_str.trim_start_matches("ssr://").trim();
+    let decoded_str = if let Ok(bytes) = BASE64_URL_SAFE
+        .decode(body)
+        .or_else(|_| BASE64_STANDARD.decode(body))
+        .or_else(|_| BASE64_STANDARD_NO_PAD.decode(body))
+    {
+        String::from_utf8_lossy(&bytes).to_string()
+    } else {
+        body.to_string()
+    };
+
+    let (main_part, _query) = decoded_str.split_once("/?").unwrap_or((&decoded_str, ""));
+    let parts: Vec<&str> = main_part.split(':').collect();
+    if parts.len() < 6 {
+        return Err("Invalid SSR format: expected host:port:protocol:method:obfs:password".to_string());
+    }
+
+    let host = parts[0];
+    let port = parts[1].parse::<u16>().map_err(|_| "Invalid SSR port")?;
+    let _protocol = parts[2];
+    let method = parts[3];
+    let _obfs = parts[4];
+    let raw_pass = parts[5];
+
+    let password = if let Ok(bytes) = BASE64_URL_SAFE
+        .decode(raw_pass)
+        .or_else(|_| BASE64_STANDARD.decode(raw_pass))
+        .or_else(|_| BASE64_STANDARD_NO_PAD.decode(raw_pass))
+    {
+        String::from_utf8_lossy(&bytes).to_string()
+    } else {
+        raw_pass.to_string()
+    };
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "shadowsocks",
+        "settings": {
+            "servers": [
+                {
+                    "address": host,
+                    "port": port,
+                    "method": method,
+                    "password": password
+                }
+            ]
+        }
+    }))
+}
+
+/// Parse Socks URI: socks://user:password@host:port#Name or socks5://host:port#Name
+fn parse_socks_uri(uri_str: &str) -> Result<Value, String> {
+    let clean_uri = if let Some(stripped) = uri_str.strip_prefix("socks5://") {
+        format!("socks://{}", stripped)
+    } else {
+        uri_str.to_string()
+    };
+    let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid Socks URL: {}", e))?;
+    let host = url.host_str().ok_or("Socks URL missing host")?;
+    let port = url.port().unwrap_or(1080);
+
+    let mut users = Vec::new();
+    let user = url.username();
+    if !user.is_empty() {
+        let pass = url.password().unwrap_or("");
+        users.push(json!({
+            "user": user,
+            "pass": pass,
+            "level": 0
+        }));
+    }
+
+    let mut server = json!({
+        "address": host,
+        "port": port
+    });
+    if !users.is_empty() {
+        server["users"] = Value::Array(users);
+    }
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "socks",
+        "settings": {
+            "servers": [server]
+        }
+    }))
+}
+
+/// Parse WireGuard URI: wireguard://private_key@endpoint:port/?public_key=...&address=10.0.0.2/32#Name
+fn parse_wireguard_uri(uri_str: &str) -> Result<Value, String> {
+    let clean_uri = if let Some(stripped) = uri_str.strip_prefix("wireguard://") {
+        format!("wg://{}", stripped)
+    } else {
+        uri_str.to_string()
+    };
+    let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid WireGuard URL: {}", e))?;
+    let raw_secret = url.username();
+    if raw_secret.is_empty() {
+        return Err("WireGuard URL missing secret key (private key)".to_string());
+    }
+    let secret_key = percent_encoding::percent_decode_str(raw_secret)
+        .decode_utf8_lossy()
+        .to_string();
+    let host = url.host_str().ok_or("WireGuard URL missing host")?;
+    let port = url.port().unwrap_or(51820);
+    let mut public_key = String::new();
+    let mut address = vec!["10.0.0.2/32".to_string()];
+    for (k, v) in url.query_pairs() {
+        if k == "public_key" || k == "pubkey" || k == "peer_public_key" {
+            public_key = v.to_string();
+        } else if k == "address" || k == "ip" {
+            address = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        }
+    }
+    if public_key.is_empty() {
+        return Err("WireGuard URL missing public_key query parameter".to_string());
+    }
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "wireguard",
+        "settings": {
+            "secretKey": secret_key,
+            "address": address,
+            "peers": [
+                {
+                    "publicKey": public_key,
+                    "endpoint": format!("{}:{}", host, port)
+                }
+            ]
+        }
+    }))
+}
+
+/// Parse Hysteria2 URI: hy2://password@host:port/?insecure=1&sni=example.com#Name
+fn parse_hysteria2_uri(uri_str: &str) -> Result<Value, String> {
+    let clean_uri = if let Some(stripped) = uri_str.strip_prefix("hy2://") {
+        format!("hysteria2://{}", stripped)
+    } else {
+        uri_str.to_string()
+    };
+    let url = Url::parse(&clean_uri).map_err(|e| format!("Invalid Hysteria2 URL: {}", e))?;
+    let password = url.username();
+    let host = url.host_str().ok_or("Hysteria2 URL missing host")?;
+    let port = url.port().unwrap_or(443);
+
+    let mut sni = host.to_string();
+    let mut insecure = false;
+    for (k, v) in url.query_pairs() {
+        if k == "sni" {
+            sni = v.to_string();
+        } else if k == "insecure" && (v == "1" || v == "true") {
+            insecure = true;
+        }
+    }
+
+    Ok(json!({
+        "tag": "proxy",
+        "protocol": "hysteria2",
+        "settings": {
+            "servers": [
+                {
+                    "address": host,
+                    "port": port,
+                    "password": password
+                }
+            ]
+        },
+        "streamSettings": {
+            "network": "udp",
+            "security": "tls",
+            "tlsSettings": {
+                "serverName": sni,
+                "allowInsecure": insecure
+            }
+        }
+    }))
+}
+
 fn extract_stream_settings(query: &HashMap<String, String>, host: &str) -> Result<Value, String> {
     let network = query
         .get("type")
@@ -911,6 +1818,173 @@ fn build_stream_settings(
     Ok(settings)
 }
 
+/// Prompts the user with a native file picker dialog to select a config file,
+/// then reads its contents. Returns Some((file_name, content)) if selected.
+pub async fn pick_and_read_config_file() -> Option<(String, String)> {
+    let path = pick_config_file_path().await?;
+    let path_obj = Path::new(&path);
+    let file_name = path_obj
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("imported_config")
+        .to_string();
+
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => Some((file_name, content)),
+        Err(_) => None,
+    }
+}
+
+/// Launches a native OpenFileDialog on Windows using PowerShell.
+pub async fn pick_config_file_path() -> Option<String> {
+    tokio::task::spawn_blocking(|| {
+        let ps_script = r#"
+            [System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms') | Out-Null
+            $dialog = New-Object System.Windows.Forms.OpenFileDialog
+            $dialog.Filter = 'Config Files (*.json;*.txt;*.yaml;*.conf;*.v2ray;*.xray)|*.json;*.txt;*.yaml;*.conf;*.v2ray;*.xray|All files (*.*)|*.*'
+            $dialog.Title = 'Select Config File to Import'
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                Write-Output $dialog.FileName
+            }
+        "#;
+
+        if let Ok(output) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", ps_script])
+            .output()
+        {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    return Some(path_str);
+                }
+            }
+        }
+
+        None
+    })
+    .await
+    .unwrap_or(None)
+}
+
+/// Parses config file content into a list of (node_name, config_string).
+/// Supports single/multi-line protocol links, base64 subscriptions, raw JSON configs, and JSON arrays.
+pub fn parse_imported_configs(content: &str, file_name: Option<&str>) -> Vec<(String, String)> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let default_name = file_name
+        .map(|f| {
+            Path::new(f)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(f)
+        })
+        .unwrap_or("Imported Config");
+
+    let mut results = Vec::new();
+
+    // 1. Try decoding as pure Base64 (subscription format)
+    let text_to_parse = if !trimmed.starts_with('{') && !trimmed.starts_with('[') && !trimmed.contains("://") {
+        if let Ok(decoded_bytes) = BASE64_STANDARD.decode(trimmed).or_else(|_| BASE64_URL_SAFE.decode(trimmed)) {
+            if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
+                decoded_str
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        }
+    } else {
+        trimmed.to_string()
+    };
+
+    let trimmed_text = text_to_parse.trim();
+
+    // 2. Check if it's a JSON array of configs or profiles: e.g. [{"name": "...", "config": "..."}, ...] or outbounds list
+    if trimmed_text.starts_with('[') {
+        if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(trimmed_text) {
+            for (idx, item) in items.iter().enumerate() {
+                if let Some(cfg_str) = item.get("config").and_then(|c| c.as_str()) {
+                    let name = item.get("name").and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| extract_node_name(cfg_str));
+                    results.push((name, cfg_str.to_string()));
+                } else if item.is_object() {
+                    let serialized = serde_json::to_string_pretty(item).unwrap_or_default();
+                    let name = item.get("tag").and_then(|t| t.as_str())
+                        .or_else(|| item.get("remarks").and_then(|r| r.as_str()))
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("{} #{}", default_name, idx + 1));
+                    results.push((name, serialized));
+                }
+            }
+            if !results.is_empty() {
+                return results;
+            }
+        }
+    }
+
+    // 3. Check if it's a JSON object: full Xray config or single outbound
+    if trimmed_text.starts_with('{') {
+        if let Ok(val) = serde_json::from_str::<Value>(trimmed_text) {
+            let name = val.get("tag").and_then(|t| t.as_str())
+                .or_else(|| val.get("remarks").and_then(|r| r.as_str()))
+                .or_else(|| {
+                    val.get("outbounds")
+                        .and_then(|o| o.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|first| first.get("tag"))
+                        .and_then(|t| t.as_str())
+                })
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| default_name.to_string());
+            results.push((name, trimmed_text.to_string()));
+            return results;
+        }
+    }
+
+    // 4. Split by lines to find URI protocol links
+    let known_prefixes = [
+        "vless://", "vmess://", "trojan://", "ss://", "ssr://", "hy2://",
+        "hysteria2://", "hysteria://", "wireguard://", "wg://", "socks://",
+        "socks5://", "http://", "https://", "tuic://", "vnet://",
+    ];
+
+    for line in trimmed_text.lines() {
+        let l = line.trim();
+        if l.is_empty() || l.starts_with('#') || l.starts_with("//") {
+            continue;
+        }
+        let is_known = known_prefixes.iter().any(|prefix| l.starts_with(prefix));
+        if is_known {
+            let name = extract_node_name(l);
+            results.push((name, l.to_string()));
+        } else if l.starts_with('{') {
+            if let Ok(val) = serde_json::from_str::<Value>(l) {
+                let name = val.get("tag").and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("{} #{}", default_name, results.len() + 1));
+                results.push((name, l.to_string()));
+            }
+        }
+    }
+
+    // 5. Fallback: if no line matched known prefix, but the content has something non-empty
+    if results.is_empty() && !trimmed_text.is_empty() {
+        let name = extract_node_name(trimmed_text);
+        let final_name = if name == "Custom Node" && !default_name.is_empty() {
+            default_name.to_string()
+        } else {
+            name
+        };
+        results.push((final_name, trimmed_text.to_string()));
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -954,4 +2028,287 @@ mod tests {
         assert_eq!(extract_node_address(uri), "example.com:443");
         assert_eq!(extract_protocol_tag(uri), "(VLESS + TCP + TLS)");
     }
+
+    #[test]
+    fn test_whitelist_parsing() {
+        let input = "https://MyWork.com/login; \"*.internal.net\"\t'192.168.1.1', 10.0.0.0/8; geoip:private\n`EXAMPLE.ORG`";
+        let (domains, ips) = parse_whitelist_domains_and_ips(input);
+        assert!(domains.contains(&"domain:mywork.com".to_string()));
+        assert!(domains.contains(&"domain:internal.net".to_string()));
+        assert!(domains.contains(&"domain:example.org".to_string()));
+        assert!(ips.contains(&"192.168.1.1".to_string()));
+        assert!(ips.contains(&"10.0.0.0/8".to_string()));
+        assert!(ips.contains(&"geoip:private".to_string()));
+
+        let proc_input = "\"curl.exe\"; 'C:\\Program Files\\Firefox\\firefox.exe'\t`discord.exe`\nslack.exe";
+        let procs = parse_whitelist_processes(proc_input);
+        assert_eq!(procs, vec!["curl.exe", "firefox.exe", "discord.exe", "slack.exe"]);
+    }
+
+    #[test]
+    fn test_windows_whitelist_routing_proxy_and_tun() {
+        let uri = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption=none&security=tls&sni=example.com&type=tcp#WinNode";
+        
+        // Test Proxy Mode
+        let proxy_cfg = parse_and_generate_xray_config_with_whitelist(
+            uri,
+            10808,
+            10809,
+            false,
+            "discord.exe, steam.exe",
+            "https://office.com, 10.0.0.5",
+        )
+        .expect("Must generate Windows proxy config");
+        let proxy_val: Value = serde_json::from_str(&proxy_cfg).unwrap();
+        assert_eq!(proxy_val["routing"]["domainStrategy"], "IPIfNonMatch");
+        let proxy_rules = proxy_val["routing"]["rules"].as_array().unwrap();
+        assert!(proxy_rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["process"].as_array().map_or(false, |p| {
+                    p.iter().any(|item| item == "discord.exe")
+                })
+        }));
+        assert!(proxy_rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["domain"].as_array().map_or(false, |d| {
+                    d.iter().any(|item| item == "domain:office.com")
+                })
+        }));
+
+        // Test TUN Mode
+        let tun_cfg = parse_and_generate_xray_config_with_whitelist(
+            uri,
+            10808,
+            10809,
+            true,
+            "chrome.exe",
+            "https://internal.lan",
+        )
+        .expect("Must generate Windows TUN config");
+        let tun_val: Value = serde_json::from_str(&tun_cfg).unwrap();
+        let tun_rules = tun_val["routing"]["rules"].as_array().unwrap();
+        assert_eq!(tun_rules[0]["port"], 53);
+        assert_eq!(tun_rules[0]["outboundTag"], "netray-dns");
+        assert!(tun_rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["process"].as_array().map_or(false, |p| {
+                    p.iter().any(|item| item == "chrome.exe")
+                })
+        }));
+        assert!(tun_rules.iter().any(|r| {
+            r["outboundTag"] == "direct"
+                && r["domain"].as_array().map_or(false, |d| {
+                    d.iter().any(|item| item == "domain:internal.lan")
+                })
+        }));
+    }
+
+    #[test]
+    fn test_parse_ifconfig_output() {
+        assert_eq!(
+            parse_ifconfig_output("13.214.47.207\n"),
+            Ok("13.214.47.207".to_string())
+        );
+        assert_eq!(
+            parse_ifconfig_output("2606:4700:4700::1111\n"),
+            Ok("2606:4700:4700::1111".to_string())
+        );
+        assert!(parse_ifconfig_output("").is_err());
+        assert!(parse_ifconfig_output("   \n\t").is_err());
+        assert!(parse_ifconfig_output("<html>502 Bad Gateway</html>").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_windows_all_eleven_templates_produce_valid_outbounds() {
+        for proto in crate::protocols::ProfileType::ALL {
+            let (remarks, config) = proto.generate_template();
+            assert!(!remarks.is_empty());
+            assert!(!config.is_empty());
+
+            match proto.badge() {
+                crate::protocols::BadgeKind::Xray | crate::protocols::BadgeKind::New => {
+                    let result = parse_and_generate_xray_config(&config, 10808, 10809, false);
+                    assert!(
+                        result.is_ok(),
+                        "Failed to generate config for {:?}: {:?}",
+                        proto,
+                        result.err()
+                    );
+                    let parsed: Value = serde_json::from_str(&result.unwrap()).unwrap();
+                    assert!(parsed.get("outbounds").is_some());
+                }
+                crate::protocols::BadgeKind::Native => {
+                    assert!(config.starts_with("ssh://") || config.starts_with("dnstt+ssh://"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_windows_generate_share_link_preserves_existing_uris() {
+        let uri = "vless://win-uuid@1.1.1.1:443?security=tls#ExistingWinNode";
+        let link = generate_share_link(uri, "ExistingWinNode");
+        assert_eq!(link, uri);
+
+        let uri_no_frag = "vless://win-uuid@1.1.1.1:443?security=tls";
+        let link_added = generate_share_link(uri_no_frag, "AddedWinRemark");
+        assert!(link_added.ends_with("#AddedWinRemark"));
+    }
+
+    #[test]
+    fn test_windows_generate_share_link_from_raw_json_vless() {
+        let json_config = r#"{
+            "outbounds": [{
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [{
+                        "address": "fast.winnode.com",
+                        "port": 443,
+                        "users": [{
+                            "id": "11111111-2222-3333-4444-555555555555",
+                            "flow": "xtls-rprx-vision"
+                        }]
+                    }]
+                },
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "serverName": "reality.win.com",
+                        "publicKey": "winpbk",
+                        "shortId": "winsid"
+                    }
+                }
+            }]
+        }"#;
+
+        let link = generate_share_link(json_config, "WinGeneratedVLess");
+        assert!(link.starts_with("vless://11111111-2222-3333-4444-555555555555@fast.winnode.com:443?"));
+        assert!(link.contains("security=reality"));
+        assert!(link.contains("sni=reality.win.com"));
+        assert!(link.contains("pbk=winpbk"));
+        assert!(link.contains("sid=winsid"));
+        assert!(link.contains("flow=xtls-rprx-vision"));
+        assert!(link.ends_with("#WinGeneratedVLess"));
+    }
+
+    #[test]
+    fn test_windows_generate_share_link_from_raw_json_vmess() {
+        let json_config = r#"{
+            "outbounds": [{
+                "protocol": "vmess",
+                "settings": {
+                    "vnext": [{
+                        "address": "vmess.win.net",
+                        "port": 8443,
+                        "users": [{
+                            "id": "aaaa-bbbb-cccc-dddd",
+                            "alterId": 0
+                        }]
+                    }]
+                },
+                "streamSettings": {
+                    "network": "ws",
+                    "security": "tls",
+                    "wsSettings": {
+                        "path": "/winws"
+                    }
+                }
+            }]
+        }"#;
+
+        let link = generate_share_link(json_config, "WinGeneratedVMess");
+        assert!(link.starts_with("vmess://"));
+        let b64 = link.trim_start_matches("vmess://");
+        let decoded = BASE64_STANDARD.decode(b64).expect("Valid base64");
+        let val: Value = serde_json::from_slice(&decoded).expect("Valid json");
+        assert_eq!(val["ps"], "WinGeneratedVMess");
+        assert_eq!(val["add"], "vmess.win.net");
+        assert_eq!(val["port"], 8443);
+        assert_eq!(val["id"], "aaaa-bbbb-cccc-dddd");
+        assert_eq!(val["net"], "ws");
+        assert_eq!(val["path"], "/winws");
+    }
+
+    #[test]
+    fn test_windows_generate_share_link_from_raw_json_trojan_and_shadowsocks() {
+        let trojan_json = r#"{
+            "outbounds": [{
+                "protocol": "trojan",
+                "settings": {
+                    "servers": [{
+                        "address": "trojan.winhost.com",
+                        "port": 443,
+                        "password": "winsecretpassword"
+                    }]
+                },
+                "streamSettings": {
+                    "tlsSettings": {
+                        "serverName": "trojan.winhost.com"
+                    }
+                }
+            }]
+        }"#;
+        let trojan_link = generate_share_link(trojan_json, "WinTrojanNode");
+        assert!(trojan_link.starts_with("trojan://winsecretpassword@trojan.winhost.com:443?"));
+        assert!(trojan_link.contains("sni=trojan.winhost.com"));
+        assert!(trojan_link.ends_with("#WinTrojanNode"));
+
+        let ss_json = r#"{
+            "outbounds": [{
+                "protocol": "shadowsocks",
+                "settings": {
+                    "servers": [{
+                        "address": "ss.winserver.org",
+                        "port": 9000,
+                        "method": "aes-128-gcm",
+                        "password": "winsspassword"
+                    }]
+                }
+            }]
+        }"#;
+        let ss_link = generate_share_link(ss_json, "WinSSNode");
+        assert!(ss_link.starts_with("ss://"));
+        assert!(ss_link.contains("@ss.winserver.org:9000"));
+        assert!(ss_link.ends_with("#WinSSNode"));
+    }
+
+    #[test]
+    fn test_windows_parse_imported_configs_multi_format() {
+        // 1. Single URI
+        let single = "vless://00000000-0000-0000-0000-000000000000@1.1.1.1:443?type=ws#FastVless";
+        let res = parse_imported_configs(single, Some("test.txt"));
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, "FastVless");
+        assert_eq!(res[0].1, single);
+
+        // 2. Multiline list with comments
+        let multi = "# Subscription Header\nvless://uuid@1.1.1.1:443#Node1\n// Comment\ntrojan://pass@2.2.2.2:443#Node2\n";
+        let res = parse_imported_configs(multi, Some("list.conf"));
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].0, "Node1");
+        assert_eq!(res[1].0, "Node2");
+
+        // 3. Base64 subscription
+        let sub_plain = "vless://uuid@3.3.3.3:443#SubNode1\ntrojan://pass@4.4.4.4:443#SubNode2";
+        let sub_b64 = BASE64_STANDARD.encode(sub_plain);
+        let res = parse_imported_configs(&sub_b64, Some("sub.txt"));
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].0, "SubNode1");
+        assert_eq!(res[1].0, "SubNode2");
+
+        // 4. Raw JSON object
+        let raw_json = r#"{"outbounds":[{"protocol":"vless","tag":"MyJsonNode"}]}"#;
+        let res = parse_imported_configs(raw_json, Some("config.json"));
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, "MyJsonNode");
+
+        // 5. JSON Array of profiles
+        let arr_json = r#"[{"name":"ProfileA","config":"vless://..."},{"name":"ProfileB","config":"trojan://..."}]"#;
+        let res = parse_imported_configs(arr_json, Some("backup.json"));
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].0, "ProfileA");
+        assert_eq!(res[1].0, "ProfileB");
+    }
 }
+

@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 
-iced = { version = "0.13", default-features = false, features = ["tokio", "advanced", "svg", "tiny-skia"] }
+iced = { version = "0.13", default-features = false, features = ["tokio", "advanced", "svg", "wgpu"] }
 tokio = { version = "1", features = ["full"] }
 russh = "0.45"
 russh-keys = "0.45"
@@ -28,3 +28,6 @@ base64 = "0.22"
 percent-encoding = "2.3"
 png = "0.18"
 tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+rqrr = "0.11"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

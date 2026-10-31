@@ -2,3 +2,5 @@
 /dist/
 /netray_data/
 /netray-windows/netray_data/
+config.json
+/CODEBASE_GUIDE.md

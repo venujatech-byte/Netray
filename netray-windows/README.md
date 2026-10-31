@@ -8,6 +8,7 @@ Ultra-lightweight, high-performance V2Ray, VLess, and SSH tunneling client for W
   - System proxy manipulation via Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`).
   - Seamless notification using `wininet.dll` (`InternetSetOptionW`).
   - Native WinTun adapter inbound support (`wintun.dll`) for complete system-wide traffic tunneling.
+  - Split-tunneling whitelist: easily bypass specific apps (e.g. `chrome.exe`, `discord.exe`) or domains/URLs/IPs from the tunnel in both WinTun and Proxy modes.
   - Uses a bundled `xray.exe` beside Netray, or finds an existing core on PATH or in common install folders.
   - Windows process supervision and clean termination (`taskkill /F /T /IM xray.exe`).
 - **Modern Iced GUI**:

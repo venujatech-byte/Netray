@@ -30,6 +30,8 @@ try {
     Expand-Archive -Path $zip -DestinationPath $extract
     Copy-Item (Join-Path $extract "*") -Destination $package -Recurse -Force
     Copy-Item $exe -Destination $package -Force
+    Remove-Item (Join-Path $package "config.json") -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $package "netray_data") -Recurse -Force -ErrorAction SilentlyContinue
     Set-Content (Join-Path $package "THIRD-PARTY-NOTICES.txt") @"
 Netray bundles the unmodified Xray-core $xrayVersion executable from XTLS/Xray-core.
 License: Mozilla Public License 2.0; see the accompanying LICENSE file.

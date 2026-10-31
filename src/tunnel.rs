@@ -5,7 +5,61 @@ use russh_keys::key;
 use rustls_pki_types::ServerName;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+
+#[derive(Debug, Default)]
+pub struct TunnelMetrics {
+    pub active_connections: AtomicUsize,
+    pub total_proxied_connections: AtomicU64,
+    pub total_bypassed_connections: AtomicU64,
+}
+
+static METRICS: TunnelMetrics = TunnelMetrics {
+    active_connections: AtomicUsize::new(0),
+    total_proxied_connections: AtomicU64::new(0),
+    total_bypassed_connections: AtomicU64::new(0),
+};
+
+/// Returns (active_connections, total_proxied, total_bypassed)
+pub fn get_tunnel_metrics() -> (usize, u64, u64) {
+    (
+        METRICS.active_connections.load(Ordering::Relaxed),
+        METRICS.total_proxied_connections.load(Ordering::Relaxed),
+        METRICS.total_bypassed_connections.load(Ordering::Relaxed),
+    )
+}
+
+pub fn record_connection_start(is_direct: bool) {
+    METRICS.active_connections.fetch_add(1, Ordering::Relaxed);
+    if is_direct {
+        METRICS.total_bypassed_connections.fetch_add(1, Ordering::Relaxed);
+    } else {
+        METRICS.total_proxied_connections.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub fn record_connection_end() {
+    let mut current = METRICS.active_connections.load(Ordering::Relaxed);
+    while current > 0 {
+        match METRICS.active_connections.compare_exchange_weak(
+            current,
+            current - 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn reset_tunnel_metrics() {
+    METRICS.active_connections.store(0, Ordering::Relaxed);
+    METRICS.total_proxied_connections.store(0, Ordering::Relaxed);
+    METRICS.total_bypassed_connections.store(0, Ordering::Relaxed);
+}
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
@@ -27,6 +81,8 @@ pub struct TunnelConfig {
     pub v2ray_config: String,
     pub enable_tun: bool,
     pub enable_sysproxy: bool,
+    pub whitelist_apps: String,
+    pub whitelist_urls: String,
 }
 
 // Minimal russh client handler (accepts server host keys)
@@ -101,6 +157,7 @@ pub async fn run_real_tunnel_worker(
         let _ = Command::new("ip").args(["link", "delete", "netray0"]).output().await;
     }
 
+    reset_tunnel_metrics();
     send_log(&log_tx, "Supervisor", "Tunnel is offline.", LogLevel::Info).await;
 }
 
@@ -220,12 +277,17 @@ async fn run_ssh_payload_engine(
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let (client_socket, _) = accepted?;
+                let (client_socket, client_addr) = accepted?;
                 let ssh_handle = Arc::clone(&shared_ssh);
                 let log_tx_clone = log_tx.clone();
+                let log_tx_err = log_tx.clone();
                 clients.spawn(async move {
-                    if let Err(e) = handle_socks5_client(client_socket, ssh_handle).await {
-                        send_log(&log_tx_clone, "SOCKS5", format!("Stream closed: {}", e), LogLevel::Warn).await;
+                    if let Err(e) = handle_socks5_client(client_socket, client_addr, ssh_handle, log_tx_clone).await {
+                        // ignore normal client closes
+                        let err_str = e.to_string();
+                        if !err_str.contains("Broken pipe") && !err_str.contains("Connection reset") {
+                            send_log(&log_tx_err, "SOCKS5", format!("Stream closed: {}", err_str), LogLevel::Warn).await;
+                        }
                     }
                 });
             }
@@ -237,7 +299,9 @@ async fn run_ssh_payload_engine(
 /// Minimal RFC 1928 SOCKS5 server that pipes each request into a russh `direct-tcpip` channel
 async fn handle_socks5_client(
     mut sock: TcpStream,
+    client_addr: std::net::SocketAddr,
     ssh: Arc<client::Handle<SshClientHandler>>,
+    log_tx: mpsc::Sender<LogEntry>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = [0u8; 512];
 
@@ -271,19 +335,77 @@ async fn handle_socks5_client(
     };
 
     sock.read_exact(&mut buf[..2]).await?;
-    let target_port = u16::from_be_bytes([buf[0], buf[1]]) as u32;
+    let target_port = u16::from_be_bytes([buf[0], buf[1]]);
+
+    let app_name = crate::apps::resolve_socket_process_name(client_addr.port());
+    let app_display = app_name.as_deref().unwrap_or("app");
+
+    record_connection_start(false);
+
+    crate::send_connection_log(
+        &log_tx,
+        "SOCKS5",
+        format!("Connecting: [{}] -> {}:{} via SSH", app_display, target_host, target_port),
+        LogLevel::Info,
+        &target_host,
+        target_port,
+        app_name.clone(),
+        Some("Tunnel".into()),
+    )
+    .await;
 
     // 3. Open SSH `direct-tcpip` channel to destination
-    let channel = ssh
-        .channel_open_direct_tcpip(&target_host, target_port, "127.0.0.1", 10808)
-        .await?;
+    let channel_result = ssh
+        .channel_open_direct_tcpip(&target_host, target_port as u32, "127.0.0.1", 10808)
+        .await;
+
+    let channel = match channel_result {
+        Ok(c) => c,
+        Err(e) => {
+            record_connection_end();
+            crate::send_connection_log(
+                &log_tx,
+                "SOCKS5",
+                format!("Failed: [{}] -> {}:{} ({})", app_display, target_host, target_port, e),
+                LogLevel::Error,
+                &target_host,
+                target_port,
+                app_name,
+                Some("Failed".into()),
+            )
+            .await;
+            return Err(e.into());
+        }
+    };
 
     // 4. Reply SOCKS5 Success
     sock.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
 
     // 5. Bi-directional zero-copy relay between local app and SSH channel
     let mut ssh_stream = channel.into_stream();
-    tokio::io::copy_bidirectional(&mut sock, &mut ssh_stream).await?;
+    let relay_res = tokio::io::copy_bidirectional(&mut sock, &mut ssh_stream).await;
+    record_connection_end();
+
+    if let Ok((upload, download)) = relay_res {
+        crate::send_connection_log(
+            &log_tx,
+            "SOCKS5",
+            format!(
+                "Closed: [{}] -> {}:{} (sent {:.1} KB, received {:.1} KB)",
+                app_display,
+                target_host,
+                target_port,
+                (upload as f64) / 1024.0,
+                (download as f64) / 1024.0
+            ),
+            LogLevel::Info,
+            &target_host,
+            target_port,
+            app_name,
+            Some("Tunnel".into()),
+        )
+        .await;
+    }
 
     Ok(())
 }
@@ -313,6 +435,48 @@ fn binary_has_cap_net_admin(bin: &Path) -> bool {
     false
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrayConnectionInfo {
+    pub client_port: Option<u16>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub protocol: String,
+    pub route: String,
+}
+
+/// Parses Xray access log lines to extract connecting client endpoint, target website/host, port, and route.
+pub fn parse_xray_connection(line: &str) -> Option<XrayConnectionInfo> {
+    if let Some((left, right)) = line.split_once(" accepted ") {
+        // Extract client port from left side (e.g. "... 127.0.0.1:54321")
+        let client_port = left.rsplit_once(':').and_then(|(_, p)| p.trim().parse::<u16>().ok());
+
+        // Right side format: "tcp:www.google.com:443 [proxy]" or "tcp:github.com:443 [direct]"
+        let mut tokens = right.split_whitespace();
+        let target_token = tokens.next()?;
+        let route_raw = tokens.next().unwrap_or("[proxy]");
+        let route = route_raw.trim_matches(&['[', ']'][..]).to_string();
+
+        let parts: Vec<&str> = target_token.split(':').collect();
+        if parts.len() >= 3 {
+            let protocol = parts[0].to_string();
+            let port_str = parts[parts.len() - 1];
+            let host = parts[1..parts.len() - 1].join(":");
+            if let Ok(port) = port_str.parse::<u16>() {
+                if !host.is_empty() {
+                    return Some(XrayConnectionInfo {
+                        client_port,
+                        target_host: host,
+                        target_port: port,
+                        protocol,
+                        route,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
 fn classify_xray_log(line: &str) -> LogLevel {
     if line.contains("[Warning]") {
         LogLevel::Warn
@@ -325,6 +489,19 @@ fn classify_xray_log(line: &str) -> LogLevel {
     }
 }
 
+fn strip_xray_log_prefix(line: &str) -> &str {
+    let trimmed = line.trim();
+    if trimmed.len() > 20
+        && trimmed.as_bytes().get(4) == Some(&b'/')
+        && trimmed.as_bytes().get(7) == Some(&b'/')
+    {
+        if let Some(bracket_end) = trimmed.find("] ") {
+            return trimmed[bracket_end + 2..].trim();
+        }
+    }
+    trimmed
+}
+
 fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     stream: R,
     tx: mpsc::Sender<LogEntry>,
@@ -332,8 +509,38 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     tokio::spawn(async move {
         let mut reader = BufReader::new(stream).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            let lvl = classify_xray_log(&line);
-            send_log(&tx, "Xray", line, lvl).await;
+            if let Some(conn) = parse_xray_connection(&line) {
+                let app_name = conn.client_port.and_then(crate::apps::resolve_socket_process_name);
+                let app_display = app_name.as_deref().unwrap_or("app");
+                let is_direct = conn.route.eq_ignore_ascii_case("direct");
+                let route_tag = if is_direct { "Bypass" } else { "Tunnel" };
+
+                record_connection_start(is_direct);
+
+                let msg = format!(
+                    "Connection: [{}] -> {}:{} [{}] ({})",
+                    app_display,
+                    conn.target_host,
+                    conn.target_port,
+                    route_tag,
+                    conn.protocol.to_uppercase()
+                );
+                crate::send_connection_log(
+                    &tx,
+                    "Traffic",
+                    msg,
+                    if is_direct { LogLevel::Warn } else { LogLevel::Success },
+                    conn.target_host,
+                    conn.target_port,
+                    app_name,
+                    Some(route_tag.to_string()),
+                )
+                .await;
+            } else {
+                let lvl = classify_xray_log(&line);
+                let cleaned = strip_xray_log_prefix(&line);
+                send_log(&tx, "Xray", cleaned, lvl).await;
+            }
         }
     });
 }
@@ -366,11 +573,13 @@ async fn run_xray_engine(
 
     // 2. Parse URI / JSON and generate valid Xray configuration
     let http_port = cfg.local_socks_port.saturating_add(1);
-    let config_json = match crate::v2ray::parse_and_generate_xray_config(
+    let config_json = match crate::v2ray::parse_and_generate_xray_config_with_whitelist(
         &cfg.v2ray_config,
         cfg.local_socks_port,
         http_port,
         cfg.enable_tun,
+        &cfg.whitelist_apps,
+        &cfg.whitelist_urls,
     ) {
         Ok(json_str) => json_str,
         Err(e) => {
@@ -529,6 +738,13 @@ cleanup
             Ok(ms) => Some(ms),
             Err(error) => {
                 send_log(log_tx, "Error", format!("Connection check failed: {error}"), LogLevel::Error).await;
+                send_log(
+                    log_tx,
+                    "Supervisor",
+                    "Hint: Ensure that the proxy node server is online and reachable from your network.",
+                    LogLevel::Warn,
+                )
+                .await;
                 None
             }
         },
@@ -591,4 +807,55 @@ cleanup
         let _ = Command::new("ip").args(["link", "delete", "netray0"]).output().await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_xray_connection_standard_proxy() {
+        let line = "2026/10/30 18:30:00 127.0.0.1:54321 accepted tcp:www.google.com:443 [proxy]";
+        let info = parse_xray_connection(line).expect("must parse connection");
+        assert_eq!(info.client_port, Some(54321));
+        assert_eq!(info.target_host, "www.google.com");
+        assert_eq!(info.target_port, 443);
+        assert_eq!(info.protocol, "tcp");
+        assert_eq!(info.route, "proxy");
+    }
+
+    #[test]
+    fn test_parse_xray_connection_direct_bypass() {
+        let line = "127.0.0.1:48210 accepted tcp:github.com:22 [direct]";
+        let info = parse_xray_connection(line).expect("must parse direct bypass");
+        assert_eq!(info.client_port, Some(48210));
+        assert_eq!(info.target_host, "github.com");
+        assert_eq!(info.target_port, 22);
+        assert_eq!(info.protocol, "tcp");
+        assert_eq!(info.route, "direct");
+    }
+
+    #[test]
+    fn test_parse_xray_connection_non_matching_lines() {
+        assert_eq!(parse_xray_connection("Xray 1.8.23 started"), None);
+        assert_eq!(parse_xray_connection("[Warning] defaultroute failed"), None);
+    }
+
+    #[test]
+    fn test_tunnel_metrics_lifecycle() {
+        reset_tunnel_metrics();
+        assert_eq!(get_tunnel_metrics(), (0, 0, 0));
+
+        record_connection_start(false);
+        assert_eq!(get_tunnel_metrics(), (1, 1, 0));
+
+        record_connection_start(true);
+        assert_eq!(get_tunnel_metrics(), (2, 1, 1));
+
+        record_connection_end();
+        assert_eq!(get_tunnel_metrics(), (1, 1, 1));
+
+        reset_tunnel_metrics();
+        assert_eq!(get_tunnel_metrics(), (0, 0, 0));
+    }
 }

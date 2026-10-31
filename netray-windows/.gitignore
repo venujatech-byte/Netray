@@ -1,5 +1,7 @@
 /target
 /dist/
+/netray_data/
+config.json
 **/*.rs.bk
 *.pdb
 *.exe
