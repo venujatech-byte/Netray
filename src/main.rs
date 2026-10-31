@@ -839,12 +839,6 @@ pub struct ShareModalState {
     pub copied: bool,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct SudoAuthModalState {
-    pub password: String,
-    pub error: Option<String>,
-    pub is_authenticating: bool,
-}
 
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 5;
 pub const RECONNECT_COUNTDOWN_SECONDS: u32 = 3;
@@ -931,7 +925,6 @@ pub struct NetrayApp {
     pub reconnect_attempts: u32,
     pub error_notification: Option<ErrorNotification>,
     pub startup_connect_prompt: bool,
-    pub sudo_auth_modal: Option<SudoAuthModalState>,
     pub qr_scan_modal: QrScanModalState,
 
     // TUN & System Routing Mode
@@ -1045,10 +1038,6 @@ pub enum Message {
     ToggleConnectAtStartup(bool),
     DismissStartupConnectPrompt,
     ConfirmStartupConnectPrompt,
-    SudoPasswordInputChanged(String),
-    SubmitSudoPassword,
-    CancelSudoAuth,
-    SudoAuthResult(Result<(), String>),
     TriggerErrorAutoReconnect(String),
     ReconnectCountdownTick,
     ExecuteAutoReconnect,
@@ -1169,7 +1158,6 @@ impl NetrayApp {
             reconnect_attempts: 0,
             error_notification: None,
             startup_connect_prompt: saved.connect_at_startup && has_profiles,
-            sudo_auth_modal: None,
             qr_scan_modal: QrScanModalState::default(),
 
             enable_tun: saved.enable_tun,
@@ -1909,100 +1897,12 @@ impl NetrayApp {
             }
             Message::ConfirmStartupConnectPrompt => {
                 self.startup_connect_prompt = false;
-                self.sudo_auth_modal = Some(SudoAuthModalState::default());
                 self.push_log(
                     "Supervisor",
-                    "Target node confirmed. Please enter your sudo password for routing permissions.",
+                    "Target node confirmed. Starting V2Ray tunnel...",
                     LogLevel::Info,
                 );
-                Task::none()
-            }
-            Message::SudoPasswordInputChanged(v) => {
-                if let Some(auth) = &mut self.sudo_auth_modal {
-                    auth.password = v;
-                    auth.error = None;
-                }
-                Task::none()
-            }
-            Message::CancelSudoAuth => {
-                self.sudo_auth_modal = None;
-                self.push_log(
-                    "Supervisor",
-                    "Sudo authentication cancelled by user.",
-                    LogLevel::Info,
-                );
-                Task::none()
-            }
-            Message::SubmitSudoPassword => {
-                if let Some(auth) = &mut self.sudo_auth_modal {
-                    let pass = auth.password.clone();
-                    if pass.trim().is_empty() {
-                        auth.error = Some("Password cannot be empty.".into());
-                        return Task::none();
-                    }
-                    auth.is_authenticating = true;
-                    auth.error = None;
-
-                    Task::perform(
-                        async move {
-                            let mut child = tokio::process::Command::new("sudo")
-                                .args(["-S", "-v"])
-                                .stdin(std::process::Stdio::piped())
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::piped())
-                                .spawn()
-                                .map_err(|e| format!("Failed to spawn sudo: {e}"))?;
-
-                            if let Some(mut stdin) = child.stdin.take() {
-                                use tokio::io::AsyncWriteExt;
-                                let _ = stdin.write_all(format!("{}\n", pass).as_bytes()).await;
-                                let _ = stdin.flush().await;
-                            }
-
-                            let output = child.wait_with_output().await.map_err(|e| e.to_string())?;
-                            if output.status.success() {
-                                Ok(())
-                            } else {
-                                let err = String::from_utf8_lossy(&output.stderr).to_string();
-                                if err.to_lowercase().contains("incorrect") || err.to_lowercase().contains("try again") {
-                                    Err("Incorrect sudo password. Please try again.".to_string())
-                                } else if err.trim().is_empty() {
-                                    Err("Sudo authentication rejected.".to_string())
-                                } else {
-                                    Err(err.trim().to_string())
-                                }
-                            }
-                        },
-                        Message::SudoAuthResult,
-                    )
-                } else {
-                    Task::none()
-                }
-            }
-            Message::SudoAuthResult(res) => {
-                match res {
-                    Ok(()) => {
-                        self.sudo_auth_modal = None;
-                        self.push_log(
-                            "Supervisor",
-                            "Sudo password verified successfully. Starting tunnel...",
-                            LogLevel::Success,
-                        );
-                        self.update_message(Message::ToggleTunnel)
-                    }
-                    Err(e) => {
-                        if let Some(auth) = &mut self.sudo_auth_modal {
-                            auth.is_authenticating = false;
-                            auth.error = Some(e.clone());
-                        }
-                        self.push_log(
-                            "Supervisor",
-                            format!("Authentication failed: {}", e),
-                            LogLevel::Error,
-                        );
-                        Task::none()
-                    }
-                }
+                self.update_message(Message::ToggleTunnel)
             }
             Message::CancelClipboardImport => {
                 self.clipboard_import_candidate = None;
@@ -3051,18 +2951,6 @@ impl NetrayApp {
             base_content
         };
 
-        let base_content = if self.sudo_auth_modal.is_some() {
-            iced::widget::stack![
-                base_content,
-                self.view_sudo_auth_modal(),
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        } else {
-            base_content
-        };
-
         let base_content = if self.qr_scan_modal.is_open {
             iced::widget::stack![
                 base_content,
@@ -3293,107 +3181,6 @@ impl NetrayApp {
             .into()
     }
 
-    fn view_sudo_auth_modal(&self) -> Element<'_, Message> {
-        let Some(auth) = self.sudo_auth_modal.as_ref() else {
-            return Space::with_width(0).into();
-        };
-
-        let mut dialog_col = column![
-            row![
-                icons::lucide_icon(icons::LOCK, 22, ACCENT_BLUE_LIGHT),
-                Space::with_width(8),
-                text("Authentication Required").size(18).color(Color::WHITE),
-            ]
-            .align_y(Alignment::Center),
-            Space::with_height(6),
-            text("Elevated routing permissions are required to start the V2Ray tunnel.")
-                .size(13)
-                .color(TEXT_MUTED),
-            Space::with_height(4),
-            text("Enter your sudo password:")
-                .size(12)
-                .color(Color::WHITE),
-            Space::with_height(2),
-            text_input("Enter password...", &auth.password)
-                .secure(true)
-                .on_input(Message::SudoPasswordInputChanged)
-                .on_submit(Message::SubmitSudoPassword)
-                .padding(8),
-        ]
-        .spacing(4);
-
-        if let Some(err) = &auth.error {
-            dialog_col = dialog_col.push(
-                text(err)
-                    .size(12)
-                    .color(FAILURE_RED)
-            );
-        }
-
-        let action_btn = if auth.is_authenticating {
-            button(text("Verifying…").size(13).color(Color::WHITE))
-                .padding(iced::Padding {
-                    top: 8.0,
-                    bottom: 8.0,
-                    left: 20.0,
-                    right: 20.0,
-                })
-                .style(primary_action_btn)
-        } else {
-            button(text("Authorize & Connect").size(13).color(Color::WHITE))
-                .padding(iced::Padding {
-                    top: 8.0,
-                    bottom: 8.0,
-                    left: 20.0,
-                    right: 20.0,
-                })
-                .style(primary_action_btn)
-                .on_press(Message::SubmitSudoPassword)
-        };
-
-        dialog_col = dialog_col.push(Space::with_height(12)).push(
-            row![
-                button(text("Cancel").size(13).color(Color::WHITE))
-                    .padding(iced::Padding {
-                        top: 8.0,
-                        bottom: 8.0,
-                        left: 16.0,
-                        right: 16.0,
-                    })
-                    .style(|_, status| button::Style {
-                        background: match status {
-                            button::Status::Hovered | button::Status::Pressed => {
-                                Some(Color::from_rgb(0.25, 0.28, 0.35).into())
-                            }
-                            _ => Some(Color::from_rgb(0.18, 0.20, 0.25).into()),
-                        },
-                        border: iced::Border {
-                            radius: 8.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    })
-                    .on_press(Message::CancelSudoAuth),
-                Space::with_width(12),
-                action_btn,
-            ]
-            .align_y(Alignment::Center),
-        );
-
-        let dialog = container(dialog_col.padding(20).width(380))
-            .style(form_card_style);
-
-        container(dialog)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.70).into()),
-                ..Default::default()
-            })
-            .into()
-    }
 
     fn view_notification_toast(&self) -> Element<'_, Message> {
         let Some(notif) = &self.error_notification else {
@@ -5130,7 +4917,7 @@ impl NetrayApp {
                 .align_y(Alignment::Center),
                 Space::with_height(2),
                 text(if self.connect_at_startup {
-                    "Will ask: \"Do you want to connect to v2ray?\" and prompt for sudo password on launch."
+                    "Will ask: \"Do you want to connect to v2ray?\" on launch."
                 } else {
                     "Startup prompt disabled."
                 })
@@ -5827,7 +5614,6 @@ mod performance_tests {
         assert!(app.run_at_startup);
         assert!(app.connect_at_startup);
         assert!(app.startup_connect_prompt);
-        assert!(app.sudo_auth_modal.is_none());
 
         // Verify view renders confirmation prompt modal
         let window_id = iced::window::Id::unique();
@@ -5843,48 +5629,13 @@ mod performance_tests {
         app.startup_connect_prompt = true;
         let _ = app.update(Message::DismissStartupConnectPrompt);
         assert!(!app.startup_connect_prompt);
-        assert!(app.sudo_auth_modal.is_none());
+        assert!(!app.worker_active);
 
-        // Confirm confirmation prompt -> opens sudo modal
+        // Confirm confirmation prompt -> immediately connects tunnel directly without sudo password modal
         app.startup_connect_prompt = true;
         let _ = app.update(Message::ConfirmStartupConnectPrompt);
         assert!(!app.startup_connect_prompt);
-        assert!(app.sudo_auth_modal.is_some());
-
-        // Verify view renders sudo auth modal
-        drop(app.view(window_id));
-
-        // Test sudo password input and empty password submission
-        let _ = app.update(Message::SudoPasswordInputChanged("   ".into()));
-        let _ = app.update(Message::SubmitSudoPassword);
-        assert_eq!(
-            app.sudo_auth_modal.as_ref().and_then(|a| a.error.clone()),
-            Some("Password cannot be empty.".to_string())
-        );
-
-        // Changing password clears error
-        let _ = app.update(Message::SudoPasswordInputChanged("my_password".into()));
-        assert_eq!(
-            app.sudo_auth_modal.as_ref().and_then(|a| a.error.clone()),
-            None
-        );
-
-        // Sudo auth failure handling
-        let _ = app.update(Message::SudoAuthResult(Err("Incorrect sudo password. Please try again.".into())));
-        assert_eq!(
-            app.sudo_auth_modal.as_ref().and_then(|a| a.error.clone()),
-            Some("Incorrect sudo password. Please try again.".to_string())
-        );
-        assert!(!app.sudo_auth_modal.as_ref().unwrap().is_authenticating);
-
-        // Sudo auth cancel
-        let _ = app.update(Message::CancelSudoAuth);
-        assert!(app.sudo_auth_modal.is_none());
-
-        // Sudo auth success closes modal
-        app.sudo_auth_modal = Some(SudoAuthModalState::default());
-        let _ = app.update(Message::SudoAuthResult(Ok(())));
-        assert!(app.sudo_auth_modal.is_none());
+        assert!(app.worker_active);
     }
 
     #[test]
