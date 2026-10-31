@@ -511,38 +511,9 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     tokio::spawn(async move {
         let mut reader = BufReader::new(stream).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            if let Some(conn) = parse_xray_connection(&line) {
-                let app_name = conn.client_port.and_then(crate::apps::resolve_socket_process_name);
-                let app_display = app_name.as_deref().unwrap_or("app");
-                let is_direct = conn.route.eq_ignore_ascii_case("direct");
-                let route_tag = if is_direct { "Bypass" } else { "Tunnel" };
-
-                record_connection_start(is_direct);
-
-                let msg = format!(
-                    "Connection: [{}] -> {}:{} [{}] ({})",
-                    app_display,
-                    conn.target_host,
-                    conn.target_port,
-                    route_tag,
-                    conn.protocol.to_uppercase()
-                );
-                crate::send_connection_log(
-                    &tx,
-                    "Traffic",
-                    msg,
-                    if is_direct { LogLevel::Warn } else { LogLevel::Success },
-                    conn.target_host,
-                    conn.target_port,
-                    app_name,
-                    Some(route_tag.to_string()),
-                )
-                .await;
-            } else {
-                let lvl = classify_xray_log(&line);
-                let cleaned = strip_xray_log_prefix(&line);
-                send_log(&tx, "Xray", cleaned, lvl).await;
-            }
+            let lvl = classify_xray_log(&line);
+            let cleaned = strip_xray_log_prefix(&line);
+            send_log(&tx, "Xray", cleaned, lvl).await;
         }
     });
 }

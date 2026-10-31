@@ -3,12 +3,7 @@
 //! Provides a list of popular applications, scans installed desktop entries,
 //! and helpers to manage whitelist app chips.
 
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
-use std::time::Instant;
-
-static PROCESS_PORT_CACHE: Mutex<Option<HashMap<u16, (String, Instant)>>> = Mutex::new(None);
 
 /// Parses the socket inode from `/proc/net/tcp` or `/proc/net/tcp6` table for a given local port.
 pub fn parse_inode_from_proc_net_tcp(content: &str, port: u16) -> Option<String> {
@@ -16,7 +11,6 @@ pub fn parse_inode_from_proc_net_tcp(content: &str, port: u16) -> Option<String>
     for line in content.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() > 9 {
-            // Match either local_address (column 1) or rem_address (column 2)
             if parts[1].ends_with(&hex_port) || parts[2].ends_with(&hex_port) {
                 let inode = parts[9];
                 if inode != "0" {
@@ -29,81 +23,9 @@ pub fn parse_inode_from_proc_net_tcp(content: &str, port: u16) -> Option<String>
 }
 
 /// Resolves the process name of the local application connected to/from `port`.
-/// Uses `/proc/net/tcp` inode resolution and caches hits for up to 5 seconds.
-pub fn resolve_socket_process_name(port: u16) -> Option<String> {
-    if port == 0 {
-        return None;
-    }
-
-    // 1. Check fast in-memory cache
-    if let Ok(mut guard) = PROCESS_PORT_CACHE.lock() {
-        let cache = guard.get_or_insert_with(HashMap::new);
-        if let Some((name, ts)) = cache.get(&port) {
-            if ts.elapsed().as_secs() < 5 {
-                return Some(name.clone());
-            }
-        }
-    }
-
-    // 2. Query /proc/net/tcp and /proc/net/tcp6
-    let mut inode = None;
-    for table_path in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        if let Ok(content) = std::fs::read_to_string(table_path) {
-            if let Some(i) = parse_inode_from_proc_net_tcp(&content, port) {
-                inode = Some(i);
-                break;
-            }
-        }
-    }
-
-    let inode = inode?;
-    let target_socket = format!("socket:[{}]", inode);
-
-    // 3. Scan /proc for the matching fd
-    let mut proc_name = None;
-    if let Ok(entries) = std::fs::read_dir("/proc") {
-        for entry in entries.flatten() {
-            let pid_dir = entry.path();
-            let file_name = entry.file_name();
-            let name_str = file_name.to_string_lossy();
-            if !name_str.chars().all(|c| c.is_ascii_digit()) {
-                continue;
-            }
-
-            let fd_dir = pid_dir.join("fd");
-            if let Ok(fd_entries) = std::fs::read_dir(fd_dir) {
-                for fd_entry in fd_entries.flatten() {
-                    if let Ok(target) = std::fs::read_link(fd_entry.path()) {
-                        if target.to_string_lossy() == target_socket {
-                            if let Ok(comm) = std::fs::read_to_string(pid_dir.join("comm")) {
-                                let clean = comm.trim().to_string();
-                                if !clean.is_empty() {
-                                    proc_name = Some(clean);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if proc_name.is_some() {
-                break;
-            }
-        }
-    }
-
-    if let Some(ref name) = proc_name {
-        if let Ok(mut guard) = PROCESS_PORT_CACHE.lock() {
-            if let Some(cache) = guard.as_mut() {
-                if cache.len() > 256 {
-                    cache.clear();
-                }
-                cache.insert(port, (name.clone(), Instant::now()));
-            }
-        }
-    }
-
-    proc_name
+// ponytail: skip live /proc directory scanning on connection streams to keep CPU and RAM near zero
+pub fn resolve_socket_process_name(_port: u16) -> Option<String> {
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

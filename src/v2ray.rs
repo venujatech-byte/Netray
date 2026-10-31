@@ -698,7 +698,10 @@ fn configure_tun(
         .ok_or("Xray config must be a JSON object.")?
         .entry("dns")
         .or_insert_with(
-            || json!({ "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"] }),
+            || json!({
+                "servers": ["1.1.1.1", "8.8.8.8", "https://1.1.1.1/dns-query"],
+                "queryStrategy": "UseIPv4"
+            }),
         );
     if !dns.is_object() {
         return Err("Xray DNS config must be an object for TUN mode.".to_owned());
@@ -710,7 +713,10 @@ fn configure_tun(
         return Err("Xray DNS servers must be an array for TUN mode.".to_owned());
     }
     if dns["servers"].as_array().map_or(true, Vec::is_empty) {
-        dns["servers"] = json!(["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]);
+        dns["servers"] = json!(["1.1.1.1", "8.8.8.8", "https://1.1.1.1/dns-query"]);
+    }
+    if dns.get("queryStrategy").is_none() {
+        dns["queryStrategy"] = json!("UseIPv4");
     }
 
     let outbounds = config
@@ -1644,7 +1650,8 @@ pub async fn ping_profile(raw: &str) -> Result<u128, String> {
     let mut config: Value =
         serde_json::from_str(&normalized).map_err(|e| format!("Invalid Xray config: {e}"))?;
     config["dns"] = json!({
-        "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"],
+        "servers": ["1.1.1.1", "8.8.8.8", "https://1.1.1.1/dns-query"],
+        "queryStrategy": "UseIPv4",
         "hosts": {}
     });
     pin_proxy_dns(&mut config).await?;
