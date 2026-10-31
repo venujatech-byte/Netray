@@ -582,7 +582,7 @@ fn assemble_xray_config(
             "protocol": "socks",
             "sniffing": {
                 "enabled": true,
-                "destOverride": ["http", "tls", "quic"]
+                "destOverride": ["http", "tls"]
             },
             "settings": {
                 "auth": "noauth",
@@ -596,7 +596,7 @@ fn assemble_xray_config(
             "protocol": "http",
             "sniffing": {
                 "enabled": true,
-                "destOverride": ["http", "tls", "quic"]
+                "destOverride": ["http", "tls"]
             }
         }),
     ];
@@ -663,7 +663,7 @@ fn configure_tun(
             "autoOutboundsInterface": "auto",
             "autoSystemDnsToGateway": true
         },
-        "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] }
+        "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
     });
     let inbounds = config
         .get_mut("inbounds")
@@ -699,7 +699,7 @@ fn configure_tun(
         .entry("dns")
         .or_insert_with(
             || json!({
-                "servers": ["1.1.1.1", "8.8.8.8", "https://1.1.1.1/dns-query"],
+                "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"],
                 "queryStrategy": "UseIPv4"
             }),
         );
@@ -713,7 +713,7 @@ fn configure_tun(
         return Err("Xray DNS servers must be an array for TUN mode.".to_owned());
     }
     if dns["servers"].as_array().map_or(true, Vec::is_empty) {
-        dns["servers"] = json!(["1.1.1.1", "8.8.8.8", "https://1.1.1.1/dns-query"]);
+        dns["servers"] = json!(["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]);
     }
     if dns.get("queryStrategy").is_none() {
         dns["queryStrategy"] = json!("UseIPv4");
@@ -1650,7 +1650,7 @@ pub async fn ping_profile(raw: &str) -> Result<u128, String> {
     let mut config: Value =
         serde_json::from_str(&normalized).map_err(|e| format!("Invalid Xray config: {e}"))?;
     config["dns"] = json!({
-        "servers": ["1.1.1.1", "8.8.8.8", "https://1.1.1.1/dns-query"],
+        "servers": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"],
         "queryStrategy": "UseIPv4",
         "hosts": {}
     });
