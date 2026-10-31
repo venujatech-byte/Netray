@@ -302,6 +302,36 @@ pub struct ErrorNotification {
     pub is_reconnecting: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QrScanSource {
+    DesktopScreenshot,
+    Webcam,
+    PhotoUpload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QrScanStatus {
+    Idle,
+    Scanning(QrScanSource),
+    Success(String),
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct QrScanModalState {
+    pub is_open: bool,
+    pub status: QrScanStatus,
+}
+
+impl Default for QrScanModalState {
+    fn default() -> Self {
+        Self {
+            is_open: false,
+            status: QrScanStatus::Idle,
+        }
+    }
+}
+
 pub struct NetrayApp {
     pub view_mode: ViewMode,
     pub is_running: bool,
@@ -340,6 +370,7 @@ pub struct NetrayApp {
     pub error_notification: Option<ErrorNotification>,
     pub startup_connect_prompt: bool,
     pub sudo_auth_modal: Option<SudoAuthModalState>,
+    pub qr_scan_modal: QrScanModalState,
 
     pub enable_tun: bool,
     pub enable_sysproxy: bool,
@@ -443,6 +474,12 @@ pub enum Message {
     CheckPublicIp,
     PublicIpChecked(Result<String, String>),
     ThemePreferenceChanged(storage::ThemePreference),
+
+    // QR Code Scanner Events
+    OpenQrScanModal,
+    CloseQrScanModal,
+    TriggerQrScan(QrScanSource),
+    QrScanFinished(Result<String, String>),
     ToggleRunAtStartup(bool),
     ToggleConnectAtStartup(bool),
     DismissStartupConnectPrompt,
@@ -541,6 +578,7 @@ impl NetrayApp {
             error_notification: None,
             startup_connect_prompt: saved.connect_at_startup && has_profiles,
             sudo_auth_modal: None,
+            qr_scan_modal: QrScanModalState::default(),
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy,
@@ -794,6 +832,8 @@ impl NetrayApp {
                     | Message::EditPathChanged(_)
                     | Message::EditPublicKeyChanged(_)
                     | Message::EditShortIdChanged(_)
+                    | Message::OpenQrScanModal
+                    | Message::TriggerQrScan(_)
             )
         {
             return Task::none();
@@ -1965,6 +2005,22 @@ impl NetrayApp {
                         },
                     )
                 }
+            }
+            Message::OpenQrScanModal => {
+                self.qr_scan_modal.is_open = true;
+                self.qr_scan_modal.status = QrScanStatus::Idle;
+                Task::none()
+            }
+            Message::CloseQrScanModal => {
+                self.qr_scan_modal.is_open = false;
+                self.qr_scan_modal.status = QrScanStatus::Idle;
+                Task::none()
+            }
+            Message::TriggerQrScan(_) => {
+                Task::none()
+            }
+            Message::QrScanFinished(_) => {
+                Task::none()
             }
         }
     }
