@@ -259,6 +259,18 @@ fn log_terminal_style(_: &Theme) -> container::Style {
     }
 }
 
+fn bg_window_style(theme: &Theme) -> container::Style {
+    let is_dark = !matches!(theme, Theme::Light);
+    container::Style {
+        background: Some(if is_dark {
+            theme::BG_WINDOW_DARK.into()
+        } else {
+            theme::BG_WINDOW_LIGHT.into()
+        }),
+        ..Default::default()
+    }
+}
+
 fn chip_close_btn_style(_: &Theme, _: button::Status) -> button::Style {
     button::Style {
         background: None,
@@ -2409,20 +2421,7 @@ impl NetrayApp {
                 .height(Length::Fill)
         };
         let content = container(main_col)
-            .style(|theme| {
-                let is_dark = match theme {
-                    Theme::Light => false,
-                    _ => true,
-                };
-                container::Style {
-                    background: Some(if is_dark {
-                        theme::BG_WINDOW_DARK.into()
-                    } else {
-                        theme::BG_WINDOW_LIGHT.into()
-                    }),
-                    ..Default::default()
-                }
-            })
+            .style(bg_window_style)
             .width(Length::Fill)
             .height(Length::Fill);
         let base_content: Element<'_, Message> = if self.show_add_menu {
