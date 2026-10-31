@@ -196,6 +196,57 @@ fn fab_btn_style(_: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+fn toast_cancel_btn(_: &Theme, status: button::Status) -> button::Style {
+    button::Style {
+        background: match status {
+            button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.12).into()),
+            _ => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.06).into()),
+        },
+        border: iced::Border {
+            radius: 6.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn toast_close_btn(_: &Theme, status: button::Status) -> button::Style {
+    button::Style {
+        background: match status {
+            button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.1).into()),
+            _ => None,
+        },
+        border: iced::Border {
+            radius: 4.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn toast_attempt_pill(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.95, 0.35, 0.40, 0.15).into()),
+        border: iced::Border {
+            radius: 4.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn toast_container_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgb(0.12, 0.13, 0.17).into()),
+        border: iced::Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: Color::from_rgb(0.75, 0.25, 0.25),
+        },
+        ..Default::default()
+    }
+}
+
 fn chip_close_btn_style(_: &Theme, _: button::Status) -> button::Style {
     button::Style {
         background: None,
@@ -2893,17 +2944,7 @@ impl NetrayApp {
             row![
                 button(text("Cancel").size(11).color(Color::from_rgb(0.9, 0.9, 0.9)))
                     .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 10.0, right: 10.0 })
-                    .style(|_, status| button::Style {
-                        background: match status {
-                            button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.12).into()),
-                            _ => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.06).into()),
-                        },
-                        border: iced::Border {
-                            radius: 6.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    })
+                    .style(toast_cancel_btn)
                     .on_press(Message::CancelAutoReconnect),
                 Space::with_width(6),
                 button(text("Reconnect Now").size(11).color(Color::WHITE))
@@ -2937,14 +2978,7 @@ impl NetrayApp {
                         Space::with_width(8),
                         container(text(format!("{}/{}", notif.attempt, notif.max_attempts)).size(10).color(FAILURE_RED))
                             .padding(iced::Padding { top: 1.0, bottom: 1.0, left: 6.0, right: 6.0 })
-                            .style(|_| container::Style {
-                                background: Some(Color::from_rgba(0.95, 0.35, 0.40, 0.15).into()),
-                                border: iced::Border {
-                                    radius: 4.0.into(),
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            }),
+                            .style(toast_attempt_pill),
                     ]
                     .align_y(Alignment::Center),
                     text(&notif.message).size(11).color(Color::from_rgb(0.85, 0.85, 0.85)),
@@ -2957,31 +2991,13 @@ impl NetrayApp {
                 Space::with_width(8),
                 button(icons::lucide_icon(icons::CLOSE, 14, TEXT_MUTED))
                     .padding(4)
-                    .style(|_, status| button::Style {
-                        background: match status {
-                            button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.1).into()),
-                            _ => None,
-                        },
-                        border: iced::Border {
-                            radius: 4.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    })
+                    .style(toast_close_btn)
                     .on_press(Message::DismissNotification),
             ]
             .align_y(Alignment::Center)
             .padding(10)
         )
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.12, 0.13, 0.17).into()),
-            border: iced::Border {
-                radius: 8.0.into(),
-                width: 1.0,
-                color: Color::from_rgb(0.75, 0.25, 0.25),
-            },
-            ..Default::default()
-        })
+        .style(toast_container_style)
         .width(Length::Fill);
 
         container(toast)
