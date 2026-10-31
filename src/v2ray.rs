@@ -2053,6 +2053,186 @@ impl NodeEditState {
     }
 }
 
+/// Prompts the user with a native file picker dialog to select a config file,
+/// then reads its contents. Returns Some((file_name, content)) if selected.
+pub async fn pick_and_read_config_file() -> Option<(String, String)> {
+    let path = pick_config_file_path().await?;
+    let path_obj = Path::new(&path);
+    let file_name = path_obj
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("imported_config")
+        .to_string();
+
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => Some((file_name, content)),
+        Err(_) => None,
+    }
+}
+
+/// Launches a native file picker dialog (zenity or kdialog) on Linux.
+pub async fn pick_config_file_path() -> Option<String> {
+    tokio::task::spawn_blocking(|| {
+        if let Ok(output) = std::process::Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--title=Select Config File to Import",
+                "--file-filter=Config files (*.json *.txt *.yaml *.conf *.v2ray *.xray) | *.json *.txt *.yaml *.conf *.v2ray *.xray",
+                "--file-filter=All files | *",
+            ])
+            .output()
+        {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    return Some(path_str);
+                }
+            }
+        }
+
+        if let Ok(output) = std::process::Command::new("kdialog")
+            .args([
+                "--getopenfilename",
+                ".",
+                "*.json *.txt *.yaml *.conf *.v2ray *.xray|Config files\n*|All files",
+                "--title",
+                "Select Config File to Import",
+            ])
+            .output()
+        {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    return Some(path_str);
+                }
+            }
+        }
+
+        None
+    })
+    .await
+    .unwrap_or(None)
+}
+
+/// Parses config file content into a list of (node_name, config_string).
+/// Supports single/multi-line protocol links, base64 subscriptions, raw JSON configs, and JSON arrays.
+pub fn parse_imported_configs(content: &str, file_name: Option<&str>) -> Vec<(String, String)> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let default_name = file_name
+        .map(|f| {
+            Path::new(f)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(f)
+        })
+        .unwrap_or("Imported Config");
+
+    let mut results = Vec::new();
+
+    // 1. Try decoding as pure Base64 (subscription format)
+    let text_to_parse = if !trimmed.starts_with('{') && !trimmed.starts_with('[') && !trimmed.contains("://") {
+        if let Ok(decoded_bytes) = BASE64_STANDARD.decode(trimmed).or_else(|_| BASE64_URL_SAFE.decode(trimmed)) {
+            if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
+                decoded_str
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        }
+    } else {
+        trimmed.to_string()
+    };
+
+    let trimmed_text = text_to_parse.trim();
+
+    // 2. Check if it's a JSON array of configs or profiles: e.g. [{"name": "...", "config": "..."}, ...] or outbounds list
+    if trimmed_text.starts_with('[') {
+        if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(trimmed_text) {
+            for (idx, item) in items.iter().enumerate() {
+                if let Some(cfg_str) = item.get("config").and_then(|c| c.as_str()) {
+                    let name = item.get("name").and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| extract_node_name(cfg_str));
+                    results.push((name, cfg_str.to_string()));
+                } else if item.is_object() {
+                    let serialized = serde_json::to_string_pretty(item).unwrap_or_default();
+                    let name = item.get("tag").and_then(|t| t.as_str())
+                        .or_else(|| item.get("remarks").and_then(|r| r.as_str()))
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("{} #{}", default_name, idx + 1));
+                    results.push((name, serialized));
+                }
+            }
+            if !results.is_empty() {
+                return results;
+            }
+        }
+    }
+
+    // 3. Check if it's a JSON object: full Xray config or single outbound
+    if trimmed_text.starts_with('{') {
+        if let Ok(val) = serde_json::from_str::<Value>(trimmed_text) {
+            let name = val.get("tag").and_then(|t| t.as_str())
+                .or_else(|| val.get("remarks").and_then(|r| r.as_str()))
+                .or_else(|| {
+                    val.get("outbounds")
+                        .and_then(|o| o.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|first| first.get("tag"))
+                        .and_then(|t| t.as_str())
+                })
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| default_name.to_string());
+            results.push((name, trimmed_text.to_string()));
+            return results;
+        }
+    }
+
+    // 4. Split by lines to find URI protocol links
+    let known_prefixes = [
+        "vless://", "vmess://", "trojan://", "ss://", "ssr://", "hy2://",
+        "hysteria2://", "hysteria://", "wireguard://", "wg://", "socks://",
+        "socks5://", "http://", "https://", "tuic://", "vnet://",
+    ];
+
+    for line in trimmed_text.lines() {
+        let l = line.trim();
+        if l.is_empty() || l.starts_with('#') || l.starts_with("//") {
+            continue;
+        }
+        let is_known = known_prefixes.iter().any(|prefix| l.starts_with(prefix));
+        if is_known {
+            let name = extract_node_name(l);
+            results.push((name, l.to_string()));
+        } else if l.starts_with('{') {
+            if let Ok(val) = serde_json::from_str::<Value>(l) {
+                let name = val.get("tag").and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("{} #{}", default_name, results.len() + 1));
+                results.push((name, l.to_string()));
+            }
+        }
+    }
+
+    // 5. Fallback: if no line matched known prefix, but the content has something non-empty
+    if results.is_empty() && !trimmed_text.is_empty() {
+        let name = extract_node_name(trimmed_text);
+        let final_name = if name == "Custom Node" && !default_name.is_empty() {
+            default_name.to_string()
+        } else {
+            name
+        };
+        results.push((final_name, trimmed_text.to_string()));
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2670,6 +2850,44 @@ mod tests {
         let val: serde_json::Value = serde_json::from_str(&config_str).unwrap();
         assert_eq!(val["log"]["loglevel"], "info");
         assert_eq!(val["log"]["access"], "");
+    }
+
+    #[test]
+    fn test_parse_imported_configs_multi_format() {
+        // 1. Single URI
+        let single = "vless://00000000-0000-0000-0000-000000000000@1.1.1.1:443?type=ws#FastVless";
+        let res = parse_imported_configs(single, Some("test.txt"));
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, "FastVless");
+        assert_eq!(res[0].1, single);
+
+        // 2. Multiline list with comments
+        let multi = "# Subscription Header\nvless://uuid@1.1.1.1:443#Node1\n// Comment\ntrojan://pass@2.2.2.2:443#Node2\n";
+        let res = parse_imported_configs(multi, Some("list.conf"));
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].0, "Node1");
+        assert_eq!(res[1].0, "Node2");
+
+        // 3. Base64 subscription
+        let sub_plain = "vless://uuid@3.3.3.3:443#SubNode1\ntrojan://pass@4.4.4.4:443#SubNode2";
+        let sub_b64 = BASE64_STANDARD.encode(sub_plain);
+        let res = parse_imported_configs(&sub_b64, Some("sub.txt"));
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].0, "SubNode1");
+        assert_eq!(res[1].0, "SubNode2");
+
+        // 4. Raw JSON object
+        let raw_json = r#"{"outbounds":[{"protocol":"vless","tag":"MyJsonNode"}]}"#;
+        let res = parse_imported_configs(raw_json, Some("config.json"));
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, "MyJsonNode");
+
+        // 5. JSON Array of profiles
+        let arr_json = r#"[{"name":"ProfileA","config":"vless://..."},{"name":"ProfileB","config":"trojan://..."}]"#;
+        let res = parse_imported_configs(arr_json, Some("backup.json"));
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].0, "ProfileA");
+        assert_eq!(res[1].0, "ProfileB");
     }
 }
 

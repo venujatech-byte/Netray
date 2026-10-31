@@ -423,6 +423,8 @@ pub enum Message {
 
     V2RayConfigChanged(String),
     LocalSocksPortChanged(String),
+    RequestFileImport,
+    ConfigFileSelected(Option<(String, String)>),
     RequestClipboardImport,
     ClipboardImported(Option<String>),
     ToggleInstantImport(bool),
@@ -768,6 +770,8 @@ impl NetrayApp {
                     | Message::OpenAddMenu
                     | Message::CreateProfileWithType(_)
                     | Message::SaveEditedNode
+                    | Message::RequestFileImport
+                    | Message::ConfigFileSelected(_)
                     | Message::RequestClipboardImport
                     | Message::ClipboardImported(_)
                     | Message::ToggleInstantImport(_)
@@ -1176,6 +1180,65 @@ impl NetrayApp {
                             "Clipboard",
                             format!("Imported and activated '{}'.", node_name),
                             LogLevel::Success,
+                        );
+                    }
+                }
+                Task::none()
+            }
+            Message::RequestFileImport => {
+                Task::perform(v2ray::pick_and_read_config_file(), Message::ConfigFileSelected)
+            }
+            Message::ConfigFileSelected(maybe_file) => {
+                if let Some((file_name, content)) = maybe_file {
+                    let parsed_configs = v2ray::parse_imported_configs(&content, Some(&file_name));
+                    if parsed_configs.is_empty() {
+                        self.push_log(
+                            "Import",
+                            format!("No valid V2Ray or Xray configurations found in '{}'.", file_name),
+                            LogLevel::Warn,
+                        );
+                    } else {
+                        let count = parsed_configs.len();
+                        let mut first_id = None;
+                        let mut first_cfg = None;
+                        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+                        for (idx, (node_name, config_str)) in parsed_configs.into_iter().rev().enumerate() {
+                            let id = format!(
+                                "node-{}-{}",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis(),
+                                idx
+                            );
+                            let profile = storage::V2RayProfile {
+                                id: id.clone(),
+                                name: node_name.clone(),
+                                config: config_str.clone(),
+                                created_at: now.clone(),
+                            };
+                            self.v2ray_profiles.retain(|p| p.config != config_str);
+                            self.v2ray_profiles.insert(0, profile);
+                            first_id = Some(id);
+                            first_cfg = Some(config_str);
+                        }
+
+                        if let (Some(id), Some(cfg)) = (first_id, first_cfg) {
+                            self.active_profile_id = Some(id);
+                            self.v2ray_uri_or_json = cfg;
+                            self.tunnel_mode = TunnelMode::V2RayXray;
+                        }
+
+                        self.sync_profile_display_cache();
+                        let _ = self.save_current_state();
+
+                        let msg = format!("Imported {} profile(s) from '{}'.", count, file_name);
+                        self.push_log("Import", &msg, LogLevel::Success);
+                        notifications::send_desktop_notification(
+                            "Netray Import",
+                            &msg,
+                            notifications::NotificationUrgency::Normal,
                         );
                     }
                 }
@@ -2796,7 +2859,7 @@ impl NetrayApp {
                     background: None,
                     ..Default::default()
                 })
-                .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
+                .on_press_maybe((!config_locked).then(|| Message::RequestFileImport)),
             button(icons::lucide_icon(icons::LINK, 20, self.text_primary()))
                 .padding(6)
                 .style(|_, _| button::Style {
@@ -4402,6 +4465,51 @@ mod performance_tests {
         assert!(app.enable_sysproxy);
 
         // 6. View rendering check for both selected
+        drop(app.view());
+    }
+
+    #[test]
+    fn test_windows_file_import_lifecycle() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let initial_count = app.v2ray_profiles.len();
+
+        // 1. User cancels file picker -> None
+        let _ = app.update_message(Message::ConfigFileSelected(None));
+        assert_eq!(app.v2ray_profiles.len(), initial_count);
+
+        // 2. Empty file selected -> warns, doesn't add
+        let _ = app.update_message(Message::ConfigFileSelected(Some(("empty.txt".into(), "   ".into()))));
+        assert_eq!(app.v2ray_profiles.len(), initial_count);
+
+        // 3. Multi-node file selected
+        let sample_file_content = "\
+vless://11111111-1111-1111-1111-111111111111@server1.com:443?type=tcp#WinNodeA
+trojan://secretpass@server2.com:443?type=ws#WinNodeB
+";
+        let _ = app.update_message(Message::ConfigFileSelected(Some((
+            "exported_nodes.txt".into(),
+            sample_file_content.into(),
+        ))));
+
+        assert_eq!(app.v2ray_profiles.len(), initial_count + 2);
+        assert_eq!(app.v2ray_profiles[0].name, "WinNodeA");
+        assert_eq!(app.v2ray_profiles[1].name, "WinNodeB");
+        assert_eq!(app.active_profile_id, Some(app.v2ray_profiles[0].id.clone()));
+        assert_eq!(app.v2ray_uri_or_json, app.v2ray_profiles[0].config);
+        assert_eq!(app.tunnel_mode, TunnelMode::V2RayXray);
+
+        // 4. Single JSON config file selected
+        let json_content = r#"{"outbounds":[{"protocol":"vless","tag":"CustomWinJsonServer"}]}"#;
+        let _ = app.update_message(Message::ConfigFileSelected(Some((
+            "xray_custom.json".into(),
+            json_content.into(),
+        ))));
+
+        assert_eq!(app.v2ray_profiles.len(), initial_count + 3);
+        assert_eq!(app.v2ray_profiles[0].name, "CustomWinJsonServer");
+        assert_eq!(app.active_profile_id, Some(app.v2ray_profiles[0].id.clone()));
+
+        // 5. Verify view renders with new profiles
         drop(app.view());
     }
 }
