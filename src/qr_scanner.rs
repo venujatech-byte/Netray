@@ -133,7 +133,7 @@ pub fn capture_desktop_screenshot() -> Result<Vec<u8>, String> {
 
         if !success || !temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
-            return Err(format!("Unable to capture desktop screenshot. Please ensure 'import' (ImageMagick), 'grim', or 'gnome-screenshot' is installed. ({last_error})"));
+            return Err(format!("Unable to capture desktop screenshot. Please ensure ImageMagick ('import'), 'grim', or 'gnome-screenshot' is installed on your system. ({last_error})"));
         }
     }
 
@@ -236,7 +236,7 @@ pub fn capture_webcam_snapshot() -> Result<Vec<u8>, String> {
 
         if !success || !temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
-            return Err(format!("Unable to capture camera snapshot. Please check that your webcam is connected and accessible. ({last_error})"));
+            return Err(format!("Unable to capture camera snapshot. Please check that your webcam is connected to /dev/video* and 'ffmpeg' or 'fswebcam' is installed. ({last_error})"));
         }
     }
 
@@ -307,7 +307,7 @@ pub fn pick_qr_image_file() -> Result<Option<std::path::PathBuf>, String> {
             return Ok(None);
         }
 
-        Err("No supported file picker found (zenity or kdialog required).".to_string())
+        Err("No supported file picker found. Please install 'zenity' or 'kdialog' (e.g. sudo apt install zenity / sudo dnf install zenity).".to_string())
     }
 
     #[cfg(target_os = "windows")]
