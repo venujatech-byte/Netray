@@ -3290,6 +3290,13 @@ impl NetrayApp {
                     ..Default::default()
                 })
                 .on_press_maybe((!config_locked).then(|| Message::RequestFileImport)),
+            button(icons::lucide_icon(icons::QR_CODE, 20, self.text_primary()))
+                .padding(6)
+                .style(|_, _| button::Style {
+                    background: None,
+                    ..Default::default()
+                })
+                .on_press_maybe((!config_locked).then(|| Message::OpenQrScanModal)),
             button(icons::lucide_icon(icons::LINK, 20, self.text_primary()))
                 .padding(6)
                 .style(|_, _| button::Style {

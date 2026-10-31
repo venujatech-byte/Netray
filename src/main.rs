@@ -3737,7 +3737,7 @@ impl NetrayApp {
             text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
             top_icon_btn(icons::FILE_PLUS, 20, (!config_locked).then(|| Message::RequestFileImport)),
-            top_icon_btn(icons::QR_CODE, 20, Some(Message::ValidateV2RayConfig)),
+            top_icon_btn(icons::QR_CODE, 20, (!config_locked).then(|| Message::OpenQrScanModal)),
             top_icon_btn(icons::LINK, 20, (!config_locked).then(|| Message::RequestClipboardImport)),
             top_icon_btn(icons::MORE_VERTICAL, 20, Some(Message::SetViewMode(ViewMode::Logs))),
         ]
