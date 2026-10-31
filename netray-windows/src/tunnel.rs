@@ -240,6 +240,19 @@ fn classify_xray_log(line: &str) -> LogLevel {
     }
 }
 
+fn strip_xray_log_prefix(line: &str) -> &str {
+    let trimmed = line.trim();
+    if trimmed.len() > 20
+        && trimmed.as_bytes().get(4) == Some(&b'/')
+        && trimmed.as_bytes().get(7) == Some(&b'/')
+    {
+        if let Some(bracket_end) = trimmed.find("] ") {
+            return trimmed[bracket_end + 2..].trim();
+        }
+    }
+    trimmed
+}
+
 fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     stream: R,
     tx: mpsc::Sender<LogEntry>,
@@ -248,7 +261,8 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
         let mut reader = BufReader::new(stream).lines();
         while let Ok(Some(line)) = reader.next_line().await {
             let lvl = classify_xray_log(&line);
-            send_log(&tx, "Xray", line, lvl).await;
+            let cleaned = strip_xray_log_prefix(&line);
+            send_log(&tx, "Xray", cleaned, lvl).await;
         }
     });
 }
