@@ -267,6 +267,85 @@ pub fn scan_qr_from_webcam() -> Result<String, String> {
     decode_qr_from_image_bytes(&bytes)
 }
 
+/// Opens native OS file picker to choose an image file (PNG, JPG, BMP, etc.).
+pub fn pick_qr_image_file() -> Result<Option<std::path::PathBuf>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        // Try zenity first
+        if let Ok(output) = std::process::Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--title=Select QR Code Image",
+                "--file-filter=Image files (*.png *.jpg *.jpeg *.bmp) | *.png *.jpg *.jpeg *.bmp *.PNG *.JPG *.JPEG *.BMP",
+            ])
+            .output()
+        {
+            if output.status.success() {
+                let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !chosen.is_empty() {
+                    return Ok(Some(std::path::PathBuf::from(chosen)));
+                }
+            }
+            return Ok(None);
+        }
+
+        // Fallback to kdialog
+        if let Ok(output) = std::process::Command::new("kdialog")
+            .args([
+                "--getopenfilename",
+                ".",
+                "*.png *.jpg *.jpeg *.bmp|Image Files (*.png *.jpg *.jpeg *.bmp)",
+            ])
+            .output()
+        {
+            if output.status.success() {
+                let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !chosen.is_empty() {
+                    return Ok(Some(std::path::PathBuf::from(chosen)));
+                }
+            }
+            return Ok(None);
+        }
+
+        Err("No supported file picker found (zenity or kdialog required).".to_string())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let ps_script = "Add-Type -AssemblyName System.Windows.Forms; \
+                         $f = New-Object System.Windows.Forms.OpenFileDialog; \
+                         $f.Title = 'Select QR Code Image'; \
+                         $f.Filter = 'Image Files (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp|All Files (*.*)|*.*'; \
+                         if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { \
+                             Write-Output $f.FileName; \
+                         }";
+
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps_script])
+            .output()
+            .map_err(|e| format!("Failed to spawn PowerShell file dialog: {e}"))?;
+
+        if output.status.success() {
+            let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !chosen.is_empty() {
+                return Ok(Some(std::path::PathBuf::from(chosen)));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Opens native photo picker and decodes QR code if a file was selected.
+pub fn scan_qr_from_picked_file() -> Result<Option<String>, String> {
+    match pick_qr_image_file()? {
+        Some(path) => {
+            let content = decode_qr_from_file(&path)?;
+            Ok(Some(content))
+        }
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
