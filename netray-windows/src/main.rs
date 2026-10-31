@@ -49,6 +49,17 @@ fn format_uptime(elapsed: Duration) -> String {
     )
 }
 
+static UNIQUE_NODE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub fn generate_unique_node_id(prefix: &str) -> String {
+    let count = UNIQUE_NODE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{}-{}-{}", prefix, nanos, count)
+}
+
 fn form_card_style(theme: &Theme) -> container::Style {
     let is_dark = match theme {
         Theme::Light => false,
@@ -1224,13 +1235,7 @@ impl NetrayApp {
                 Task::none()
             }
             Message::AddNewProfile => {
-                let id = format!(
-                    "node-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis()
-                );
+                let id = generate_unique_node_id("node");
                 let (name, config) = protocols::ProfileType::VLess.generate_template();
                 self.node_edit_state =
                     v2ray::NodeEditState::new_for_setup(&id, "VLess", &name, &config);
@@ -1249,13 +1254,7 @@ impl NetrayApp {
             }
             Message::CreateProfileWithType(proto) => {
                 self.show_add_menu = false;
-                let id = format!(
-                    "node-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis()
-                );
+                let id = generate_unique_node_id("node");
                 let (name, config) = proto.generate_template();
                 self.node_edit_state =
                     v2ray::NodeEditState::new_for_setup(&id, proto.title(), &name, &config);
@@ -1405,13 +1404,7 @@ impl NetrayApp {
                     let trimmed = candidate.trim();
                     if !trimmed.is_empty() {
                         let node_name = v2ray::extract_node_name(trimmed);
-                        let id = format!(
-                            "node-{}",
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis()
-                        );
+                        let id = generate_unique_node_id("node");
                         let profile = storage::V2RayProfile {
                             id: id.clone(),
                             name: node_name.clone(),
@@ -1454,15 +1447,8 @@ impl NetrayApp {
                         let mut first_cfg = None;
                         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-                        for (idx, (node_name, config_str)) in parsed_configs.into_iter().rev().enumerate() {
-                            let id = format!(
-                                "node-{}-{}",
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis(),
-                                idx
-                            );
+                        for (_idx, (node_name, config_str)) in parsed_configs.into_iter().rev().enumerate() {
+                            let id = generate_unique_node_id("node");
                             let profile = storage::V2RayProfile {
                                 id: id.clone(),
                                 name: node_name.clone(),
@@ -1504,13 +1490,7 @@ impl NetrayApp {
                     if !trimmed.is_empty() {
                         if self.instant_import {
                             let node_name = v2ray::extract_node_name(trimmed);
-                            let id = format!(
-                                "node-{}",
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis()
-                            );
+                            let id = generate_unique_node_id("node");
                             let profile = storage::V2RayProfile {
                                 id: id.clone(),
                                 name: node_name.clone(),
@@ -2202,15 +2182,8 @@ impl NetrayApp {
                             let mut first_cfg = None;
                             let mut imported_names = Vec::new();
 
-                            for (idx, (node_name, config_str)) in configs_to_add.into_iter().rev().enumerate() {
-                                let id = format!(
-                                    "qr-node-{}-{}",
-                                    std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis(),
-                                    idx
-                                );
+                            for (_idx, (node_name, config_str)) in configs_to_add.into_iter().rev().enumerate() {
+                                let id = generate_unique_node_id("qr-node");
                                 let profile = storage::V2RayProfile {
                                     id: id.clone(),
                                     name: node_name.clone(),
