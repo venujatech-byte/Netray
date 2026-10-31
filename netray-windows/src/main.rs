@@ -115,6 +115,87 @@ fn transparent_muted_btn(_: &Theme, _: button::Status) -> button::Style {
     }
 }
 
+fn transparent_icon_btn(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        ..Default::default()
+    }
+}
+
+fn transparent_text_btn(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        text_color: TEXT_MUTED,
+        ..Default::default()
+    }
+}
+
+fn sub_bar_add_btn(_: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => ACCENT_BLUE_LIGHT,
+        _ => ACCENT_BLUE,
+    };
+    button::Style {
+        background: Some(bg.into()),
+        border: iced::Border {
+            radius: 18.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn ping_btn_pinging(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: Some(ACCENT_BLUE_LIGHT.into()),
+        text_color: Color::WHITE,
+        border: iced::Border {
+            radius: 24.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn ping_btn_active(_: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => ACCENT_BLUE_LIGHT,
+        _ => ACCENT_BLUE,
+    };
+    button::Style {
+        background: Some(bg.into()),
+        text_color: Color::WHITE,
+        border: iced::Border {
+            radius: 24.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+pub fn ping_btn_style(pinging: bool) -> fn(&Theme, button::Status) -> button::Style {
+    if pinging {
+        ping_btn_pinging
+    } else {
+        ping_btn_active
+    }
+}
+
+fn fab_btn_style(_: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => ACCENT_BLUE_LIGHT,
+        _ => ACCENT_BLUE,
+    };
+    button::Style {
+        background: Some(bg.into()),
+        border: iced::Border {
+            radius: 32.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 fn chip_close_btn_style(_: &Theme, _: button::Status) -> button::Style {
     button::Style {
         background: None,
@@ -3275,49 +3356,30 @@ impl NetrayApp {
         let top_bar = row![
             button(icons::lucide_icon(icons::MENU, 22, self.text_primary()))
                 .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
+                .style(transparent_icon_btn)
                 .on_press(Message::SetViewMode(ViewMode::SshSettings)),
             Space::with_width(12),
             text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
             button(icons::lucide_icon(icons::FILE_PLUS, 20, self.text_primary()))
                 .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
+                .style(transparent_icon_btn)
                 .on_press_maybe((!config_locked).then(|| Message::RequestFileImport)),
             button(icons::lucide_icon(icons::QR_CODE, 20, self.text_primary()))
                 .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
+                .style(transparent_icon_btn)
                 .on_press_maybe((!config_locked).then(|| Message::OpenQrScanModal)),
             button(icons::lucide_icon(icons::LINK, 20, self.text_primary()))
                 .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
+                .style(transparent_icon_btn)
                 .on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
             button("Hide")
                 .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    text_color: TEXT_MUTED,
-                    ..Default::default()
-                })
+                .style(transparent_text_btn)
                 .on_press(Message::MinimizeToTray),
             button(icons::lucide_icon(icons::MORE_VERTICAL, 20, self.text_primary()))
                 .padding(6)
-                .style(|_, _| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
+                .style(transparent_icon_btn)
                 .on_press(Message::SetViewMode(ViewMode::Logs)),
         ]
         .spacing(6)
@@ -3332,14 +3394,7 @@ impl NetrayApp {
         let sub_bar = row![
             button(icons::lucide_icon(icons::PLUS, 18, Color::WHITE))
                 .padding(8)
-                .style(|_, _| button::Style {
-                    background: Some(ACCENT_BLUE.into()),
-                    border: iced::Border {
-                        radius: 18.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
+                .style(sub_bar_add_btn)
                 .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
             Space::with_width(10),
             text(format!("{} profiles", self.v2ray_profiles.len()))
@@ -3446,22 +3501,7 @@ impl NetrayApp {
                                 Space::with_width(Length::Fill),
                                 button(icons::lucide_icon(icons::ACTIVITY, 18, Color::WHITE))
                                     .padding(10)
-                                    .style(move |_, _| button::Style {
-                                        background: Some(
-                                            if pinging {
-                                                ACCENT_BLUE_LIGHT
-                                            } else {
-                                                ACCENT_BLUE
-                                            }
-                                            .into()
-                                        ),
-                                        text_color: Color::WHITE,
-                                        border: iced::Border {
-                                            radius: 24.0.into(),
-                                            ..Default::default()
-                                        },
-                                        ..Default::default()
-                                    })
+                                    .style(ping_btn_style(pinging))
                                     .on_press_maybe(ping_press),
                                 button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
                                     .padding(6)
@@ -3551,23 +3591,12 @@ impl NetrayApp {
                 .align_y(Alignment::Center)
             )
             .padding(8)
-            .style(|_, _| button::Style {
-                background: None,
-                text_color: TEXT_MUTED,
-                ..Default::default()
-            })
+            .style(transparent_text_btn)
             .on_press(Message::SetViewMode(ViewMode::Logs)),
             Space::with_width(Length::Fill),
             button(fab_icon)
                 .padding(16)
-                .style(|_, _| button::Style {
-                    background: Some(ACCENT_BLUE.into()),
-                    border: iced::Border {
-                        radius: 32.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
+                .style(fab_btn_style)
                 .on_press(Message::ToggleTunnel),
         ]
         .padding(iced::Padding {
