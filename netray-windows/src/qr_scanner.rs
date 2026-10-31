@@ -70,3 +70,75 @@ pub fn decode_qr_from_luma(width: usize, height: usize, luma_data: Vec<u8>) -> R
 
     Err("QR code pattern detected but payload could not be decoded".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qrcode::QrCode;
+
+    fn create_test_qr_luma(content: &str, scale: usize) -> (usize, usize, Vec<u8>) {
+        let code = QrCode::new(content.as_bytes()).expect("Valid QR");
+        let width = code.width();
+        let border = 4;
+        let total_modules = width + border * 2;
+        let img_dim = total_modules * scale;
+        let mut pixels = vec![255u8; img_dim * img_dim];
+
+        for y in 0..width {
+            for x in 0..width {
+                if code[(x, y)] == qrcode::Color::Dark {
+                    let start_x = (x + border) * scale;
+                    let start_y = (y + border) * scale;
+                    for dy in 0..scale {
+                        for dx in 0..scale {
+                            let px = start_x + dx;
+                            let py = start_y + dy;
+                            pixels[py * img_dim + px] = 0u8;
+                        }
+                    }
+                }
+            }
+        }
+        (img_dim, img_dim, pixels)
+    }
+
+    #[test]
+    fn test_decode_qr_empty_buffer_error() {
+        let res = decode_qr_from_image_bytes(&[]);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("empty image payload"));
+    }
+
+    #[test]
+    fn test_decode_qr_invalid_image_error() {
+        let res = decode_qr_from_image_bytes(&[1, 2, 3, 4, 5]);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Failed to decode image payload"));
+    }
+
+    #[test]
+    fn test_decode_qr_from_luma_roundtrip() {
+        let expected = "vless://user-uuid@example.com:443?security=tls#Production-Node";
+        let (w, h, luma) = create_test_qr_luma(expected, 6);
+        let decoded = decode_qr_from_luma(w, h, luma);
+        assert!(decoded.is_ok(), "Decode error: {:?}", decoded);
+        assert_eq!(decoded.unwrap(), expected);
+    }
+
+    #[test]
+    fn test_decode_qr_from_image_bytes_png() {
+        let expected = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo0NDN9";
+        let (w, h, luma) = create_test_qr_luma(expected, 8);
+        let img = image::GrayImage::from_raw(w as u32, h as u32, luma).unwrap();
+        
+        let mut png_bytes = Vec::new();
+        let dyn_img = image::DynamicImage::ImageLuma8(img);
+        dyn_img
+            .write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+            .expect("Encode PNG");
+
+        let decoded = decode_qr_from_image_bytes(&png_bytes);
+        assert!(decoded.is_ok(), "Decode PNG error: {:?}", decoded);
+        assert_eq!(decoded.unwrap(), expected);
+    }
+}
