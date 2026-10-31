@@ -9,4 +9,5 @@ pub mod qr_scanner;
 pub mod storage;
 pub mod sysproxy;
 pub mod theme;
+pub mod updater;
 pub mod v2ray;

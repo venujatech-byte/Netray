@@ -65,6 +65,8 @@ pub struct AppData {
     pub connect_at_startup: bool,
     #[serde(default = "default_true")]
     pub auto_reconnect: bool,
+    #[serde(default = "default_true")]
+    pub auto_check_updates: bool,
 }
 
 impl Default for AppData {
@@ -101,6 +103,7 @@ impl Default for AppData {
             run_at_startup: false,
             connect_at_startup: false,
             auto_reconnect: true,
+            auto_check_updates: true,
         }
     }
 }
@@ -166,6 +169,7 @@ pub struct AppDataRef<'a> {
     pub run_at_startup: bool,
     pub connect_at_startup: bool,
     pub auto_reconnect: bool,
+    pub auto_check_updates: bool,
 }
 
 impl AppData {
@@ -194,6 +198,7 @@ impl AppData {
             run_at_startup: self.run_at_startup,
             connect_at_startup: self.connect_at_startup,
             auto_reconnect: self.auto_reconnect,
+            auto_check_updates: self.auto_check_updates,
         }
     }
 }

@@ -9,6 +9,7 @@ pub mod storage;
 pub mod sysproxy;
 pub mod theme;
 mod tunnel;
+pub mod updater;
 pub mod v2ray;
 
 use chrono::Local;
@@ -963,6 +964,8 @@ pub struct NetrayApp {
     pub error_notification: Option<ErrorNotification>,
     pub startup_connect_prompt: bool,
     pub qr_scan_modal: QrScanModalState,
+    pub update_state: updater::UpdateState,
+    pub auto_check_updates: bool,
 
     // TUN & System Routing Mode
     pub enable_tun: bool,
@@ -1081,6 +1084,14 @@ pub enum Message {
     CancelAutoReconnect,
     DismissNotification,
     ToggleAutoReconnect(bool),
+
+    CheckForUpdates,
+    UpdateCheckFinished(Result<Option<updater::ReleaseInfo>, String>),
+    StartInAppUpgrade,
+    UpdateDownloadFinished(Result<std::path::PathBuf, String>),
+    ApplyUpdateAndRestart,
+    DismissUpdateToast,
+    ToggleAutoCheckUpdates(bool),
     ConfirmClipboardImport,
     CancelClipboardImport,
     ClipboardCandidateChanged(String),
@@ -1129,6 +1140,7 @@ impl NetrayApp {
     }
 
     fn from_saved(saved: storage::AppData) -> (Self, Task<Message>) {
+        updater::cleanup_stale_update_files();
         let tunnel_mode = match saved.tunnel_mode.as_str() {
             "SshPayload" => TunnelMode::SshPayload,
             "SshSslSni" => TunnelMode::SshSslSni,
@@ -1197,6 +1209,8 @@ impl NetrayApp {
             error_notification: None,
             startup_connect_prompt: saved.connect_at_startup && has_profiles,
             qr_scan_modal: QrScanModalState::default(),
+            update_state: updater::UpdateState::Idle,
+            auto_check_updates: saved.auto_check_updates,
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy,
@@ -1228,7 +1242,16 @@ impl NetrayApp {
             worker_active: false,
         };
 
-        (app, Task::none())
+        let initial_task = if app.auto_check_updates {
+            Task::perform(
+                updater::check_for_updates(APP_VERSION),
+                Message::UpdateCheckFinished,
+            )
+        } else {
+            Task::none()
+        };
+
+        (app, initial_task)
     }
 
     pub fn refresh_status_badge(&mut self) {
@@ -1355,6 +1378,7 @@ impl NetrayApp {
             run_at_startup: self.run_at_startup,
             connect_at_startup: self.connect_at_startup,
             auto_reconnect: self.auto_reconnect,
+            auto_check_updates: self.auto_check_updates,
         };
         storage::save_state_ref(&app_ref)
     }
@@ -2618,6 +2642,90 @@ impl NetrayApp {
                 self.error_notification = None;
                 Task::none()
             }
+            Message::CheckForUpdates => {
+                self.update_state = updater::UpdateState::Checking;
+                Task::perform(
+                    updater::check_for_updates(APP_VERSION),
+                    Message::UpdateCheckFinished,
+                )
+            }
+            Message::UpdateCheckFinished(res) => {
+                match res {
+                    Ok(Some(info)) => {
+                        let ver = info.version.clone();
+                        self.update_state = updater::UpdateState::Available(info);
+                        notifications::send_desktop_notification(
+                            "Netray Update Available",
+                            &format!("Version v{} is available. Open Netray to upgrade.", ver),
+                            notifications::NotificationUrgency::Normal,
+                        );
+                        self.push_log("Updater", format!("New Netray release v{} detected on GitHub CI.", ver), LogLevel::Info);
+                    }
+                    Ok(None) => {
+                        self.update_state = updater::UpdateState::UpToDate(APP_VERSION.to_string());
+                        self.push_log("Updater", format!("Netray is up to date (v{}).", APP_VERSION), LogLevel::Info);
+                    }
+                    Err(e) => {
+                        self.push_log("Updater", format!("Update check failed: {}", e), LogLevel::Warn);
+                        self.update_state = updater::UpdateState::Error(e);
+                    }
+                }
+                Task::none()
+            }
+            Message::StartInAppUpgrade => {
+                if let updater::UpdateState::Available(info) = &self.update_state {
+                    let info_clone = info.clone();
+                    let ver = info.version.clone();
+                    self.update_state = updater::UpdateState::Downloading {
+                        version: ver.clone(),
+                        status: "Downloading update package from GitHub...".to_string(),
+                    };
+                    self.push_log("Updater", format!("Downloading Netray v{} release artifact...", ver), LogLevel::Info);
+                    Task::perform(
+                        updater::download_and_extract_update(info_clone),
+                        Message::UpdateDownloadFinished,
+                    )
+                } else {
+                    Task::none()
+                }
+            }
+            Message::UpdateDownloadFinished(res) => {
+                match res {
+                    Ok(staged_binary) => {
+                        let ver = match &self.update_state {
+                            updater::UpdateState::Downloading { version, .. } => version.clone(),
+                            _ => "latest".to_string(),
+                        };
+                        self.push_log("Updater", format!("Update v{} downloaded & staged. Applying...", ver), LogLevel::Success);
+                        if let Err(e) = updater::apply_update_and_restart(&staged_binary) {
+                            self.push_log("Updater", format!("Failed to apply update: {}", e), LogLevel::Error);
+                            self.update_state = updater::UpdateState::Error(e);
+                        }
+                    }
+                    Err(e) => {
+                        self.push_log("Updater", format!("Update download failed: {}", e), LogLevel::Error);
+                        self.update_state = updater::UpdateState::Error(e);
+                    }
+                }
+                Task::none()
+            }
+            Message::ApplyUpdateAndRestart => {
+                if let updater::UpdateState::Downloaded { staged_binary, .. } = &self.update_state {
+                    if let Err(e) = updater::apply_update_and_restart(staged_binary) {
+                        self.update_state = updater::UpdateState::Error(e);
+                    }
+                }
+                Task::none()
+            }
+            Message::DismissUpdateToast => {
+                self.update_state = updater::UpdateState::Idle;
+                Task::none()
+            }
+            Message::ToggleAutoCheckUpdates(v) => {
+                self.auto_check_updates = v;
+                let _ = self.save_current_state();
+                Task::none()
+            }
             Message::ToggleTunnel => {
                 if self.worker_active && !self.is_running {
                     if let Some(stop) = self.stop_signal.take() {
@@ -2928,6 +3036,9 @@ impl NetrayApp {
         let mut main_col = column![titlebar];
         if self.error_notification.is_some() {
             main_col = main_col.push(self.view_notification_toast());
+        }
+        if !matches!(self.update_state, updater::UpdateState::Idle | updater::UpdateState::UpToDate(_)) {
+            main_col = main_col.push(self.view_update_toast());
         }
         main_col = main_col.push(content);
 
@@ -3305,6 +3416,139 @@ impl NetrayApp {
             })
             .width(Length::Fill)
             .into()
+    }
+
+    fn view_update_toast(&self) -> Element<'_, Message> {
+        match &self.update_state {
+            updater::UpdateState::Available(info) => {
+                let badge = container(text(format!("v{}", info.version)).size(10).color(SUCCESS_GREEN))
+                    .padding(iced::Padding { top: 1.0, bottom: 1.0, left: 6.0, right: 6.0 })
+                    .style(toast_attempt_pill);
+
+                let toast = container(
+                    row![
+                        icons::lucide_icon(icons::DOWNLOAD, 16, SUCCESS_GREEN),
+                        Space::with_width(10),
+                        column![
+                            row![
+                                text("New Version Available").size(12).color(Color::WHITE),
+                                Space::with_width(8),
+                                badge,
+                            ]
+                            .align_y(Alignment::Center),
+                            row![
+                                text(format!("Netray v{} released via GitHub CI (Current: v{}).", info.version, APP_VERSION))
+                                    .size(11)
+                                    .color(TEXT_MUTED),
+                            ]
+                            .align_y(Alignment::Center),
+                        ]
+                        .spacing(2)
+                        .width(Length::Fill),
+                        Space::with_width(8),
+                        row![
+                            button(text("Upgrade Now").size(11).color(Color::WHITE))
+                                .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                                .style(primary_action_btn)
+                                .on_press(Message::StartInAppUpgrade),
+                            Space::with_width(6),
+                            button(text("Later").size(11).color(Color::from_rgb(0.85, 0.85, 0.85)))
+                                .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 8.0, right: 8.0 })
+                                .style(toast_cancel_btn)
+                                .on_press(Message::DismissUpdateToast),
+                        ]
+                        .align_y(Alignment::Center),
+                    ]
+                    .align_y(Alignment::Center)
+                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 12.0, right: 10.0 })
+                )
+                .style(toast_container_style)
+                .width(Length::Fill);
+
+                container(toast)
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .width(Length::Fill)
+                    .into()
+            }
+            updater::UpdateState::Downloading { version, status } => {
+                let toast = container(
+                    row![
+                        icons::lucide_icon(icons::REFRESH_CW, 16, ACCENT_BLUE_LIGHT),
+                        Space::with_width(10),
+                        column![
+                            text(format!("Upgrading to Netray v{version}...")).size(12).color(Color::WHITE),
+                            text(status).size(11).color(ACCENT_BLUE_LIGHT),
+                        ]
+                        .spacing(2)
+                        .width(Length::Fill),
+                    ]
+                    .align_y(Alignment::Center)
+                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 12.0, right: 10.0 })
+                )
+                .style(toast_container_style)
+                .width(Length::Fill);
+
+                container(toast)
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .width(Length::Fill)
+                    .into()
+            }
+            updater::UpdateState::ReadyToRestart { version } => {
+                let toast = container(
+                    row![
+                        icons::lucide_icon(icons::CHECK, 16, SUCCESS_GREEN),
+                        Space::with_width(10),
+                        column![
+                            text(format!("Netray v{version} ready to launch!")).size(12).color(Color::WHITE),
+                            text("Restart now to complete the upgrade.").size(11).color(SUCCESS_GREEN),
+                        ]
+                        .spacing(2)
+                        .width(Length::Fill),
+                        button(text("Restart Now").size(11).color(Color::WHITE))
+                            .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                            .style(primary_action_btn)
+                            .on_press(Message::ApplyUpdateAndRestart),
+                    ]
+                    .align_y(Alignment::Center)
+                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 12.0, right: 10.0 })
+                )
+                .style(toast_container_style)
+                .width(Length::Fill);
+
+                container(toast)
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .width(Length::Fill)
+                    .into()
+            }
+            updater::UpdateState::Error(err) => {
+                let toast = container(
+                    row![
+                        icons::lucide_icon(icons::INFO, 16, FAILURE_RED),
+                        Space::with_width(10),
+                        column![
+                            text("Update Check Failed").size(12).color(Color::WHITE),
+                            text(err).size(11).color(FAILURE_RED),
+                        ]
+                        .spacing(2)
+                        .width(Length::Fill),
+                        button(text("Dismiss").size(11).color(Color::from_rgb(0.85, 0.85, 0.85)))
+                            .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 8.0, right: 8.0 })
+                            .style(toast_cancel_btn)
+                            .on_press(Message::DismissUpdateToast),
+                    ]
+                    .align_y(Alignment::Center)
+                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 12.0, right: 10.0 })
+                )
+                .style(toast_container_style)
+                .width(Length::Fill);
+
+                container(toast)
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .width(Length::Fill)
+                    .into()
+            }
+            _ => Space::with_width(0).into(),
+        }
     }
 
     fn view_share_modal(&self) -> Element<'_, Message> {
@@ -4995,8 +5239,86 @@ impl NetrayApp {
                 })
                 .size(11)
                 .color(if self.auto_reconnect { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
+                Space::with_height(6),
+                row![
+                    toggler(self.auto_check_updates)
+                        .label("Automatically check for updates on startup")
+                        .size(18)
+                        .on_toggle(Message::ToggleAutoCheckUpdates),
+                ]
+                .align_y(Alignment::Center),
+                Space::with_height(2),
+                text(if self.auto_check_updates {
+                    "Checks GitHub CI releases at startup and notifies if an update is available."
+                } else {
+                    "Automatic update checks disabled."
+                })
+                .size(11)
+                .color(if self.auto_check_updates { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
             ]
             .spacing(4)
+            .width(Length::Fill)
+        )
+        .padding(12)
+        .style(form_card_style)
+        .width(Length::Fill);
+
+        let update_status_desc = match &self.update_state {
+            updater::UpdateState::Checking => "Checking GitHub CI for new releases...".to_string(),
+            updater::UpdateState::Available(info) => format!("New release v{} is available!", info.version),
+            updater::UpdateState::UpToDate(_) => format!("Netray is up to date (v{}).", APP_VERSION),
+            updater::UpdateState::Downloading { version, status } => format!("Upgrading to v{version}: {status}"),
+            updater::UpdateState::ReadyToRestart { version } => format!("Version v{version} installed! Restart required."),
+            updater::UpdateState::Downloaded { info, .. } => format!("Version v{} ready to apply.", info.version),
+            updater::UpdateState::Error(err) => format!("Update check error: {err}"),
+            updater::UpdateState::Idle => format!("Current version: v{APP_VERSION}"),
+            updater::UpdateState::Applying => "Applying update...".to_string(),
+        };
+
+        let update_action_btn: Element<'_, Message> = match &self.update_state {
+            updater::UpdateState::Available(_) => {
+                button(text("Upgrade Now").size(12).color(Color::WHITE))
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .style(primary_action_btn)
+                    .on_press(Message::StartInAppUpgrade)
+                    .into()
+            }
+            updater::UpdateState::ReadyToRestart { .. } => {
+                button(text("Restart Now").size(12).color(Color::WHITE))
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .style(primary_action_btn)
+                    .on_press(Message::ApplyUpdateAndRestart)
+                    .into()
+            }
+            _ => {
+                button(text("Check for Updates").size(12).color(Color::WHITE))
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .style(primary_action_btn)
+                    .on_press(Message::CheckForUpdates)
+                    .into()
+            }
+        };
+
+        let update_card = container(
+            column![
+                row![
+                    icons::lucide_icon(icons::DOWNLOAD, 16, ACCENT_BLUE_LIGHT),
+                    Space::with_width(6),
+                    text("App Updates & Releases").size(14).color(self.text_primary()),
+                ]
+                .align_y(Alignment::Center),
+                text("Netray releases are built and published automatically via GitHub CI.")
+                    .size(12)
+                    .color(TEXT_MUTED),
+                Space::with_height(6),
+                row![
+                    text(update_status_desc).size(12).color(self.text_primary()),
+                    Space::with_width(12),
+                    update_action_btn,
+                ]
+                .align_y(Alignment::Center),
+            ]
+            .spacing(6)
             .width(Length::Fill)
         )
         .padding(12)
@@ -5156,6 +5478,8 @@ impl NetrayApp {
                 theme_card,
                 Space::with_height(12),
                 startup_card,
+                Space::with_height(12),
+                update_card,
                 Space::with_height(12),
                 ip_card,
                 Space::with_height(12),
