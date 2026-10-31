@@ -2016,10 +2016,129 @@ impl NetrayApp {
                 self.qr_scan_modal.status = QrScanStatus::Idle;
                 Task::none()
             }
-            Message::TriggerQrScan(_) => {
-                Task::none()
+            Message::TriggerQrScan(source) => {
+                self.qr_scan_modal.status = QrScanStatus::Scanning(source);
+                match source {
+                    QrScanSource::DesktopScreenshot => {
+                        Task::perform(
+                            async {
+                                tokio::time::sleep(Duration::from_millis(150)).await;
+                                qr_scanner::scan_qr_from_desktop()
+                            },
+                            Message::QrScanFinished,
+                        )
+                    }
+                    QrScanSource::Webcam => {
+                        Task::perform(
+                            async {
+                                qr_scanner::scan_qr_from_webcam()
+                            },
+                            Message::QrScanFinished,
+                        )
+                    }
+                    QrScanSource::PhotoUpload => {
+                        Task::perform(
+                            async {
+                                match qr_scanner::scan_qr_from_picked_file() {
+                                    Ok(Some(content)) => Ok(content),
+                                    Ok(None) => Err("File selection was cancelled".to_string()),
+                                    Err(e) => Err(e),
+                                }
+                            },
+                            Message::QrScanFinished,
+                        )
+                    }
+                }
             }
-            Message::QrScanFinished(_) => {
+            Message::QrScanFinished(result) => {
+                match result {
+                    Ok(scanned_content) => {
+                        let trimmed = scanned_content.trim();
+                        let parsed_configs = v2ray::parse_imported_configs(trimmed, Some("QR Scan"));
+                        let configs_to_add: Vec<(String, String)> = if !parsed_configs.is_empty() {
+                            parsed_configs
+                        } else if trimmed.contains("://") || trimmed.starts_with('{') {
+                            let remark = v2ray::extract_node_name(trimmed);
+                            let name = if remark.is_empty() {
+                                format!("Scanned Node {}", self.v2ray_profiles.len() + 1)
+                            } else {
+                                remark
+                            };
+                            vec![(name, trimmed.to_string())]
+                        } else {
+                            vec![]
+                        };
+
+                        if configs_to_add.is_empty() {
+                            let err_msg = format!("Scanned QR code is not a valid V2Ray/Xray link or configuration: '{}'", trimmed);
+                            self.push_log("Scanner", &err_msg, LogLevel::Warn);
+                            self.qr_scan_modal.status = QrScanStatus::Error("Scanned QR is not a valid proxy profile".to_string());
+                        } else {
+                            let count = configs_to_add.len();
+                            let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                            let mut first_id = None;
+                            let mut first_cfg = None;
+                            let mut imported_names = Vec::new();
+
+                            for (idx, (node_name, config_str)) in configs_to_add.into_iter().rev().enumerate() {
+                                let id = format!(
+                                    "qr-node-{}-{}",
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis(),
+                                    idx
+                                );
+                                let profile = storage::V2RayProfile {
+                                    id: id.clone(),
+                                    name: node_name.clone(),
+                                    config: config_str.clone(),
+                                    created_at: now.clone(),
+                                };
+                                self.v2ray_profiles.retain(|p| p.config != config_str);
+                                self.v2ray_profiles.insert(0, profile);
+                                imported_names.push(node_name);
+                                first_id = Some(id);
+                                first_cfg = Some(config_str);
+                            }
+
+                            if let (Some(id), Some(cfg)) = (first_id, first_cfg) {
+                                self.active_profile_id = Some(id);
+                                self.v2ray_uri_or_json = cfg;
+                                self.tunnel_mode = TunnelMode::V2RayXray;
+                            }
+
+                            self.sync_profile_display_cache();
+                            let _ = self.save_current_state();
+
+                            let summary = if count == 1 {
+                                imported_names.first().cloned().unwrap_or_else(|| "Node".to_string())
+                            } else {
+                                format!("{} nodes", count)
+                            };
+
+                            self.qr_scan_modal.status = QrScanStatus::Success(format!("Imported {}", summary));
+                            self.push_log(
+                                "Scanner",
+                                format!("QR Code scan successful! Imported {} profile(s).", count),
+                                LogLevel::Info,
+                            );
+                            notifications::send_desktop_notification(
+                                "Netray QR Scanner",
+                                &format!("Successfully imported {} from QR code.", summary),
+                                notifications::NotificationUrgency::Normal,
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        if e == "File selection was cancelled" {
+                            self.qr_scan_modal.status = QrScanStatus::Idle;
+                        } else {
+                            self.push_log("Scanner", format!("QR Code scan error: {e}"), LogLevel::Warn);
+                            self.qr_scan_modal.status = QrScanStatus::Error(e);
+                        }
+                    }
+                }
                 Task::none()
             }
         }
