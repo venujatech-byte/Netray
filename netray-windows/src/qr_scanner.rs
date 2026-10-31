@@ -71,6 +71,111 @@ pub fn decode_qr_from_luma(width: usize, height: usize, luma_data: Vec<u8>) -> R
     Err("QR code pattern detected but payload could not be decoded".to_string())
 }
 
+/// Captures a full desktop screenshot and returns the raw PNG/JPEG image bytes.
+pub fn capture_desktop_screenshot() -> Result<Vec<u8>, String> {
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!(
+        "netray_qr_screen_{}_{}.png",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let temp_path = temp_dir.join(file_name);
+    let path_str = temp_path.to_string_lossy().to_string();
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try known Linux screenshot capture utilities in priority order
+        let commands = [
+            ("import", vec!["-window", "root", path_str.as_str()]),
+            ("grim", vec![path_str.as_str()]),
+            ("gnome-screenshot", vec!["-f", path_str.as_str()]),
+            ("spectacle", vec!["-b", "-n", "-o", path_str.as_str()]),
+            ("maim", vec![path_str.as_str()]),
+            ("scrot", vec![path_str.as_str()]),
+        ];
+
+        let mut success = false;
+        let mut last_error = String::new();
+
+        for (cmd, args) in &commands {
+            match std::process::Command::new(cmd).args(args).output() {
+                Ok(output) if output.status.success() && temp_path.exists() => {
+                    success = true;
+                    break;
+                }
+                Ok(output) => {
+                    last_error = format!("{} exited with {}: {}", cmd, output.status, String::from_utf8_lossy(&output.stderr));
+                }
+                Err(e) => {
+                    last_error = format!("Failed to spawn {}: {}", cmd, e);
+                }
+            }
+        }
+
+        // If CLI tools failed, try D-Bus GNOME screenshot portal if available
+        if !success {
+            let dbus_args = vec![
+                "call", "--session",
+                "--dest", "org.gnome.Shell.Screenshot",
+                "--object-path", "/org/gnome/Shell/Screenshot",
+                "--method", "org.gnome.Shell.Screenshot.Screenshot",
+                "true", "false", path_str.as_str(),
+            ];
+            if let Ok(output) = std::process::Command::new("gdbus").args(&dbus_args).output() {
+                if output.status.success() && temp_path.exists() {
+                    success = true;
+                }
+            }
+        }
+
+        if !success || !temp_path.exists() {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(format!("Unable to capture desktop screenshot. Please ensure 'import' (ImageMagick), 'grim', or 'gnome-screenshot' is installed. ({last_error})"));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let ps_script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; \
+             $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; \
+             $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height; \
+             $graphics = [System.Drawing.Graphics]::FromImage($bitmap); \
+             $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size); \
+             $bitmap.Save('{}', [System.Drawing.Imaging.ImageFormat]::Png); \
+             $graphics.Dispose(); \
+             $bitmap.Dispose();",
+            path_str.replace('\\', "\\\\")
+        );
+
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+            .output()
+            .map_err(|e| format!("Failed to execute PowerShell screenshot command: {e}"))?;
+
+        if !output.status.success() || !temp_path.exists() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(format!("Windows screen capture failed: {stderr}"));
+        }
+    }
+
+    let bytes = std::fs::read(&temp_path)
+        .map_err(|e| format!("Failed to read captured screenshot: {e}"))?;
+    let _ = std::fs::remove_file(&temp_path);
+
+    Ok(bytes)
+}
+
+/// Convenience function to capture desktop screenshot and immediately decode any QR code.
+pub fn scan_qr_from_desktop() -> Result<String, String> {
+    let bytes = capture_desktop_screenshot()?;
+    decode_qr_from_image_bytes(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
