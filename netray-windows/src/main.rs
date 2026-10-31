@@ -530,6 +530,8 @@ pub struct NetrayApp {
     pub theme_preference: storage::ThemePreference,
     pub profile_display_cache: HashMap<String, (String, String)>,
     pub cached_app_chips: Vec<String>,
+    pub status_badge_text: String,
+    pub profile_count_label: String,
 
     pub logs: Vec<LogEntry>,
     auto_scroll_logs: bool,
@@ -687,6 +689,7 @@ impl NetrayApp {
             })
             .collect();
         let cached_app_chips = apps::extract_app_chips(&saved.whitelist_apps);
+        let profile_count = saved.v2ray_profiles.len();
         let has_profiles = !saved.v2ray_profiles.is_empty();
 
         let app = Self {
@@ -743,6 +746,8 @@ impl NetrayApp {
             theme_preference: saved.theme_preference,
             profile_display_cache,
             cached_app_chips,
+            status_badge_text: "DISCONNECTED".to_string(),
+            profile_count_label: format!("{} profiles", profile_count),
 
             logs: vec![LogEntry {
                 timestamp: Local::now().format("%H:%M:%S").to_string(),
@@ -765,6 +770,22 @@ impl NetrayApp {
         (app, Task::none())
     }
 
+    pub fn refresh_status_badge(&mut self) {
+        self.status_badge_text = if self.is_running {
+            let uptime = format_uptime(
+                self.connected_at.map(|at| at.elapsed()).unwrap_or_default(),
+            );
+            self.ping_ms.map_or_else(
+                || format!("CONNECTED · {uptime}"),
+                |ms| format!("CONNECTED · {uptime} · {ms} ms"),
+            )
+        } else if self.worker_active {
+            "CONNECTING · CHECKING SERVER".to_string()
+        } else {
+            "DISCONNECTED".to_string()
+        };
+    }
+
     pub fn sync_profile_display_cache(&mut self) {
         self.profile_display_cache.retain(|id, _| self.v2ray_profiles.iter().any(|p| &p.id == id));
         for p in &self.v2ray_profiles {
@@ -775,6 +796,7 @@ impl NetrayApp {
                 )
             });
         }
+        self.profile_count_label = format!("{} profiles", self.v2ray_profiles.len());
     }
 
     pub fn cache_profile_display(&mut self, profile: &storage::V2RayProfile) {
@@ -785,6 +807,7 @@ impl NetrayApp {
                 v2ray::extract_protocol_tag(&profile.config),
             ),
         );
+        self.profile_count_label = format!("{} profiles", self.v2ray_profiles.len());
     }
 
     pub fn refresh_app_chips(&mut self) {
@@ -1705,6 +1728,7 @@ impl NetrayApp {
                         }
                     }
                     self.error_notification = None;
+                    self.refresh_status_badge();
                 }
                 let stopped = entry.source == "Supervisor" && entry.message.contains("offline");
                 let was_running = self.is_running;
@@ -1712,11 +1736,13 @@ impl NetrayApp {
                     self.is_running = false;
                     self.connected_at = None;
                     self.ping_ms = None;
+                    self.refresh_status_badge();
                 }
                 // Only the final offline event means proxy and route cleanup has finished.
                 if stopped {
                     self.stop_signal = None;
                     self.worker_active = false;
+                    self.refresh_status_badge();
                 }
 
                 let is_error = entry.level == LogLevel::Error
@@ -1753,7 +1779,10 @@ impl NetrayApp {
                 self.logs.clear();
                 Task::none()
             }
-            Message::UptimeTick => Task::none(),
+            Message::UptimeTick => {
+                self.refresh_status_badge();
+                Task::none()
+            }
             Message::CloseRequested(id) => {
                 self.close_confirmation = Some(id);
                 Task::none()
@@ -2116,6 +2145,7 @@ impl NetrayApp {
                     self.user_stopped = true;
                     self.error_notification = None;
                     self.reconnect_attempts = 0;
+                    self.refresh_status_badge();
                     self.push_log(
                         "Supervisor",
                         "Connection cancelled while verifying the tunnel.",
@@ -2133,6 +2163,7 @@ impl NetrayApp {
                     self.is_running = false;
                     self.connected_at = None;
                     self.ping_ms = None;
+                    self.refresh_status_badge();
                     self.push_log("Supervisor", "Tunnel stopped by user.", LogLevel::Warn);
                     Task::none()
                 } else {
@@ -2141,6 +2172,7 @@ impl NetrayApp {
                     self.worker_active = true;
                     self.connected_at = None;
                     self.ping_ms = None;
+                    self.refresh_status_badge();
                     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
                     self.stop_signal = Some(stop_tx);
 
@@ -3468,7 +3500,7 @@ impl NetrayApp {
                 .style(sub_bar_add_btn)
                 .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
             Space::with_width(10),
-            text(format!("{} profiles", self.v2ray_profiles.len()))
+            text(self.profile_count_label.as_str())
                 .size(13)
                 .color(TEXT_MUTED),
             Space::with_width(Length::Fill),
@@ -3643,21 +3675,9 @@ impl NetrayApp {
                     } else {
                         TEXT_MUTED
                     }),
-                    text(if self.is_running {
-                        let uptime = format_uptime(
-                            self.connected_at.map(|at| at.elapsed()).unwrap_or_default(),
-                        );
-                        self.ping_ms.map_or_else(
-                            || format!("CONNECTED · {uptime}"),
-                            |ms| format!("CONNECTED · {uptime} · {ms} ms"),
-                        )
-                    } else if self.worker_active {
-                        "CONNECTING · CHECKING SERVER".to_string()
-                    } else {
-                        "DISCONNECTED".to_string()
-                    })
-                    .size(12)
-                    .color(TEXT_MUTED),
+                    text(self.status_badge_text.as_str())
+                        .size(12)
+                        .color(TEXT_MUTED),
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center)
