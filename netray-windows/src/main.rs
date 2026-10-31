@@ -4949,5 +4949,76 @@ trojan://secretpass@server2.com:443?type=ws#WinNodeB
         // 5. Verify view renders with new profiles
         drop(app.view());
     }
+
+    #[test]
+    fn test_qr_scanner_modal_and_import_flow() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+
+        // 1. Initially QR scanner modal is closed
+        assert!(!app.qr_scan_modal.is_open);
+        assert_eq!(app.qr_scan_modal.status, QrScanStatus::Idle);
+
+        // 2. Open QR modal
+        let _ = app.update_message(Message::OpenQrScanModal);
+        assert!(app.qr_scan_modal.is_open);
+        assert_eq!(app.qr_scan_modal.status, QrScanStatus::Idle);
+        drop(app.view());
+
+        // 3. Trigger Desktop Screenshot scan
+        let _ = app.update_message(Message::TriggerQrScan(QrScanSource::DesktopScreenshot));
+        assert_eq!(
+            app.qr_scan_modal.status,
+            QrScanStatus::Scanning(QrScanSource::DesktopScreenshot)
+        );
+        drop(app.view());
+
+        // 4. Trigger Webcam scan
+        let _ = app.update_message(Message::TriggerQrScan(QrScanSource::Webcam));
+        assert_eq!(
+            app.qr_scan_modal.status,
+            QrScanStatus::Scanning(QrScanSource::Webcam)
+        );
+        drop(app.view());
+
+        // 5. Trigger Photo Upload scan
+        let _ = app.update_message(Message::TriggerQrScan(QrScanSource::PhotoUpload));
+        assert_eq!(
+            app.qr_scan_modal.status,
+            QrScanStatus::Scanning(QrScanSource::PhotoUpload)
+        );
+        drop(app.view());
+
+        // 6. User cancels file selection
+        let _ = app.update_message(Message::QrScanFinished(Err("File selection was cancelled".into())));
+        assert_eq!(app.qr_scan_modal.status, QrScanStatus::Idle);
+
+        // 7. Scan error simulation
+        let _ = app.update_message(Message::QrScanFinished(Err("No QR code detected".into())));
+        assert_eq!(
+            app.qr_scan_modal.status,
+            QrScanStatus::Error("No QR code detected".into())
+        );
+        drop(app.view());
+
+        // 8. Successful scan with VLESS node link
+        let initial_profiles = app.v2ray_profiles.len();
+        let scanned_vless = "vless://a1b2c3d4-e5f6-7890-abcd-ef1234567890@myvless.example.com:443?security=reality&type=tcp#Tokyo-Reality-01";
+        let _ = app.update_message(Message::QrScanFinished(Ok(scanned_vless.into())));
+
+        assert_eq!(app.v2ray_profiles.len(), initial_profiles + 1);
+        let imported = &app.v2ray_profiles[0];
+        assert_eq!(imported.name, "Tokyo-Reality-01");
+        assert_eq!(imported.config, scanned_vless);
+        assert_eq!(app.active_profile_id, Some(imported.id.clone()));
+        assert_eq!(app.v2ray_uri_or_json, scanned_vless);
+        assert_eq!(app.tunnel_mode, TunnelMode::V2RayXray);
+        assert!(matches!(app.qr_scan_modal.status, QrScanStatus::Success(_)));
+        drop(app.view());
+
+        // 9. Close QR modal
+        let _ = app.update_message(Message::CloseQrScanModal);
+        assert!(!app.qr_scan_modal.is_open);
+        drop(app.view());
+    }
 }
 
