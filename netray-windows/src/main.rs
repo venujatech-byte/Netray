@@ -247,6 +247,18 @@ fn toast_container_style(_: &Theme) -> container::Style {
     }
 }
 
+fn log_terminal_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
+        border: iced::Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: Color::from_rgb(0.18, 0.20, 0.25),
+        },
+        ..Default::default()
+    }
+}
+
 fn chip_close_btn_style(_: &Theme, _: button::Status) -> button::Style {
     button::Style {
         background: None,
@@ -4051,15 +4063,7 @@ impl NetrayApp {
         .padding(12)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
-            border: iced::Border {
-                radius: 6.0.into(),
-                width: 1.0,
-                color: Color::from_rgb(0.18, 0.20, 0.25),
-            },
-            ..Default::default()
-        });
+        .style(log_terminal_style);
 
         column![
             top_bar,
