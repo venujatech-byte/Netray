@@ -540,11 +540,16 @@ pub enum Message {
     MinimizeToTray,
 
     SelectProfile(String),
+    SelectProfileIndex(usize),
     PingProfile(String),
+    PingProfileIndex(usize),
     PingFinished(String, Result<u128, String>),
     EditProfile(String),
+    EditProfileIndex(usize),
     DeleteProfile(String),
+    DeleteProfileIndex(usize),
     ShareProfile(String),
+    ShareProfileIndex(usize),
     CloseShareModal,
     CopyShareLink,
     ToggleShareProtect,
@@ -935,8 +940,11 @@ impl NetrayApp {
                 &message,
                 Message::SetViewMode(ViewMode::EditNode)
                     | Message::SelectProfile(_)
+                    | Message::SelectProfileIndex(_)
                     | Message::EditProfile(_)
+                    | Message::EditProfileIndex(_)
                     | Message::DeleteProfile(_)
+                    | Message::DeleteProfileIndex(_)
                     | Message::AddNewProfile
                     | Message::OpenAddMenu
                     | Message::CreateProfileWithType(_)
@@ -978,6 +986,41 @@ impl NetrayApp {
             Message::TunnelModeChanged(mode) => {
                 self.tunnel_mode = mode;
                 let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::SelectProfileIndex(idx) => {
+                if let Some(p) = self.v2ray_profiles.get(idx) {
+                    let id = p.id.clone();
+                    return self.update_message(Message::SelectProfile(id));
+                }
+                Task::none()
+            }
+            Message::PingProfileIndex(idx) => {
+                if let Some(p) = self.v2ray_profiles.get(idx) {
+                    let id = p.id.clone();
+                    return self.update_message(Message::PingProfile(id));
+                }
+                Task::none()
+            }
+            Message::ShareProfileIndex(idx) => {
+                if let Some(p) = self.v2ray_profiles.get(idx) {
+                    let id = p.id.clone();
+                    return self.update_message(Message::ShareProfile(id));
+                }
+                Task::none()
+            }
+            Message::EditProfileIndex(idx) => {
+                if let Some(p) = self.v2ray_profiles.get(idx) {
+                    let id = p.id.clone();
+                    return self.update_message(Message::EditProfile(id));
+                }
+                Task::none()
+            }
+            Message::DeleteProfileIndex(idx) => {
+                if let Some(p) = self.v2ray_profiles.get(idx) {
+                    let id = p.id.clone();
+                    return self.update_message(Message::DeleteProfile(id));
+                }
                 Task::none()
             }
             Message::SelectProfile(id) => {
@@ -3450,7 +3493,8 @@ impl NetrayApp {
         let cards: Vec<Element<'_, Message>> = self
             .v2ray_profiles
             .iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(idx, p)| {
                 let is_active = self.active_profile_id.as_deref() == Some(&p.id)
                     || self.v2ray_uri_or_json == p.config;
                 let (node_addr, proto_tag) = self
@@ -3465,7 +3509,7 @@ impl NetrayApp {
                         || (self.is_running
                             && is_active
                             && self.tunnel_mode == TunnelMode::V2RayXray)))
-                    .then(|| Message::PingProfile(p.id.clone()));
+                    .then_some(Message::PingProfileIndex(idx));
                 let ping_result = if pinging {
                     "Testing…"
                 } else {
@@ -3509,7 +3553,7 @@ impl NetrayApp {
                             .width(Length::Fill)
                             .style(transparent_profile_btn)
                             .on_press_maybe(
-                                (!config_locked).then(|| Message::SelectProfile(p.id.clone()))
+                                (!config_locked).then_some(Message::SelectProfileIndex(idx))
                             ),
                             row![
                                 text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
@@ -3522,18 +3566,18 @@ impl NetrayApp {
                                 button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
                                     .padding(6)
                                     .style(transparent_muted_btn)
-                                    .on_press(Message::ShareProfile(p.id.clone())),
+                                    .on_press(Message::ShareProfileIndex(idx)),
                                 button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED))
                                     .padding(6)
                                     .style(transparent_muted_btn)
                                     .on_press_maybe(
-                                        (!config_locked).then(|| Message::EditProfile(p.id.clone()))
+                                        (!config_locked).then_some(Message::EditProfileIndex(idx))
                                     ),
                                 button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED))
                                     .padding(6)
                                     .style(transparent_muted_btn)
                                     .on_press_maybe(
-                                        (!config_locked).then(|| Message::DeleteProfile(p.id.clone()))
+                                        (!config_locked).then_some(Message::DeleteProfileIndex(idx))
                                     ),
                             ]
                             .spacing(4)
