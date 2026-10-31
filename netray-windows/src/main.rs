@@ -6,6 +6,7 @@ pub mod icons;
 pub mod notifications;
 pub mod protocols;
 pub mod qr;
+pub mod qr_scanner;
 pub mod storage;
 pub mod sysproxy;
 pub mod theme;
