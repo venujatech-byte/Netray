@@ -79,6 +79,14 @@ where
         .into()
 }
 
+fn text_input_dark(_: &Theme, status: text_input::Status) -> text_input::Style {
+    theme::text_input_style(true, status)
+}
+
+fn text_input_light(_: &Theme, status: text_input::Status) -> text_input::Style {
+    theme::text_input_style(false, status)
+}
+
 fn modern_text_input<'a>(
     placeholder: &'a str,
     value: &'a str,
@@ -92,7 +100,7 @@ fn modern_text_input<'a>(
             right: 10.0,
         })
         .size(13)
-        .style(move |_, status| theme::text_input_style(is_dark, status))
+        .style(if is_dark { text_input_dark } else { text_input_light })
 }
 
 fn form_card_style(theme: &Theme) -> container::Style {
