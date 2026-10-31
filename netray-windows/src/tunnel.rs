@@ -317,6 +317,9 @@ async fn run_xray_engine(
     send_log(log_tx, "Xray", "Spawning Xray process...", LogLevel::Info).await;
 
     let mut cmd = Command::new(&xray_bin);
+    if let Some(dir) = xray_bin.parent() {
+        cmd.current_dir(dir);
+    }
     cmd.args(["run", "-c", &config_path.to_string_lossy()])
        .stdout(Stdio::piped())
        .stderr(Stdio::piped())

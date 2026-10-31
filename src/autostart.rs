@@ -80,13 +80,25 @@ fn set_linux_autostart(enable: bool) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
+fn reg_cmd() -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new("reg");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    cmd
+}
+
+#[cfg(target_os = "windows")]
 fn set_windows_autostart(enable: bool) -> Result<(), String> {
     let exe_path = std::env::current_exe()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "netray.exe".to_string());
 
     if enable {
-        let status = std::process::Command::new("reg")
+        let status = reg_cmd()
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -105,7 +117,7 @@ fn set_windows_autostart(enable: bool) -> Result<(), String> {
             return Err("Failed to register Netray in Windows Run registry".to_string());
         }
     } else {
-        let _ = std::process::Command::new("reg")
+        let _ = reg_cmd()
             .args([
                 "delete",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -120,7 +132,7 @@ fn set_windows_autostart(enable: bool) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn is_windows_autostart_configured() -> bool {
-    let output = std::process::Command::new("reg")
+    let output = reg_cmd()
         .args([
             "query",
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",

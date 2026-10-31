@@ -56,7 +56,14 @@ fn send_windows_notification(title: &str, message: &str, _urgency: NotificationU
         clean_title, clean_msg
     );
 
-    let _ = Command::new("powershell")
+    #[allow(unused_mut)]
+    let mut cmd = Command::new("powershell");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let _ = cmd
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
         .spawn();
 }

@@ -525,14 +525,19 @@ pub async fn ping_profile(raw: &str) -> Result<u128, String> {
 /// Queries the current external public IP address using `curl ifconfig.me`
 pub async fn check_public_ip() -> Result<String, String> {
     tokio::task::spawn_blocking(|| {
-        let output = std::process::Command::new("curl")
-            .args(["-s", "-m", "5", "https://ifconfig.me"])
-            .output()
-            .or_else(|_| {
-                std::process::Command::new("curl")
-                    .args(["-s", "-m", "5", "http://ifconfig.me"])
-                    .output()
-            })
+        let run_curl = |url: &str| {
+            #[allow(unused_mut)]
+            let mut cmd = std::process::Command::new("curl");
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000);
+            }
+            cmd.args(["-s", "-m", "5", url]).output()
+        };
+
+        let output = run_curl("https://ifconfig.me")
+            .or_else(|_| run_curl("http://ifconfig.me"))
             .map_err(|e| format!("curl execution failed: {e}"))?;
 
         if !output.status.success() {
@@ -1198,10 +1203,9 @@ fn configure_tun(
         "desc": "Netray",
         "mtu": 1500,
         "gateway": ["198.18.0.1/30", "fc00::1/64"],
-        "dns": ["1.1.1.1", "8.8.8.8"],
         "autoSystemRoutingTable": ["0.0.0.0/0", "::/0"],
         "autoOutboundsInterface": "auto",
-        "autoSystemWfpBlockLeak": ["dns", "misconfigtun"]
+        "autoSystemDnsToGateway": true
     });
 
     let dns = config
@@ -1855,7 +1859,14 @@ pub async fn pick_config_file_path() -> Option<String> {
             }
         "#;
 
-        if let Ok(output) = std::process::Command::new("powershell")
+        #[allow(unused_mut)]
+        let mut cmd = std::process::Command::new("powershell");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        if let Ok(output) = cmd
             .args(["-NoProfile", "-Command", ps_script])
             .output()
         {
@@ -2013,8 +2024,8 @@ mod tests {
             json!(["0.0.0.0/0", "::/0"])
         );
         assert_eq!(
-            inbounds[2]["settings"]["autoSystemWfpBlockLeak"],
-            json!(["dns", "misconfigtun"])
+            inbounds[2]["settings"]["autoSystemDnsToGateway"],
+            true
         );
         assert_eq!(json_val["routing"]["rules"][0]["outboundTag"], "netray-dns");
         assert_eq!(json_val["routing"]["rules"][1]["outboundTag"], "proxy");

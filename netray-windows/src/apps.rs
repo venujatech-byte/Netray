@@ -139,7 +139,14 @@ pub async fn pick_executable_file() -> Option<String> {
             }
         "#;
 
-        if let Ok(output) = std::process::Command::new("powershell")
+        #[allow(unused_mut)]
+        let mut cmd = std::process::Command::new("powershell");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        if let Ok(output) = cmd
             .args(["-NoProfile", "-Command", ps_script])
             .output()
         {

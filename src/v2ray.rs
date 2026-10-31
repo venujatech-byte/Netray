@@ -528,14 +528,19 @@ fn extract_link_from_json(v: &Value, remark: &str, encoded_remark: &str) -> Opti
 /// Queries the current external public IP address using `curl ifconfig.me`
 pub async fn check_public_ip() -> Result<String, String> {
     tokio::task::spawn_blocking(|| {
-        let output = std::process::Command::new("curl")
-            .args(["-s", "-m", "5", "https://ifconfig.me"])
-            .output()
-            .or_else(|_| {
-                std::process::Command::new("curl")
-                    .args(["-s", "-m", "5", "http://ifconfig.me"])
-                    .output()
-            })
+        let run_curl = |url: &str| {
+            #[allow(unused_mut)]
+            let mut cmd = std::process::Command::new("curl");
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000);
+            }
+            cmd.args(["-s", "-m", "5", url]).output()
+        };
+
+        let output = run_curl("https://ifconfig.me")
+            .or_else(|_| run_curl("http://ifconfig.me"))
             .map_err(|e| format!("curl execution failed: {e}"))?;
 
         if !output.status.success() {

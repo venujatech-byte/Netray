@@ -34,8 +34,8 @@ pub fn detect_system_is_dark() -> bool {
         .unwrap_or(0);
     let last = LAST_CHECK_SECS.load(Ordering::Relaxed);
 
-    // Fast memory read if checked within last 10 seconds (avoids spawning processes on frame redraws)
-    if last != 0 && now.saturating_sub(last) < 10 {
+    // Fast memory read if checked within last 60 seconds (avoids spawning processes frequently)
+    if last != 0 && now.saturating_sub(last) < 60 {
         return CACHED_IS_DARK.load(Ordering::Relaxed);
     }
 
@@ -54,7 +54,14 @@ fn query_system_is_dark_uncached() -> bool {
     #[cfg(target_os = "windows")]
     {
         // Check Windows registry for system theme preference
-        if let Ok(output) = std::process::Command::new("reg")
+        #[allow(unused_mut)]
+        let mut cmd = std::process::Command::new("reg");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        if let Ok(output) = cmd
             .args([
                 "query",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",

@@ -151,7 +151,14 @@ pub fn capture_desktop_screenshot() -> Result<Vec<u8>, String> {
             path_str.replace('\\', "\\\\")
         );
 
-        let output = std::process::Command::new("powershell")
+        #[allow(unused_mut)]
+        let mut cmd = std::process::Command::new("powershell");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let output = cmd
             .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
             .output()
             .map_err(|e| format!("Failed to execute PowerShell screenshot command: {e}"))?;
@@ -242,7 +249,14 @@ pub fn capture_webcam_snapshot() -> Result<Vec<u8>, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let dshow_out = std::process::Command::new("ffmpeg")
+        #[allow(unused_mut)]
+        let mut cmd = std::process::Command::new("ffmpeg");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let dshow_out = cmd
             .args(["-y", "-f", "dshow", "-i", "video=Integrated Camera", "-vframes", "1", path_str.as_str()])
             .output();
 
@@ -320,7 +334,14 @@ pub fn pick_qr_image_file() -> Result<Option<std::path::PathBuf>, String> {
                              Write-Output $f.FileName; \
                          }";
 
-        let output = std::process::Command::new("powershell")
+        #[allow(unused_mut)]
+        let mut cmd = std::process::Command::new("powershell");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let output = cmd
             .args(["-NoProfile", "-NonInteractive", "-Command", ps_script])
             .output()
             .map_err(|e| format!("Failed to spawn PowerShell file dialog: {e}"))?;
