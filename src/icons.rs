@@ -122,12 +122,89 @@ pub fn handle_for(svg_bytes: &'static [u8]) -> Handle {
     }
 }
 
+/// Predefined zero-allocation SVG style functions for theme colors
+pub fn style_white(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::WHITE) }
+}
+
+pub fn style_muted(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.60, 0.64, 0.72)) }
+}
+
+pub fn style_accent(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.38, 0.65, 0.98)) }
+}
+
+pub fn style_green(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.20, 0.85, 0.55)) }
+}
+
+pub fn style_red(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.95, 0.35, 0.35)) }
+}
+
+pub fn style_coral(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.96, 0.40, 0.30)) }
+}
+
+pub fn style_primary_dark(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.95, 0.96, 0.98)) }
+}
+
+pub fn style_primary_light(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.12, 0.14, 0.18)) }
+}
+
+pub fn style_inactive_dark(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.40, 0.43, 0.50)) }
+}
+
+pub fn style_inactive_light(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.65, 0.68, 0.74)) }
+}
+
+pub fn style_light_gray(_: &Theme, _: svg::Status) -> svg::Style {
+    svg::Style { color: Some(Color::from_rgb(0.85, 0.85, 0.85)) }
+}
+
+#[inline(always)]
+fn approx_eq(a: f32, b: f32) -> bool {
+    (a - b).abs() < 0.005
+}
+
+#[inline(always)]
+fn is_color(c: Color, r: f32, g: f32, b: f32) -> bool {
+    approx_eq(c.r, r) && approx_eq(c.g, g) && approx_eq(c.b, b)
+}
+
 /// Renders a Lucide vector icon with zero runtime string/memory allocations
 pub fn lucide_icon(svg_bytes: &'static [u8], size: u16, color: Color) -> Svg<'static, Theme> {
-    Svg::new(handle_for(svg_bytes))
-        .width(size)
-        .height(size)
-        .style(move |_, _| svg::Style { color: Some(color) })
+    let s = Svg::new(handle_for(svg_bytes)).width(size).height(size);
+    if approx_eq(color.r, 1.0) && approx_eq(color.g, 1.0) && approx_eq(color.b, 1.0) {
+        s.style(style_white)
+    } else if is_color(color, 0.60, 0.64, 0.72) {
+        s.style(style_muted)
+    } else if is_color(color, 0.38, 0.65, 0.98) {
+        s.style(style_accent)
+    } else if is_color(color, 0.20, 0.85, 0.55) {
+        s.style(style_green)
+    } else if is_color(color, 0.95, 0.35, 0.35) {
+        s.style(style_red)
+    } else if is_color(color, 0.96, 0.40, 0.30) {
+        s.style(style_coral)
+    } else if is_color(color, 0.95, 0.96, 0.98) {
+        s.style(style_primary_dark)
+    } else if is_color(color, 0.12, 0.14, 0.18) {
+        s.style(style_primary_light)
+    } else if is_color(color, 0.40, 0.43, 0.50) {
+        s.style(style_inactive_dark)
+    } else if is_color(color, 0.65, 0.68, 0.74) {
+        s.style(style_inactive_light)
+    } else if is_color(color, 0.85, 0.85, 0.85) {
+        s.style(style_light_gray)
+    } else {
+        s.style(move |_, _| svg::Style { color: Some(color) })
+    }
 }
 
 
@@ -140,6 +217,15 @@ mod tests {
         let h1 = handle_for(MENU);
         let h2 = handle_for(MENU);
         assert_eq!(h1.id(), h2.id());
+    }
+
+    #[test]
+    fn test_lucide_icon_style_zero_allocation_paths() {
+        let _icon_white = lucide_icon(MENU, 20, Color::WHITE);
+        let _icon_muted = lucide_icon(PLUS, 16, Color::from_rgb(0.60, 0.64, 0.72));
+        let _icon_accent = lucide_icon(ACTIVITY, 18, Color::from_rgb(0.38, 0.65, 0.98));
+        let _icon_green = lucide_icon(CHECK, 16, Color::from_rgb(0.20, 0.85, 0.55));
+        let _icon_red = lucide_icon(CLOSE, 16, Color::from_rgb(0.95, 0.35, 0.35));
     }
 }
 
