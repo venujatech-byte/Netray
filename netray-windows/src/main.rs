@@ -158,6 +158,97 @@ fn transparent_icon_btn(_: &Theme, _: button::Status) -> button::Style {
     }
 }
 
+fn text_input_dark(_: &Theme, status: text_input::Status) -> text_input::Style {
+    theme::text_input_style(true, status)
+}
+
+fn text_input_light(_: &Theme, status: text_input::Status) -> text_input::Style {
+    theme::text_input_style(false, status)
+}
+
+fn modern_text_input<'a>(
+    placeholder: &'a str,
+    value: &'a str,
+    is_dark: bool,
+) -> iced::widget::TextInput<'a, Message> {
+    text_input(placeholder, value)
+        .padding(iced::Padding {
+            top: 8.0,
+            bottom: 8.0,
+            left: 10.0,
+            right: 10.0,
+        })
+        .size(13)
+        .style(if is_dark { text_input_dark } else { text_input_light })
+}
+
+fn btn_icon_dark_active(_: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.10).into()),
+        button::Status::Pressed => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.16).into()),
+        _ => None,
+    };
+    button::Style {
+        background: bg,
+        text_color: theme::TEXT_PRIMARY_DARK,
+        border: iced::Border {
+            radius: 999.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn btn_icon_dark_inactive(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        text_color: theme::ICON_INACTIVE_DARK,
+        border: iced::Border {
+            radius: 999.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn btn_icon_light_active(_: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Some(Color::from_rgba(0.0, 0.0, 0.0, 0.08).into()),
+        button::Status::Pressed => Some(Color::from_rgba(0.0, 0.0, 0.0, 0.14).into()),
+        _ => None,
+    };
+    button::Style {
+        background: bg,
+        text_color: theme::TEXT_PRIMARY_LIGHT,
+        border: iced::Border {
+            radius: 999.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn btn_icon_light_inactive(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        text_color: theme::ICON_INACTIVE_LIGHT,
+        border: iced::Border {
+            radius: 999.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+pub fn rounded_icon_btn_style(is_dark: bool, is_active: bool) -> fn(&Theme, button::Status) -> button::Style {
+    match (is_dark, is_active) {
+        (true, true) => btn_icon_dark_active,
+        (true, false) => btn_icon_dark_inactive,
+        (false, true) => btn_icon_light_active,
+        (false, false) => btn_icon_light_inactive,
+    }
+}
+
 fn transparent_text_btn(_: &Theme, _: button::Status) -> button::Style {
     button::Style {
         background: None,
@@ -283,6 +374,8 @@ fn toast_container_style(_: &Theme) -> container::Style {
         ..Default::default()
     }
 }
+
+
 
 fn log_terminal_style(_: &Theme) -> container::Style {
     container::Style {
@@ -441,12 +534,40 @@ pub enum LogLevel {
     Error,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogsFilterPreset {
+    All,
+    Tunnel,
+    Bypass,
+    Apps,
+    Errors,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
     pub timestamp: String,
     pub source: String,
     pub message: String,
     pub level: LogLevel,
+    pub target_host: Option<String>,
+    pub target_port: Option<u16>,
+    pub app_name: Option<String>,
+    pub route: Option<String>,
+}
+
+impl LogEntry {
+    pub fn new(source: impl Into<String>, message: impl Into<String>, level: LogLevel) -> Self {
+        Self {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            source: source.into(),
+            message: message.into(),
+            level,
+            target_host: None,
+            target_port: None,
+            app_name: None,
+            route: None,
+        }
+    }
 }
 
 pub async fn send_log(
@@ -456,13 +577,140 @@ pub async fn send_log(
     level: LogLevel,
 ) {
     let _ = tx
+        .send(LogEntry::new(source, msg, level))
+        .await;
+}
+
+pub async fn send_connection_log(
+    tx: &mpsc::Sender<LogEntry>,
+    source: impl Into<String>,
+    msg: impl Into<String>,
+    level: LogLevel,
+    target_host: impl Into<String>,
+    target_port: u16,
+    app_name: Option<String>,
+    route: Option<String>,
+) {
+    let _ = tx
         .send(LogEntry {
             timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
             source: source.into(),
             message: msg.into(),
             level,
+            target_host: Some(target_host.into()),
+            target_port: Some(target_port),
+            app_name,
+            route,
         })
         .await;
+}
+
+fn log_status_active(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.2, 0.9, 0.4, 0.12).into()),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.2, 0.9, 0.4, 0.3),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_status_stopped(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.5, 0.5, 0.5, 0.12).into()),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.5, 0.5, 0.5, 0.25),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_status_bar_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(theme::CARD_BG_DARK.into()),
+        ..Default::default()
+    }
+}
+
+fn log_chip_app_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.0, 0.60, 1.0, 0.14).into()),
+        border: iced::Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.0, 0.60, 1.0, 0.35),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_chip_endpoint_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.50, 0.55, 0.65, 0.18).into()),
+        border: iced::Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.50, 0.55, 0.65, 0.35),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_chip_bypass_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(1.0, 0.75, 0.20, 0.14).into()),
+        border: iced::Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(1.0, 0.75, 0.20, 0.35),
+        },
+        ..Default::default()
+    }
+}
+
+fn log_chip_proxy_style(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.25, 0.95, 0.45, 0.14).into()),
+        border: iced::Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(0.25, 0.95, 0.45, 0.35),
+        },
+        ..Default::default()
+    }
+}
+
+
+
+fn log_chip_app(app: &str) -> Element<'_, Message> {
+    container(text(format!("App: {}", app)).size(10).color(Color::from_rgb(0.40, 0.85, 1.0)))
+        .padding(iced::Padding { top: 2.0, bottom: 2.0, left: 6.0, right: 6.0 })
+        .style(log_chip_app_style)
+        .into()
+}
+
+fn log_chip_endpoint(host: &str, port: u16) -> Element<'_, Message> {
+    container(text(format!("{}:{}", host, port)).size(10).color(Color::WHITE))
+        .padding(iced::Padding { top: 2.0, bottom: 2.0, left: 6.0, right: 6.0 })
+        .style(log_chip_endpoint_style)
+        .into()
+}
+
+fn log_chip_route(route: &str) -> Element<'_, Message> {
+    let is_bypass = route.eq_ignore_ascii_case("bypass") || route.eq_ignore_ascii_case("direct");
+    let (t_col, style_fn): (Color, fn(&Theme) -> container::Style) = if is_bypass {
+        (Color::from_rgb(1.0, 0.75, 0.20), log_chip_bypass_style)
+    } else {
+        (Color::from_rgb(0.25, 0.95, 0.45), log_chip_proxy_style)
+    };
+    container(text(if is_bypass { "BYPASS" } else { "PROXY" }).size(9).color(t_col))
+        .padding(iced::Padding { top: 2.0, bottom: 2.0, left: 5.0, right: 5.0 })
+        .style(style_fn)
+        .into()
 }
 
 #[derive(Debug, Clone)]
@@ -579,7 +827,9 @@ pub struct NetrayApp {
     pub profile_count_label: String,
 
     pub logs: Vec<LogEntry>,
-    auto_scroll_logs: bool,
+    pub auto_scroll_logs: bool,
+    pub logs_filter: String,
+    pub logs_preset: LogsFilterPreset,
     pub log_sender: Option<mpsc::Sender<LogEntry>>,
     pub stop_signal: Option<tokio::sync::oneshot::Sender<()>>,
     close_confirmation: Option<iced::window::Id>,
@@ -699,7 +949,10 @@ pub enum Message {
     NewLog(LogEntry),
     UptimeTick,
     ClearLogs,
+    CopyLogs,
     AutoScrollLogs(bool),
+    LogsFilterChanged(String),
+    LogsPresetChanged(LogsFilterPreset),
     CloseRequested(iced::window::Id),
     WindowOpened(iced::window::Id),
     WindowTick,
@@ -801,13 +1054,14 @@ impl NetrayApp {
             status_badge_text: "DISCONNECTED".to_string(),
             profile_count_label: format!("{} profiles", profile_count),
 
-            logs: vec![LogEntry {
-                timestamp: Local::now().format("%H:%M:%S").to_string(),
-                source: "Netray".into(),
-                message: "Ready to connect on Windows.".into(),
-                level: LogLevel::Info,
-            }],
+            logs: vec![LogEntry::new(
+                "Netray",
+                "Ready to connect on Windows.",
+                LogLevel::Info,
+            )],
             auto_scroll_logs: true,
+            logs_filter: String::new(),
+            logs_preset: LogsFilterPreset::All,
             log_sender: None,
             stop_signal: None,
             close_confirmation: None,
@@ -942,12 +1196,7 @@ impl NetrayApp {
     }
 
     fn push_log(&mut self, source: &str, message: impl Into<String>, level: LogLevel) {
-        self.logs.push(LogEntry {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-            source: source.to_string(),
-            message: message.into(),
-            level,
-        });
+        self.logs.push(LogEntry::new(source, message, level));
         if self.logs.len() > 150 {
             self.logs.drain(0..30);
         }
@@ -1858,9 +2107,87 @@ impl NetrayApp {
                 self.auto_scroll_logs = enabled;
                 Task::none()
             }
+            Message::LogsFilterChanged(query) => {
+                self.logs_filter = query;
+                Task::none()
+            }
+            Message::LogsPresetChanged(preset) => {
+                self.logs_preset = preset;
+                Task::none()
+            }
             Message::ClearLogs => {
                 self.logs.clear();
                 Task::none()
+            }
+            Message::CopyLogs => {
+                let query = self.logs_filter.trim().to_lowercase();
+                let filtered_lines: Vec<String> = self
+                    .logs
+                    .iter()
+                    .filter(|entry| {
+                        let matches_preset = match self.logs_preset {
+                            LogsFilterPreset::All => true,
+                            LogsFilterPreset::Tunnel => entry
+                                .route
+                                .as_deref()
+                                .is_some_and(|r| !r.eq_ignore_ascii_case("bypass") && !r.eq_ignore_ascii_case("direct")),
+                            LogsFilterPreset::Bypass => entry
+                                .route
+                                .as_deref()
+                                .is_some_and(|r| r.eq_ignore_ascii_case("bypass") || r.eq_ignore_ascii_case("direct")),
+                            LogsFilterPreset::Apps => entry.app_name.is_some(),
+                            LogsFilterPreset::Errors => matches!(entry.level, LogLevel::Error | LogLevel::Warn),
+                        };
+                        if !matches_preset {
+                            return false;
+                        }
+
+                        if query.is_empty() {
+                            return true;
+                        }
+                        entry.message.to_lowercase().contains(&query)
+                            || entry.source.to_lowercase().contains(&query)
+                            || entry
+                                .app_name
+                                .as_deref()
+                                .is_some_and(|a| a.to_lowercase().contains(&query))
+                            || entry
+                                .target_host
+                                .as_deref()
+                                .is_some_and(|h| h.to_lowercase().contains(&query))
+                            || entry
+                                .route
+                                .as_deref()
+                                .is_some_and(|r| r.to_lowercase().contains(&query))
+                    })
+                    .map(|e| {
+                        let mut meta = Vec::new();
+                        if let Some(ref app) = e.app_name {
+                            meta.push(format!("[app:{app}]"));
+                        }
+                        if let (Some(ref host), Some(port)) = (&e.target_host, e.target_port) {
+                            meta.push(format!("[dest:{host}:{port}]"));
+                        }
+                        if let Some(ref route) = e.route {
+                            meta.push(format!("[route:{route}]"));
+                        }
+                        let meta_str = if meta.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" {} ", meta.join(" "))
+                        };
+                        format!("[{}][{}]{}{}", e.timestamp, e.source, meta_str, e.message)
+                    })
+                    .collect();
+
+                let count = filtered_lines.len();
+                let output = filtered_lines.join("\r\n");
+                self.push_log(
+                    "Logs",
+                    format!("Copied {count} log entries to clipboard."),
+                    LogLevel::Success,
+                );
+                iced::clipboard::write(output)
             }
             Message::UptimeTick => {
                 self.refresh_status_badge();
@@ -2285,12 +2612,11 @@ impl NetrayApp {
                             }
                         },
                         |_| {
-                            Message::NewLog(LogEntry {
-                                timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                source: "Supervisor".into(),
-                                message: "Tunnel stopped.".into(),
-                                level: LogLevel::Warn,
-                            })
+                            Message::NewLog(LogEntry::new(
+                                "Supervisor",
+                                "Tunnel stopped.",
+                                LogLevel::Warn,
+                            ))
                         },
                     )
                 }
@@ -4094,14 +4420,40 @@ impl NetrayApp {
     }
 
     fn view_logs_screen(&self) -> Element<'_, Message> {
+        let is_dark = self.is_dark();
         let top_bar = row![
-            button(icons::lucide_icon(icons::BACK, 22, Color::WHITE))
-                .padding(6)
-                .on_press(Message::SetViewMode(ViewMode::Profiles)),
+            button(
+                container(icons::lucide_icon(icons::BACK, 20, Color::WHITE))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
+            )
+            .width(36)
+            .height(36)
+            .padding(0)
+            .style(rounded_icon_btn_style(is_dark, true))
+            .on_press(Message::SetViewMode(ViewMode::Profiles)),
             Space::with_width(12),
             text("Tunnel Logs & Status").size(20).color(Color::WHITE),
             Space::with_width(Length::Fill),
-            button("Clear Logs").padding(6).on_press(Message::ClearLogs),
+            button(text("Copy").size(13))
+                .padding(iced::Padding {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 14.0,
+                    right: 14.0,
+                })
+                .style(rounded_icon_btn_style(is_dark, true))
+                .on_press(Message::CopyLogs),
+            Space::with_width(8),
+            button(text("Clear").size(13))
+                .padding(iced::Padding {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 14.0,
+                    right: 14.0,
+                })
+                .style(primary_action_btn)
+                .on_press(Message::ClearLogs),
         ]
         .align_y(Alignment::Center)
         .padding(iced::Padding {
@@ -4111,58 +4463,144 @@ impl NetrayApp {
             right: 12.0,
         });
 
-        let status_text = if self.is_running {
-            "CONNECTED"
-        } else {
-            "STOPPED"
-        };
-        let status_color = if self.is_running {
-            Color::from_rgb(0.2, 0.8, 0.4)
-        } else {
-            Color::from_rgb(0.8, 0.3, 0.3)
-        };
+        let http_port = self
+            .local_socks_port
+            .parse::<u16>()
+            .unwrap_or(10808)
+            .saturating_add(1);
 
-        let status_bar = row![
-            text(format!("STATUS: {}", status_text))
-                .size(14)
-                .color(status_color),
-            Space::with_width(Length::Fill),
-            text(format!("MODE: {}", self.tunnel_mode))
-                .size(13)
-                .color(TEXT_MUTED),
-        ]
+        let (active_conns, proxied_total, bypassed_total) = crate::tunnel::get_tunnel_metrics();
+
+        let status_pill = container(
+            text(if self.is_running { "ACTIVE" } else { "STOPPED" })
+                .size(10)
+                .color(if self.is_running {
+                    Color::from_rgb(0.2, 0.9, 0.4)
+                } else {
+                    TEXT_MUTED
+                }),
+        )
         .padding(iced::Padding {
-            top: 0.0,
-            bottom: 6.0,
-            left: 16.0,
-            right: 16.0,
-        });
+            top: 2.0,
+            bottom: 2.0,
+            left: 7.0,
+            right: 7.0,
+        })
+        .style(if self.is_running { log_status_active } else { log_status_stopped });
 
-        let log_rows: Vec<Element<'_, Message>> = self
+        let status_bar = container(
+            row![
+                text(format!("SOCKS :{}", self.local_socks_port))
+                    .size(11)
+                    .color(ACCENT_BLUE_LIGHT),
+                Space::with_width(10),
+                text(format!("HTTP :{}", http_port))
+                    .size(11)
+                    .color(ACCENT_BLUE_LIGHT),
+                Space::with_width(10),
+                text(format!("Act: {}", active_conns))
+                    .size(11)
+                    .color(if active_conns > 0 { SUCCESS_GREEN } else { TEXT_MUTED }),
+                Space::with_width(10),
+                text(format!("Prox: {}", proxied_total))
+                    .size(11)
+                    .color(Color::from_rgb(0.40, 0.85, 1.0)),
+                Space::with_width(10),
+                text(format!("Byp: {}", bypassed_total))
+                    .size(11)
+                    .color(Color::from_rgb(1.0, 0.75, 0.20)),
+                Space::with_width(Length::Fill),
+                status_pill,
+            ]
+            .align_y(Alignment::Center),
+        )
+        .padding(iced::Padding {
+            top: 6.0,
+            bottom: 6.0,
+            left: 14.0,
+            right: 14.0,
+        })
+        .style(log_status_bar_style);
+
+        let query = self.logs_filter.trim().to_lowercase();
+        let filtered_logs: Vec<&LogEntry> = self
             .logs
             .iter()
+            .filter(|entry| {
+                let matches_preset = match self.logs_preset {
+                    LogsFilterPreset::All => true,
+                    LogsFilterPreset::Tunnel => entry
+                        .route
+                        .as_deref()
+                        .is_some_and(|r| !r.eq_ignore_ascii_case("bypass") && !r.eq_ignore_ascii_case("direct")),
+                    LogsFilterPreset::Bypass => entry
+                        .route
+                        .as_deref()
+                        .is_some_and(|r| r.eq_ignore_ascii_case("bypass") || r.eq_ignore_ascii_case("direct")),
+                    LogsFilterPreset::Apps => entry.app_name.is_some(),
+                    LogsFilterPreset::Errors => matches!(entry.level, LogLevel::Error | LogLevel::Warn),
+                };
+                if !matches_preset {
+                    return false;
+                }
+
+                if query.is_empty() {
+                    return true;
+                }
+                entry.message.to_lowercase().contains(&query)
+                    || entry.source.to_lowercase().contains(&query)
+                    || entry
+                        .app_name
+                        .as_deref()
+                        .is_some_and(|a| a.to_lowercase().contains(&query))
+                    || entry
+                        .target_host
+                        .as_deref()
+                        .is_some_and(|h| h.to_lowercase().contains(&query))
+                    || entry
+                        .route
+                        .as_deref()
+                        .is_some_and(|r| r.to_lowercase().contains(&query))
+            })
+            .collect();
+
+        let log_rows: Vec<Element<Message>> = filtered_logs
+            .iter()
             .rev()
-            .take(60)
+            .take(80)
             .rev()
-            .map(|entry| {
+            .map(|&entry| {
                 let color = match entry.level {
-                    LogLevel::Info => Color::WHITE,
+                    LogLevel::Info => Color::from_rgb(0.75, 0.82, 0.9),
                     LogLevel::Success => Color::from_rgb(0.25, 0.9, 0.45),
                     LogLevel::Warn => Color::from_rgb(0.95, 0.75, 0.25),
                     LogLevel::Error => Color::from_rgb(0.95, 0.35, 0.35),
                 };
 
-                row![
+                let mut row_items = row![
                     text(format!("[{}]", entry.timestamp))
-                        .size(12)
+                        .size(11)
                         .color(Color::from_rgb(0.5, 0.5, 0.5)),
                     text(format!("[{}]", entry.source))
-                        .size(12)
+                        .size(11)
                         .color(ACCENT_BLUE_LIGHT),
-                    text(&entry.message).size(12).color(color),
                 ]
-                .spacing(8)
-                .into()
+                .spacing(6)
+                .align_y(Alignment::Center);
+
+                if let Some(ref app) = entry.app_name {
+                    row_items = row_items.push(log_chip_app(app));
+                }
+
+                if let (Some(ref host), Some(port)) = (&entry.target_host, entry.target_port) {
+                    row_items = row_items.push(log_chip_endpoint(host, port));
+                }
+
+                if let Some(ref route) = entry.route {
+                    row_items = row_items.push(log_chip_route(route));
+                }
+
+                row_items.push(text(&entry.message).size(12).color(color)).into()
             })
             .collect();
 
@@ -4176,22 +4614,124 @@ impl NetrayApp {
         .height(Length::Fill)
         .style(log_terminal_style);
 
+        let make_preset_btn = |preset: LogsFilterPreset, label: &'static str| -> Element<'_, Message> {
+            let is_selected = self.logs_preset == preset;
+            let (bg_col, text_col, border_col) = if is_selected {
+                (
+                    Color::from_rgba(0.0, 0.48, 1.0, 0.28),
+                    Color::from_rgb(0.55, 0.85, 1.0),
+                    Color::from_rgba(0.0, 0.48, 1.0, 0.70),
+                )
+            } else {
+                (
+                    Color::from_rgba(0.12, 0.14, 0.18, 0.60),
+                    Color::from_rgb(0.70, 0.73, 0.80),
+                    Color::from_rgba(0.24, 0.26, 0.32, 0.45),
+                )
+            };
+
+            button(text(label).size(11).color(text_col))
+                .padding(iced::Padding {
+                    top: 3.0,
+                    bottom: 3.0,
+                    left: 9.0,
+                    right: 9.0,
+                })
+                .style(move |_, _| button::Style {
+                    background: Some(bg_col.into()),
+                    border: iced::Border {
+                        radius: 999.0.into(),
+                        width: 1.0,
+                        color: border_col,
+                    },
+                    ..Default::default()
+                })
+                .on_press(Message::LogsPresetChanged(preset))
+                .into()
+        };
+
+        let presets_row = row![
+            text("View:").size(11).color(TEXT_MUTED),
+            make_preset_btn(LogsFilterPreset::All, "All"),
+            make_preset_btn(LogsFilterPreset::Tunnel, "Tunnel"),
+            make_preset_btn(LogsFilterPreset::Bypass, "Bypass"),
+            make_preset_btn(LogsFilterPreset::Apps, "Apps"),
+            make_preset_btn(LogsFilterPreset::Errors, "Errors"),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+
+        let auto_scroll_check = checkbox("Auto-scroll", self.auto_scroll_logs)
+            .size(13)
+            .on_toggle(Message::AutoScrollLogs);
+
+        let top_controls = row![
+            auto_scroll_check,
+            Space::with_width(Length::Fill),
+            presets_row,
+        ]
+        .align_y(Alignment::Center);
+
+        let search_input = modern_text_input(
+            "Filter logs by app, website, or keyword...",
+            &self.logs_filter,
+            is_dark,
+        )
+        .on_input(Message::LogsFilterChanged)
+        .width(Length::Fill);
+
+        let mut search_row = row![search_input]
+            .spacing(6)
+            .align_y(Alignment::Center);
+
+        if !self.logs_filter.is_empty() {
+            search_row = search_row.push(
+                button(text("Clear").size(11))
+                    .padding(iced::Padding {
+                        top: 5.0,
+                        bottom: 5.0,
+                        left: 8.0,
+                        right: 8.0,
+                    })
+                    .style(rounded_icon_btn_style(is_dark, true))
+                    .on_press(Message::LogsFilterChanged(String::new())),
+            );
+        }
+
+        let count_badge = container(
+            text(format!("{}/{} logs", filtered_logs.len(), self.logs.len()))
+                .size(10)
+                .color(TEXT_MUTED),
+        )
+        .padding(iced::Padding {
+            top: 4.0,
+            bottom: 4.0,
+            left: 6.0,
+            right: 6.0,
+        });
+
+        search_row = search_row.push(count_badge);
+
+        let controls_toolbar = column![
+            top_controls,
+            search_row,
+        ]
+        .spacing(6);
+
         column![
             top_bar,
             status_bar,
-            container(
-                checkbox("Auto-scroll", self.auto_scroll_logs).on_toggle(Message::AutoScrollLogs)
-            )
-            .padding([4, 12]),
+            container(controls_toolbar).padding([4, 12]),
             container(terminal)
                 .padding(iced::Padding {
-                    top: 8.0,
+                    top: 4.0,
                     bottom: 12.0,
                     left: 12.0,
-                    right: 12.0
+                    right: 12.0,
                 })
                 .height(Length::Fill),
         ]
+        .spacing(4)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -4880,28 +5420,25 @@ mod performance_tests {
     fn xray_connecting_state_waits_for_the_successful_remote_ping() {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
         app.worker_active = true;
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Xray".into(),
-            message: "Core process started".into(),
-            level: LogLevel::Info,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Xray",
+            "Core process started",
+            LogLevel::Info,
+        )));
         assert!(!app.is_running);
         assert!(app.connected_at.is_none());
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Error".into(),
-            message: "Connection check failed: HTTP 502".into(),
-            level: LogLevel::Error,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Error",
+            "Connection check failed: HTTP 502",
+            LogLevel::Error,
+        )));
         assert!(!app.is_running);
         assert!(app.connected_at.is_none());
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Supervisor".into(),
-            message: "Tunnel ready · HTTP 204 through proxy in 73 ms.".into(),
-            level: LogLevel::Success,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Supervisor",
+            "Tunnel ready · HTTP 204 through proxy in 73 ms.",
+            LogLevel::Success,
+        )));
         assert!(app.is_running);
         assert!(app.connected_at.is_some());
         assert_eq!(app.ping_ms, Some(73));
@@ -4912,20 +5449,18 @@ mod performance_tests {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
         app.worker_active = true;
         app.is_running = true;
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Error".into(),
-            message: "Engine failed: test".into(),
-            level: LogLevel::Error,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Error",
+            "Engine failed: test",
+            LogLevel::Error,
+        )));
         assert!(app.worker_active);
         assert!(!app.is_running);
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Supervisor".into(),
-            message: "Tunnel is offline.".into(),
-            level: LogLevel::Info,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Supervisor",
+            "Tunnel is offline.",
+            LogLevel::Info,
+        )));
         assert!(!app.worker_active);
     }
 
@@ -4935,12 +5470,11 @@ mod performance_tests {
         let _ = app.update(Message::SetViewMode(ViewMode::Logs));
         let _ = app.update(Message::AutoScrollLogs(false));
         let count = app.logs.len();
-        let _ = app.update(Message::NewLog(LogEntry {
-            timestamp: String::new(),
-            source: "Test".into(),
-            message: "still collected".into(),
-            level: LogLevel::Info,
-        }));
+        let _ = app.update(Message::NewLog(LogEntry::new(
+            "Test",
+            "still collected",
+            LogLevel::Info,
+        )));
         assert!(!app.auto_scroll_logs);
         assert_eq!(app.logs.len(), count + 1);
         let _ = app.update(Message::AutoScrollLogs(true));
@@ -5215,18 +5749,16 @@ mod performance_tests {
         app.worker_active = true;
 
         // 2. Unexpected error arrival in logs triggers auto-reconnect
-        let _ = app.update_message(Message::NewLog(LogEntry {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-            source: "Error".to_string(),
-            message: "Connection check failed: Latency endpoint returned HTTP 503".to_string(),
-            level: LogLevel::Error,
-        }));
-        let _ = app.update_message(Message::NewLog(LogEntry {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-            source: "Supervisor".to_string(),
-            message: "Tunnel is offline.".to_string(),
-            level: LogLevel::Warn,
-        }));
+        let _ = app.update_message(Message::NewLog(LogEntry::new(
+            "Error",
+            "Connection check failed: Latency endpoint returned HTTP 503",
+            LogLevel::Error,
+        )));
+        let _ = app.update_message(Message::NewLog(LogEntry::new(
+            "Supervisor",
+            "Tunnel is offline.",
+            LogLevel::Warn,
+        )));
 
         assert_eq!(app.reconnect_attempts, 1);
         assert!(!app.is_running);
@@ -5255,12 +5787,11 @@ mod performance_tests {
         drop(app.view());
 
         // 6. Successful connection clears notification and resets attempt counter
-        let _ = app.update_message(Message::NewLog(LogEntry {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-            source: "Supervisor".to_string(),
-            message: "Tunnel ready · HTTP 204 through proxy in 64 ms.".to_string(),
-            level: LogLevel::Success,
-        }));
+        let _ = app.update_message(Message::NewLog(LogEntry::new(
+            "Supervisor",
+            "Tunnel ready · HTTP 204 through proxy in 64 ms.",
+            LogLevel::Success,
+        )));
         assert!(app.is_running);
         assert_eq!(app.reconnect_attempts, 0);
         assert!(app.error_notification.is_none());
@@ -5275,12 +5806,11 @@ mod performance_tests {
         assert!(app.user_stopped);
 
         // 8. While user_stopped is true, incoming errors must NOT trigger auto-reconnect
-        let _ = app.update_message(Message::NewLog(LogEntry {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-            source: "Error".to_string(),
-            message: "Core process exited with: 1".to_string(),
-            level: LogLevel::Error,
-        }));
+        let _ = app.update_message(Message::NewLog(LogEntry::new(
+            "Error",
+            "Core process exited with: 1",
+            LogLevel::Error,
+        )));
         assert!(app.error_notification.is_none());
         assert_eq!(app.reconnect_attempts, 0);
 
@@ -5323,35 +5853,32 @@ mod performance_tests {
         assert!(app.status_badge_text.contains("CONNECTED"));
 
         // 1. A single DNS lookup timeout/empty response (transient error)
-        let _ = app.update_message(Message::NewLog(LogEntry {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-            source: "Xray".to_string(),
-            message: "app/dns: failed to lookup ip for domain alive.github.com at server DOH//1.1.1.1 in serial query mode > features/dns: empty response".to_string(),
-            level: LogLevel::Warn,
-        }));
+        let _ = app.update_message(Message::NewLog(LogEntry::new(
+            "Xray",
+            "app/dns: failed to lookup ip for domain alive.github.com at server DOH//1.1.1.1 in serial query mode > features/dns: empty response",
+            LogLevel::Warn,
+        )));
         // Should NOT trigger reconnect
         assert_eq!(app.reconnect_attempts, 0);
         assert!(app.error_notification.is_none());
         assert!(app.is_running);
 
         // 2. DNS query answered shortly after resets any error count
-        let _ = app.update_message(Message::NewLog(LogEntry {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-            source: "Xray".to_string(),
-            message: "app/dns: DOH//1.1.1.1 got answer: alive.github.com. Type[140.82.113.26], rtt: 86.444767ms".to_string(),
-            level: LogLevel::Info,
-        }));
+        let _ = app.update_message(Message::NewLog(LogEntry::new(
+            "Xray",
+            "app/dns: DOH//1.1.1.1 got answer: alive.github.com. Type[140.82.113.26], rtt: 86.444767ms",
+            LogLevel::Info,
+        )));
         assert_eq!(app.consecutive_errors, 0);
         assert!(app.is_running);
 
         // 3. Continuous errors (3 consecutive) trigger reconnect and change status to CONNECTING
         for i in 1..=3 {
-            let _ = app.update_message(Message::NewLog(LogEntry {
-                timestamp: Local::now().format("%H:%M:%S").to_string(),
-                source: "Error".to_string(),
-                message: format!("Connection handshake timeout attempt {}", i),
-                level: LogLevel::Error,
-            }));
+            let _ = app.update_message(Message::NewLog(LogEntry::new(
+                "Error",
+                format!("Connection handshake timeout attempt {}", i),
+                LogLevel::Error,
+            )));
         }
         assert_eq!(app.reconnect_attempts, 1);
         assert!(app.error_notification.is_some());
