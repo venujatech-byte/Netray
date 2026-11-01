@@ -3951,18 +3951,50 @@ impl NetrayApp {
             modal.notes.as_str()
         };
 
-        let notes_box = container(
-            scrollable(
-                column![
-                    text(notes_content)
+        let mut notes_column = column![].spacing(5);
+        for line in notes_content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                notes_column = notes_column.push(Space::with_height(4));
+            } else if trimmed.starts_with("# ") {
+                notes_column = notes_column.push(
+                    text(trimmed.trim_start_matches('#').trim())
+                        .size(15)
+                        .color(Color::WHITE),
+                );
+            } else if trimmed.starts_with("## ") {
+                notes_column = notes_column.push(
+                    text(trimmed.trim_start_matches('#').trim())
+                        .size(13)
+                        .color(ACCENT_BLUE),
+                );
+            } else if trimmed.starts_with("### ") {
+                notes_column = notes_column.push(
+                    text(trimmed.trim_start_matches('#').trim())
                         .size(12)
-                        .color(Color::from_rgb(0.9, 0.9, 0.9))
-                ]
-                .spacing(4)
-                .padding(10)
-            )
-            .height(Length::Fixed(220.0))
-            .width(Length::Fill)
+                        .color(Color::from_rgb(0.75, 0.85, 1.0)),
+                );
+            } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+                let bullet_text = &trimmed[2..];
+                notes_column = notes_column.push(
+                    row![
+                        text("•").size(12).color(ACCENT_BLUE),
+                        Space::with_width(6),
+                        text(bullet_text).size(12).color(Color::from_rgb(0.9, 0.9, 0.9)),
+                    ]
+                    .align_y(Alignment::Start),
+                );
+            } else {
+                notes_column = notes_column.push(
+                    text(trimmed).size(12).color(Color::from_rgb(0.85, 0.85, 0.85)),
+                );
+            }
+        }
+
+        let notes_box = container(
+            scrollable(notes_column.padding(10))
+                .height(Length::Fixed(220.0))
+                .width(Length::Fill)
         )
         .style(|_| container::Style {
             background: Some(Color::from_rgba(0.08, 0.09, 0.12, 0.85).into()),
