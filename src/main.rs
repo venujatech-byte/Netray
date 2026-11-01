@@ -6954,6 +6954,14 @@ trojan://secretpass@server2.com:443?type=ws#NodeB
         let notif = app.error_notification.as_ref().unwrap();
         assert_eq!(notif.attempt, 1);
         assert_eq!(notif.countdown_secs, Some(RECONNECT_COUNTDOWN_SECONDS));
+
+        // 3. Subsequent successful ping probe restores is_running = true and transitions badge out of connecting
+        let _ = app.update(Message::PeriodicHealthCheckFinished(Ok(38)));
+        assert!(app.is_running);
+        assert_eq!(app.ping_ms, Some(38));
+        assert!(app.error_notification.is_none());
+        assert!(app.status_badge_text.contains("CONNECTED"));
+        assert!(!app.status_badge_text.contains("CONNECTING"));
     }
 
     #[test]
