@@ -125,6 +125,160 @@ pub const CARD_BG_LIGHT: Color = Color::WHITE;
 pub const CARD_BORDER_DARK: Color = Color::from_rgb(0.20, 0.22, 0.28);
 pub const CARD_BORDER_LIGHT: Color = Color::from_rgb(0.86, 0.88, 0.92);
 
+pub const ICON_INACTIVE_DARK: Color = Color::from_rgb(0.38, 0.42, 0.48);
+pub const ICON_INACTIVE_LIGHT: Color = Color::from_rgb(0.68, 0.72, 0.78);
+
+pub fn icon_color_for_state(is_dark: bool, is_active: bool) -> Color {
+    if is_active {
+        if is_dark {
+            TEXT_PRIMARY_DARK
+        } else {
+            TEXT_PRIMARY_LIGHT
+        }
+    } else if is_dark {
+        ICON_INACTIVE_DARK
+    } else {
+        ICON_INACTIVE_LIGHT
+    }
+}
+
+pub fn pick_list_style(is_dark: bool, status: iced::widget::pick_list::Status) -> iced::widget::pick_list::Style {
+    let (bg, border_color, text_color, handle_color) = if is_dark {
+        match status {
+            iced::widget::pick_list::Status::Hovered | iced::widget::pick_list::Status::Opened => (
+                Color::from_rgb(0.16, 0.18, 0.24),
+                Color::from_rgb(0.24, 0.58, 1.0),
+                Color::WHITE,
+                Color::from_rgb(0.44, 0.72, 1.0),
+            ),
+            iced::widget::pick_list::Status::Active => (
+                Color::from_rgb(0.12, 0.13, 0.17),
+                Color::from_rgb(0.22, 0.25, 0.32),
+                Color::from_rgb(0.92, 0.94, 0.98),
+                Color::from_rgb(0.60, 0.65, 0.74),
+            ),
+        }
+    } else {
+        match status {
+            iced::widget::pick_list::Status::Hovered | iced::widget::pick_list::Status::Opened => (
+                Color::WHITE,
+                Color::from_rgb(0.15, 0.48, 0.98),
+                Color::from_rgb(0.09, 0.11, 0.15),
+                Color::from_rgb(0.15, 0.48, 0.98),
+            ),
+            iced::widget::pick_list::Status::Active => (
+                Color::WHITE,
+                Color::from_rgb(0.80, 0.83, 0.88),
+                Color::from_rgb(0.09, 0.11, 0.15),
+                Color::from_rgb(0.45, 0.50, 0.58),
+            ),
+        }
+    };
+
+    iced::widget::pick_list::Style {
+        text_color,
+        placeholder_color: Color::from_rgb(0.50, 0.54, 0.62),
+        handle_color,
+        background: bg.into(),
+        border: iced::Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: border_color,
+        },
+    }
+}
+
+pub fn pick_list_menu_style(is_dark: bool) -> iced::overlay::menu::Style {
+    if is_dark {
+        iced::overlay::menu::Style {
+            background: Color::from_rgb(0.12, 0.14, 0.18).into(),
+            border: iced::Border {
+                radius: 10.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.24, 0.28, 0.36),
+            },
+            text_color: Color::from_rgb(0.92, 0.94, 0.98),
+            selected_text_color: Color::WHITE,
+            selected_background: Color::from_rgb(0.0, 0.48, 1.0).into(),
+        }
+    } else {
+        iced::overlay::menu::Style {
+            background: Color::WHITE.into(),
+            border: iced::Border {
+                radius: 10.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.82, 0.85, 0.90),
+            },
+            text_color: Color::from_rgb(0.09, 0.11, 0.15),
+            selected_text_color: Color::WHITE,
+            selected_background: Color::from_rgb(0.15, 0.48, 0.98).into(),
+        }
+    }
+}
+
+pub fn text_input_style(is_dark: bool, status: iced::widget::text_input::Status) -> iced::widget::text_input::Style {
+    let (bg, border_color, text_color) = if is_dark {
+        match status {
+            iced::widget::text_input::Status::Focused => (
+                Color::from_rgb(0.16, 0.18, 0.24),
+                Color::from_rgb(0.24, 0.58, 1.0),
+                Color::WHITE,
+            ),
+            iced::widget::text_input::Status::Hovered => (
+                Color::from_rgb(0.14, 0.16, 0.21),
+                Color::from_rgb(0.32, 0.36, 0.46),
+                Color::WHITE,
+            ),
+            iced::widget::text_input::Status::Active => (
+                Color::from_rgb(0.11, 0.12, 0.16),
+                Color::from_rgb(0.22, 0.25, 0.32),
+                Color::from_rgb(0.92, 0.94, 0.98),
+            ),
+            iced::widget::text_input::Status::Disabled => (
+                Color::from_rgb(0.09, 0.10, 0.13),
+                Color::from_rgb(0.18, 0.20, 0.25),
+                Color::from_rgb(0.40, 0.44, 0.50),
+            ),
+        }
+    } else {
+        match status {
+            iced::widget::text_input::Status::Focused => (
+                Color::from_rgb(0.96, 0.98, 1.0),
+                Color::from_rgb(0.15, 0.48, 0.98),
+                Color::from_rgb(0.09, 0.11, 0.15),
+            ),
+            iced::widget::text_input::Status::Hovered => (
+                Color::WHITE,
+                Color::from_rgb(0.65, 0.70, 0.80),
+                Color::from_rgb(0.09, 0.11, 0.15),
+            ),
+            iced::widget::text_input::Status::Active => (
+                Color::WHITE,
+                Color::from_rgb(0.80, 0.83, 0.88),
+                Color::from_rgb(0.09, 0.11, 0.15),
+            ),
+            iced::widget::text_input::Status::Disabled => (
+                Color::from_rgb(0.94, 0.95, 0.97),
+                Color::from_rgb(0.85, 0.87, 0.91),
+                Color::from_rgb(0.55, 0.58, 0.64),
+            ),
+        }
+    };
+
+    iced::widget::text_input::Style {
+        background: bg.into(),
+        border: iced::Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: border_color,
+        },
+        icon: Color::from_rgb(0.50, 0.54, 0.62),
+        placeholder: Color::from_rgb(0.45, 0.49, 0.56),
+        value: text_color,
+        selection: Color::from_rgb(0.15, 0.48, 0.98),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
