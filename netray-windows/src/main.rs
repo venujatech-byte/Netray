@@ -1092,6 +1092,17 @@ impl NetrayApp {
     }
 
     pub fn refresh_status_badge(&mut self) {
+        if self.is_running {
+            let uptime = format_uptime(
+                self.connected_at.map(|at| at.elapsed()).unwrap_or_default(),
+            );
+            self.status_badge_text = self.ping_ms.map_or_else(
+                || format!("CONNECTED · {uptime}"),
+                |ms| format!("CONNECTED · {uptime} · {ms} ms"),
+            );
+            return;
+        }
+
         let is_reconnecting = self
             .error_notification
             .as_ref()
@@ -1103,14 +1114,6 @@ impl NetrayApp {
             } else {
                 "CONNECTING...".to_string()
             }
-        } else if self.is_running {
-            let uptime = format_uptime(
-                self.connected_at.map(|at| at.elapsed()).unwrap_or_default(),
-            );
-            self.ping_ms.map_or_else(
-                || format!("CONNECTED · {uptime}"),
-                |ms| format!("CONNECTED · {uptime} · {ms} ms"),
-            )
         } else if self.worker_active {
             "CONNECTING · CHECKING SERVER".to_string()
         } else {
@@ -1504,11 +1507,9 @@ impl NetrayApp {
                 Task::none()
             }
             Message::PeriodicHealthCheckTick => {
-                if !self.is_running
-                    || (self.worker_active && !self.is_running)
-                    || self.user_stopped
-                    || self.error_notification.is_some()
+                if self.user_stopped
                     || self.health_check_in_progress
+                    || (!self.is_running && !self.worker_active)
                 {
                     Task::none()
                 } else {
@@ -1544,28 +1545,45 @@ impl NetrayApp {
             }
             Message::PeriodicHealthCheckFinished(result) => {
                 self.health_check_in_progress = false;
-                if !self.is_running || self.user_stopped {
+                if self.user_stopped {
                     Task::none()
                 } else {
                     match result {
                         Ok(ms) => {
                             self.ping_ms = Some(ms);
                             self.health_check_consecutive_failures = 0;
+                            if !self.is_running && self.worker_active {
+                                self.is_running = true;
+                                if self.connected_at.is_none() {
+                                    self.connected_at = Some(Instant::now());
+                                }
+                                self.reconnect_attempts = 0;
+                                self.error_notification = None;
+                                notifications::send_desktop_notification(
+                                    "Netray Connected",
+                                    "Tunnel reconnected successfully.",
+                                    notifications::NotificationUrgency::Normal,
+                                );
+                            }
                             self.refresh_status_badge();
                             Task::none()
                         }
                         Err(err) => {
-                            self.health_check_consecutive_failures =
-                                self.health_check_consecutive_failures.saturating_add(1);
-                            self.push_log(
-                                "HealthCheck",
-                                format!(
-                                    "Periodic server ping test failed (failure {}): {}",
-                                    self.health_check_consecutive_failures, err
-                                ),
-                                LogLevel::Warn,
-                            );
-                            self.handle_detected_error(&format!("Server connection dropped: {err}"))
+                            if self.is_running {
+                                self.health_check_consecutive_failures =
+                                    self.health_check_consecutive_failures.saturating_add(1);
+                                self.push_log(
+                                    "HealthCheck",
+                                    format!(
+                                        "Periodic server ping test failed (failure {}): {}",
+                                        self.health_check_consecutive_failures, err
+                                    ),
+                                    LogLevel::Warn,
+                                );
+                                self.handle_detected_error(&format!("Server connection dropped: {err}"))
+                            } else {
+                                Task::none()
+                            }
                         }
                     }
                 }
@@ -2136,6 +2154,15 @@ impl NetrayApp {
 
                 if is_healthy_event {
                     self.consecutive_errors = 0;
+                    if !self.is_running && self.worker_active {
+                        self.is_running = true;
+                        if self.connected_at.is_none() {
+                            self.connected_at = Some(Instant::now());
+                        }
+                        self.reconnect_attempts = 0;
+                        self.error_notification = None;
+                        self.refresh_status_badge();
+                    }
                 }
 
                 let unexpected_stop = stopped && !self.user_stopped && was_running;
@@ -2482,11 +2509,12 @@ impl NetrayApp {
                                 LogLevel::Info,
                             );
                             self.user_stopped = false;
-                            if !self.is_running && !self.worker_active {
-                                self.update_message(Message::ToggleTunnel)
-                            } else {
-                                Task::none()
+                            if let Some(stop) = self.stop_signal.take() {
+                                let _ = stop.send(());
                             }
+                            self.worker_active = false;
+                            self.is_running = false;
+                            self.update_message(Message::ToggleTunnel)
                         }
                     } else {
                         Task::none()
@@ -2502,11 +2530,12 @@ impl NetrayApp {
                 }
                 self.push_log("Supervisor", "Reconnect triggered by user...", LogLevel::Info);
                 self.user_stopped = false;
-                if !self.is_running && !self.worker_active {
-                    self.update_message(Message::ToggleTunnel)
-                } else {
-                    Task::none()
+                if let Some(stop) = self.stop_signal.take() {
+                    let _ = stop.send(());
                 }
+                self.worker_active = false;
+                self.is_running = false;
+                self.update_message(Message::ToggleTunnel)
             }
             Message::CancelAutoReconnect => {
                 self.error_notification = None;
@@ -2869,9 +2898,6 @@ impl NetrayApp {
             ViewMode::SshSettings => self.view_ssh_screen(),
         };
         let mut banners = column![].spacing(2);
-        if self.error_notification.is_some() {
-            banners = banners.push(self.view_notification_toast());
-        }
         if !matches!(self.update_state, updater::UpdateState::Idle | updater::UpdateState::UpToDate(_)) {
             banners = banners.push(self.view_update_toast());
         }
@@ -3358,6 +3384,7 @@ impl NetrayApp {
     }
 
 
+    #[allow(dead_code)]
     fn view_notification_toast(&self) -> Element<'_, Message> {
         let Some(notif) = &self.error_notification else {
             return Space::with_width(0).into();
@@ -3991,21 +4018,19 @@ impl NetrayApp {
                 .size(13)
                 .color(TEXT_MUTED),
             Space::with_width(Length::Fill),
-            text(if is_reconnecting {
-                "Reconnecting…"
-            } else if self.is_running {
+            text(if self.is_running {
                 "Tunnel active"
+            } else if is_reconnecting {
+                "Reconnecting…"
             } else if self.worker_active {
                 "Connecting…"
             } else {
                 "Offline"
             })
             .size(12)
-            .color(if is_reconnecting {
-                WARNING_AMBER
-            } else if self.is_running {
+            .color(if self.is_running {
                 SUCCESS_GREEN
-            } else if self.worker_active {
+            } else if is_reconnecting || self.worker_active {
                 WARNING_AMBER
             } else {
                 TEXT_MUTED
