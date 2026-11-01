@@ -427,6 +427,7 @@ fn is_running_as_root() -> bool {
     }
 }
 
+#[allow(dead_code)]
 fn binary_has_cap_net_admin(bin: &Path) -> bool {
     if let Ok(output) = std::process::Command::new("getcap").arg(bin).output() {
         let text = String::from_utf8_lossy(&output.stdout);
@@ -607,15 +608,14 @@ async fn run_xray_engine(
     }
 
     let is_root = is_running_as_root();
-    let has_caps = binary_has_cap_net_admin(&xray_bin);
-    let use_pkexec = cfg.enable_tun && !is_root && !has_caps && Path::new("/usr/bin/pkexec").exists();
+    let use_pkexec = cfg.enable_tun && !is_root && Path::new("/usr/bin/pkexec").exists();
 
     if cfg.enable_tun {
-        if is_root || has_caps {
+        if is_root {
             send_log(
                 log_tx,
                 "TUN",
-                "TUN mode active (root/CAP_NET_ADMIN verified; creating netray0 virtual interface)...",
+                "TUN mode active (running as root; creating netray0 virtual interface)...",
                 LogLevel::Success,
             )
             .await;
@@ -631,7 +631,7 @@ async fn run_xray_engine(
             send_log(
                 log_tx,
                 "TUN",
-                "Warning: TUN mode requires root or CAP_NET_ADMIN privileges to create interface. Run: sudo setcap cap_net_admin,cap_net_bind_service=+ep /usr/local/bin/xray",
+                "Warning: TUN mode requires root privileges. Please ensure pkexec is available.",
                 LogLevel::Warn,
             )
             .await;
@@ -658,8 +658,8 @@ cleanup() {
 
 trap cleanup TERM INT HUP EXIT
 
-# Grant CAP_NET_ADMIN to xray_bin so future reconnects do not require root/pkexec prompts
-setcap cap_net_admin,cap_net_bind_service=+ep "$xray_bin" 2>/dev/null || true
+# Remove any standalone capabilities so Xray runs consistently under the elevated supervisor
+setcap -r "$xray_bin" 2>/dev/null || true
 
 "$xray_bin" run -c "$cfg" &
 XRAY_PID=$!
