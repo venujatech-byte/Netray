@@ -477,8 +477,56 @@ pub fn apply_update_and_restart(
             let helper_script = std::env::temp_dir().join(format!("netray_upgrade_{}.sh", app_pid));
             let root_install_script = std::env::temp_dir().join(format!("netray_root_{}.sh", app_pid));
 
-            let root_script_content = format!(
-                r#"#!/bin/sh
+            let root_script_content = generate_root_install_script(
+                staged_binary,
+                &current_exe,
+                staged_dir,
+                current_dir,
+            );
+
+            std::fs::write(&root_install_script, &root_script_content)
+                .map_err(|e| format!("Failed to prepare root install script: {e}"))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&root_install_script, std::fs::Permissions::from_mode(0o755));
+            }
+
+            let helper_script_content = generate_user_upgrade_helper(
+                app_pid,
+                &root_install_script,
+                &current_exe,
+            );
+
+            std::fs::write(&helper_script, &helper_script_content)
+                .map_err(|e| format!("Failed to write update helper script: {e}"))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&helper_script, std::fs::Permissions::from_mode(0o755));
+            }
+
+            std::process::Command::new("/bin/sh")
+                .arg(&helper_script)
+                .spawn()
+                .map_err(|e| format!("Failed to launch upgrade helper: {e}"))?;
+
+            std::process::exit(0);
+        }
+    }
+}
+
+/// Generates the root script that executes with elevated privileges to copy binaries.
+pub fn generate_root_install_script(
+    staged_binary: &Path,
+    target_exe: &Path,
+    staged_dir: &Path,
+    target_dir: &Path,
+) -> String {
+    format!(
+        r#"#!/bin/sh
 set -e
 cp -f "{staged_binary}" "{target_exe}"
 chmod 755 "{target_exe}"
@@ -494,23 +542,21 @@ if [ -f "{staged_dir}/geosite.dat" ] && [ -d "{target_dir}" ]; then
 fi
 exit 0
 "#,
-                staged_binary = staged_binary.to_string_lossy(),
-                target_exe = current_exe.to_string_lossy(),
-                staged_dir = staged_dir.to_string_lossy(),
-                target_dir = current_dir.to_string_lossy(),
-            );
+        staged_binary = staged_binary.to_string_lossy(),
+        target_exe = target_exe.to_string_lossy(),
+        staged_dir = staged_dir.to_string_lossy(),
+        target_dir = target_dir.to_string_lossy(),
+    )
+}
 
-            std::fs::write(&root_install_script, &root_script_content)
-                .map_err(|e| format!("Failed to prepare root install script: {e}"))?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&root_install_script, std::fs::Permissions::from_mode(0o755));
-            }
-
-            let helper_script_content = format!(
-                r#"#!/bin/sh
+/// Generates the user helper script that waits for Netray to exit, elevates via pkexec/sudo, and relaunches.
+pub fn generate_user_upgrade_helper(
+    app_pid: u32,
+    root_script: &Path,
+    target_exe: &Path,
+) -> String {
+    format!(
+        r#"#!/bin/sh
 PID="{app_pid}"
 ROOT_SCRIPT="{root_script}"
 TARGET_EXE="{target_exe}"
@@ -535,28 +581,10 @@ nohup "$TARGET_EXE" >/dev/null 2>&1 &
 rm -f "$0"
 exit 0
 "#,
-                app_pid = app_pid,
-                root_script = root_install_script.to_string_lossy(),
-                target_exe = current_exe.to_string_lossy(),
-            );
-
-            std::fs::write(&helper_script, &helper_script_content)
-                .map_err(|e| format!("Failed to write update helper script: {e}"))?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&helper_script, std::fs::Permissions::from_mode(0o755));
-            }
-
-            std::process::Command::new("/bin/sh")
-                .arg(&helper_script)
-                .spawn()
-                .map_err(|e| format!("Failed to launch upgrade helper: {e}"))?;
-
-            std::process::exit(0);
-        }
-    }
+        app_pid = app_pid,
+        root_script = root_script.to_string_lossy(),
+        target_exe = target_exe.to_string_lossy(),
+    )
 }
 
 /// Cleanup any stale .old binary left behind from a previous Windows upgrade.
@@ -642,6 +670,27 @@ mod tests {
         assert_eq!(rel.tag_name, "v0.1.26");
         assert_eq!(rel.asset_name, "netray-linux-linux-64-0.1.26.tar.gz");
         assert!(rel.download_url.contains("netray-linux-linux-64-0.1.26.tar.gz"));
+    }
+
+    #[test]
+    fn test_generate_privileged_install_and_helper_scripts() {
+        let staged = Path::new("/tmp/netray_update/staged/netray");
+        let target = Path::new("/usr/bin/netray");
+        let staged_dir = Path::new("/tmp/netray_update/staged");
+        let target_dir = Path::new("/usr/bin");
+
+        let root_script = generate_root_install_script(staged, target, staged_dir, target_dir);
+        assert!(root_script.contains("cp -f \"/tmp/netray_update/staged/netray\" \"/usr/bin/netray\""));
+        assert!(root_script.contains("chmod 755 \"/usr/bin/netray\""));
+        assert!(root_script.contains("geosite.dat"));
+
+        let root_script_path = Path::new("/tmp/netray_root_1234.sh");
+        let helper = generate_user_upgrade_helper(1234, root_script_path, target);
+        assert!(helper.contains("PID=\"1234\""));
+        assert!(helper.contains("ROOT_SCRIPT=\"/tmp/netray_root_1234.sh\""));
+        assert!(helper.contains("kill -0 \"$PID\""));
+        assert!(helper.contains("pkexec /bin/sh \"$ROOT_SCRIPT\""));
+        assert!(helper.contains("nohup \"$TARGET_EXE\""));
     }
 }
 
