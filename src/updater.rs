@@ -362,6 +362,18 @@ fn copy_auxiliary_assets(extract_dir: &Path, staged_binary: &Path) {
     }
 }
 
+/// Checks whether the target directory allows direct file creation/modification by current process
+pub fn is_path_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".netray_write_probe_{}", std::process::id()));
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Replaces the current running application executable with the staged binary and relaunches the app.
 pub fn apply_update_and_restart(
     staged_binary: &Path,
@@ -420,16 +432,7 @@ pub fn apply_update_and_restart(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let can_write_directly = {
-            let probe = current_dir.join(format!(".netray_write_probe_{}", std::process::id()));
-            match std::fs::File::create(&probe) {
-                Ok(_) => {
-                    let _ = std::fs::remove_file(probe);
-                    true
-                }
-                Err(_) => false,
-            }
-        };
+        let can_write_directly = is_path_writable(current_dir);
 
         if can_write_directly {
             // User has direct write permissions (e.g. portable build in home folder)
@@ -691,6 +694,15 @@ mod tests {
         assert!(helper.contains("kill -0 \"$PID\""));
         assert!(helper.contains("pkexec /bin/sh \"$ROOT_SCRIPT\""));
         assert!(helper.contains("nohup \"$TARGET_EXE\""));
+    }
+
+    #[test]
+    fn test_is_path_writable_detects_permissions() {
+        let temp_dir = std::env::temp_dir();
+        assert!(is_path_writable(&temp_dir));
+
+        let non_writable = Path::new("/root");
+        assert!(!is_path_writable(non_writable));
     }
 }
 
