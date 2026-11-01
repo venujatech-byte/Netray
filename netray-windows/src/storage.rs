@@ -236,9 +236,67 @@ pub fn save_active_xray_json(xray_json: &str) -> Result<PathBuf, String> {
     Ok(file_path)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingReleaseNotes {
+    pub version: String,
+    pub release_name: String,
+    pub notes: String,
+}
+
+pub fn save_pending_release_notes_to(dir: &std::path::Path, notes: &PendingReleaseNotes) -> Result<(), String> {
+    let file_path = dir.join("pending_release_notes.json");
+    let json_str = serde_json::to_string_pretty(notes)
+        .map_err(|e| format!("Failed to serialize pending release notes: {e}"))?;
+    fs::write(&file_path, json_str)
+        .map_err(|e| format!("Failed to write pending release notes to {}: {e}", file_path.display()))
+}
+
+pub fn save_pending_release_notes(notes: &PendingReleaseNotes) -> Result<(), String> {
+    save_pending_release_notes_to(&get_config_dir(), notes)
+}
+
+pub fn load_and_clear_pending_release_notes_from(dir: &std::path::Path) -> Option<PendingReleaseNotes> {
+    let file_path = dir.join("pending_release_notes.json");
+    if !file_path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(&file_path).ok()?;
+    let _ = fs::remove_file(file_path);
+    serde_json::from_str(&content).ok()
+}
+
+pub fn load_and_clear_pending_release_notes() -> Option<PendingReleaseNotes> {
+    load_and_clear_pending_release_notes_from(&get_config_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_windows_pending_release_notes_lifecycle() {
+        let temp_dir = std::env::temp_dir().join(format!("netray_win_test_notes_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let notes = PendingReleaseNotes {
+            version: "1.0.1".to_string(),
+            release_name: "Netray v1.0.1".to_string(),
+            notes: "### New Features\n- Fixed update bug".to_string(),
+        };
+
+        let save_res = save_pending_release_notes_to(&temp_dir, &notes);
+        assert!(save_res.is_ok());
+
+        // First load should succeed and delete the file
+        let loaded = load_and_clear_pending_release_notes_from(&temp_dir);
+        assert_eq!(loaded, Some(notes));
+
+        // Second load should return None since file was cleared
+        let second_load = load_and_clear_pending_release_notes_from(&temp_dir);
+        assert!(second_load.is_none());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn test_save_and_load_config() {
