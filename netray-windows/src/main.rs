@@ -2578,7 +2578,7 @@ impl NetrayApp {
                             _ => "latest".to_string(),
                         };
                         self.push_log("Updater", format!("Update v{} downloaded & staged. Applying...", ver), LogLevel::Success);
-                        if let Err(e) = updater::apply_update_and_restart(&staged_binary) {
+                        if let Err(e) = updater::apply_update_and_restart(&staged_binary, None) {
                             self.push_log("Updater", format!("Failed to apply update: {}", e), LogLevel::Error);
                             self.update_state = updater::UpdateState::Error(e);
                         }
@@ -2592,7 +2592,7 @@ impl NetrayApp {
             }
             Message::ApplyUpdateAndRestart => {
                 if let updater::UpdateState::Downloaded { staged_binary, .. } = &self.update_state {
-                    if let Err(e) = updater::apply_update_and_restart(staged_binary) {
+                    if let Err(e) = updater::apply_update_and_restart(staged_binary, None) {
                         self.update_state = updater::UpdateState::Error(e);
                     }
                 }
