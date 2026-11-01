@@ -658,6 +658,9 @@ cleanup() {
 
 trap cleanup TERM INT HUP EXIT
 
+# Grant CAP_NET_ADMIN to xray_bin so future reconnects do not require root/pkexec prompts
+setcap cap_net_admin,cap_net_bind_service=+ep "$xray_bin" 2>/dev/null || true
+
 "$xray_bin" run -c "$cfg" &
 XRAY_PID=$!
 
