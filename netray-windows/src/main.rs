@@ -3972,12 +3972,20 @@ impl NetrayApp {
 
     fn view_profiles_screen(&self) -> Element<'_, Message> {
         let config_locked = self.config_locked();
+        let brand_icon = iced::widget::svg(iced::widget::svg::Handle::from_memory(include_bytes!(
+            "../../packaging/netray.svg"
+        )))
+        .width(Length::Fixed(24.0))
+        .height(Length::Fixed(24.0));
+
         let top_bar = row![
             button(icons::lucide_icon(icons::MENU, 22, self.text_primary()))
                 .padding(6)
                 .style(transparent_icon_btn)
                 .on_press(Message::SetViewMode(ViewMode::SshSettings)),
-            Space::with_width(12),
+            Space::with_width(8),
+            brand_icon,
+            Space::with_width(8),
             text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
             button(icons::lucide_icon(icons::FILE_PLUS, 20, self.text_primary()))
