@@ -184,6 +184,10 @@ pub fn extract_binary_name(path_str: &str) -> Option<String> {
     }
 }
 
+pub fn resolve_socket_process_name(_port: u16) -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
