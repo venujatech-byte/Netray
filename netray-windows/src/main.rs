@@ -772,6 +772,8 @@ pub struct NetrayApp {
     pub is_running: bool,
     pub connected_at: Option<Instant>,
     pub ping_ms: Option<u128>,
+    pub health_check_in_progress: bool,
+    pub health_check_consecutive_failures: u32,
     pub tunnel_mode: TunnelMode,
 
     pub payload_text: String,
@@ -853,6 +855,8 @@ pub enum Message {
     PingProfile(String),
     PingProfileIndex(usize),
     PingFinished(String, Result<u128, String>),
+    PeriodicHealthCheckTick,
+    PeriodicHealthCheckFinished(Result<u128, String>),
     EditProfile(String),
     EditProfileIndex(usize),
     DeleteProfile(String),
@@ -1000,6 +1004,8 @@ impl NetrayApp {
             is_running: false,
             connected_at: None,
             ping_ms: None,
+            health_check_in_progress: false,
+            health_check_consecutive_failures: 0,
             tunnel_mode,
 
             payload_text: saved.payload_text,
@@ -1496,6 +1502,73 @@ impl NetrayApp {
                     self.push_log("Ping", log, level);
                 }
                 Task::none()
+            }
+            Message::PeriodicHealthCheckTick => {
+                if !self.is_running
+                    || (self.worker_active && !self.is_running)
+                    || self.user_stopped
+                    || self.error_notification.is_some()
+                    || self.health_check_in_progress
+                {
+                    Task::none()
+                } else {
+                    self.health_check_in_progress = true;
+                    if self.tunnel_mode == TunnelMode::V2RayXray {
+                        let port = self
+                            .local_socks_port
+                            .parse::<u16>()
+                            .unwrap_or(10808)
+                            .saturating_add(1);
+                        Task::perform(
+                            async move { v2ray::ping_local_http_proxy(port).await },
+                            Message::PeriodicHealthCheckFinished,
+                        )
+                    } else {
+                        let target = format!("{}:{}", self.ssh_host, self.ssh_port);
+                        Task::perform(
+                            async move {
+                                let start = Instant::now();
+                                tokio::time::timeout(
+                                    Duration::from_secs(5),
+                                    tokio::net::TcpStream::connect(&target),
+                                )
+                                .await
+                                .map_err(|_| "SSH server connection timed out".to_string())?
+                                .map_err(|e| format!("SSH server unreachable: {e}"))?;
+                                Ok(start.elapsed().as_millis())
+                            },
+                            Message::PeriodicHealthCheckFinished,
+                        )
+                    }
+                }
+            }
+            Message::PeriodicHealthCheckFinished(result) => {
+                self.health_check_in_progress = false;
+                if !self.is_running || self.user_stopped {
+                    Task::none()
+                } else {
+                    match result {
+                        Ok(ms) => {
+                            self.ping_ms = Some(ms);
+                            self.health_check_consecutive_failures = 0;
+                            self.refresh_status_badge();
+                            Task::none()
+                        }
+                        Err(err) => {
+                            self.health_check_consecutive_failures =
+                                self.health_check_consecutive_failures.saturating_add(1);
+                            self.push_log(
+                                "HealthCheck",
+                                format!(
+                                    "Periodic server ping test failed (failure {}): {}",
+                                    self.health_check_consecutive_failures, err
+                                ),
+                                LogLevel::Warn,
+                            );
+                            self.handle_detected_error(&format!("Server connection dropped: {err}"))
+                        }
+                    }
+                }
             }
             Message::ShareProfile(id) => {
                 if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id).cloned() {
@@ -2557,6 +2630,8 @@ impl NetrayApp {
                     self.user_stopped = true;
                     self.error_notification = None;
                     self.reconnect_attempts = 0;
+                    self.health_check_in_progress = false;
+                    self.health_check_consecutive_failures = 0;
                     self.is_running = false;
                     self.connected_at = None;
                     self.ping_ms = None;
@@ -2771,6 +2846,11 @@ impl NetrayApp {
         if self.is_running && self.view_mode == ViewMode::Profiles {
             subscriptions
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick));
+        }
+        if self.is_running {
+            subscriptions.push(
+                iced::time::every(Duration::from_secs(10)).map(|_| Message::PeriodicHealthCheckTick),
+            );
         }
         if let Some(notif) = &self.error_notification {
             if notif.countdown_secs.is_some() {
@@ -5488,13 +5568,13 @@ mod performance_tests {
             |app: &NetrayApp| iced::advanced::subscription::into_recipes(app.subscription()).len();
         assert_eq!(subscriptions(&app), 4);
         app.is_running = true;
-        assert_eq!(subscriptions(&app), 5);
+        assert_eq!(subscriptions(&app), 6);
         for view in [ViewMode::Logs, ViewMode::EditNode, ViewMode::SshSettings] {
             app.view_mode = view;
-            assert_eq!(subscriptions(&app), 4);
+            assert_eq!(subscriptions(&app), 5);
         }
         app.view_mode = ViewMode::Profiles;
-        assert_eq!(subscriptions(&app), 5);
+        assert_eq!(subscriptions(&app), 6);
         app.is_running = false;
         assert_eq!(subscriptions(&app), 4);
     }
@@ -6083,6 +6163,29 @@ trojan://secretpass@server2.com:443?type=ws#WinNodeB
         let _ = app.update_message(Message::DeleteProfileIndex(0));
         app.sync_profile_display_cache();
         assert_eq!(app.profile_count_label, "9 profiles");
+    }
+
+    #[test]
+    fn test_windows_periodic_health_check_success_and_dropout_reconnect() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.is_running = true;
+        app.connected_at = Some(Instant::now());
+
+        // 1. Successful ping probe updates ping_ms and resets failure counter
+        let _ = app.update_message(Message::PeriodicHealthCheckFinished(Ok(55)));
+        assert_eq!(app.ping_ms, Some(55));
+        assert_eq!(app.health_check_consecutive_failures, 0);
+        assert!(!app.health_check_in_progress);
+
+        // 2. Failed ping probe triggers error notification, reconnect countdown, and increments failure count
+        let _ = app.update_message(Message::PeriodicHealthCheckFinished(Err("Connection timed out".to_string())));
+        assert_eq!(app.health_check_consecutive_failures, 1);
+        assert!(!app.is_running);
+        assert!(app.worker_active);
+        assert!(app.error_notification.is_some());
+        let notif = app.error_notification.as_ref().unwrap();
+        assert_eq!(notif.attempt, 1);
+        assert_eq!(notif.countdown_secs, Some(RECONNECT_COUNTDOWN_SECONDS));
     }
 }
 
