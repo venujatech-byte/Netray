@@ -362,6 +362,33 @@ fn copy_auxiliary_assets(extract_dir: &Path, staged_binary: &Path) {
     }
 }
 
+/// Relaunches the target executable with administrator privileges
+pub fn relaunch_as_admin(exe_path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.creation_flags(0x08000000);
+        let path_str = exe_path.to_string_lossy();
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!("Start-Process -FilePath '{}' -Verb RunAs", path_str),
+        ]);
+        cmd.spawn()
+            .map_err(|e| format!("Failed to spawn elevated process: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = std::process::Command::new(exe_path);
+        cmd.spawn()
+            .map_err(|e| format!("Failed to spawn process: {e}"))?;
+        Ok(())
+    }
+}
+
 /// Checks whether the target directory allows direct file creation/modification by current process
 pub fn is_path_writable(dir: &Path) -> bool {
     let probe = dir.join(format!(".netray_write_probe_{}", std::process::id()));
@@ -392,6 +419,16 @@ pub fn apply_update_and_restart(
 
     #[cfg(target_os = "windows")]
     {
+        // Forcefully close any running xray.exe instances so binary and dll locks are released
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut kill_cmd = std::process::Command::new("taskkill");
+            kill_cmd.creation_flags(0x08000000);
+            kill_cmd.args(["/F", "/T", "/IM", "xray.exe"]);
+            let _ = kill_cmd.output();
+        }
+
         // On Windows NTFS, a running .exe cannot be overwritten in-place,
         // but it CAN be renamed!
         let old_exe = current_exe.with_extension("old");
@@ -416,16 +453,9 @@ pub fn apply_update_and_restart(
             }
         }
 
-        // Relaunch the new executable without console windows
-        #[allow(unused_mut)]
-        let mut cmd = std::process::Command::new(&current_exe);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
-        }
-        cmd.spawn()
-            .map_err(|e| format!("Failed to relaunch updated Netray: {e}"))?;
+        // Relaunch the updated executable with administrator elevation
+        relaunch_as_admin(&current_exe)
+            .map_err(|e| format!("Failed to relaunch updated Netray as administrator: {e}"))?;
 
         std::process::exit(0);
     }
