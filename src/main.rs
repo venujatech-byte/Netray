@@ -6728,5 +6728,26 @@ trojan://secretpass@server2.com:443?type=ws#NodeB
         assert_eq!(notif.attempt, 1);
         assert_eq!(notif.countdown_secs, Some(RECONNECT_COUNTDOWN_SECONDS));
     }
+
+    #[test]
+    fn test_health_check_stops_when_user_stopped_and_max_reconnects() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.is_running = true;
+        app.user_stopped = true;
+
+        // When user explicitly stopped tunnel, periodic tick produces no task and doesn't set in_progress
+        let _ = app.update(Message::PeriodicHealthCheckTick);
+        assert!(!app.health_check_in_progress);
+
+        // When max reconnect attempts are exceeded, auto-reconnect countdown is not rescheduled
+        app.user_stopped = false;
+        app.is_running = true;
+        app.reconnect_attempts = MAX_RECONNECT_ATTEMPTS;
+        let _ = app.update(Message::PeriodicHealthCheckFinished(Err("Connection lost".to_string())));
+        assert_eq!(app.reconnect_attempts, MAX_RECONNECT_ATTEMPTS + 1);
+        assert!(app.error_notification.is_some());
+        let notif = app.error_notification.as_ref().unwrap();
+        assert_eq!(notif.countdown_secs, None);
+    }
 }
 
