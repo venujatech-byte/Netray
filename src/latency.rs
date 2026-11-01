@@ -259,4 +259,28 @@ mod tests {
             .contains("502"));
         server.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn test_ping_local_http_proxy_roundtrip_and_unavailable() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 512];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let latency = ping_local_http_proxy(port).await.expect("ping should succeed");
+        assert!(latency < 5000);
+        server.await.unwrap();
+
+        // Testing an unbound port immediately reports proxy unavailable
+        let unbound_port = 59881;
+        let err = ping_local_http_proxy(unbound_port).await.unwrap_err();
+        assert!(err.contains("Local Xray HTTP proxy is unavailable"));
+    }
 }
