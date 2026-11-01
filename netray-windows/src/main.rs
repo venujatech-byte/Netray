@@ -1267,7 +1267,6 @@ impl NetrayApp {
             } else {
                 "Maximum retry attempts reached. Please check node configuration."
             };
-            self.worker_active = false;
             self.refresh_status_badge();
             self.error_notification = Some(ErrorNotification {
                 title: "Tunnel Error".to_string(),
@@ -1552,18 +1551,25 @@ impl NetrayApp {
                         Ok(ms) => {
                             self.ping_ms = Some(ms);
                             self.health_check_consecutive_failures = 0;
+                            self.consecutive_errors = 0;
+                            self.reconnect_attempts = 0;
+                            let was_reconnecting = self
+                                .error_notification
+                                .as_ref()
+                                .map_or(false, |n| n.is_reconnecting);
+                            self.error_notification = None;
                             if !self.is_running && self.worker_active {
                                 self.is_running = true;
                                 if self.connected_at.is_none() {
                                     self.connected_at = Some(Instant::now());
                                 }
-                                self.reconnect_attempts = 0;
-                                self.error_notification = None;
-                                notifications::send_desktop_notification(
-                                    "Netray Connected",
-                                    "Tunnel reconnected successfully.",
-                                    notifications::NotificationUrgency::Normal,
-                                );
+                                if was_reconnecting {
+                                    notifications::send_desktop_notification(
+                                        "Netray Connected",
+                                        "V2Ray server connection re-established.",
+                                        notifications::NotificationUrgency::Normal,
+                                    );
+                                }
                             }
                             self.refresh_status_badge();
                             Task::none()
@@ -2508,19 +2514,49 @@ impl NetrayApp {
                             self.push_log(
                                 "Supervisor",
                                 format!(
-                                    "Auto-reconnect countdown finished. Attempting reconnect ({}/{})...",
+                                    "Auto-reconnect countdown finished. Re-establishing V2Ray server connection ({}/{})...",
                                     attempt, max_attempts
                                 ),
                                 LogLevel::Info,
                             );
                             self.user_stopped = false;
-                            if let Some(stop) = self.stop_signal.take() {
-                                let _ = stop.send(());
+                            if self.worker_active && self.stop_signal.is_some() {
+                                if self.tunnel_mode == TunnelMode::V2RayXray {
+                                    let port = self
+                                        .local_socks_port
+                                        .parse::<u16>()
+                                        .unwrap_or(10808)
+                                        .saturating_add(1);
+                                    Task::perform(
+                                        async move { v2ray::ping_local_http_proxy(port).await },
+                                        Message::PeriodicHealthCheckFinished,
+                                    )
+                                } else {
+                                    let target = format!("{}:{}", self.ssh_host, self.ssh_port);
+                                    Task::perform(
+                                        async move {
+                                            let start = std::time::Instant::now();
+                                            tokio::time::timeout(
+                                                std::time::Duration::from_secs(5),
+                                                tokio::net::TcpStream::connect(&target),
+                                            )
+                                            .await
+                                            .map_err(|_| "SSH server connection timed out".to_string())?
+                                            .map_err(|e| format!("SSH server unreachable: {e}"))?;
+                                            Ok(start.elapsed().as_millis())
+                                        },
+                                        Message::PeriodicHealthCheckFinished,
+                                    )
+                                }
+                            } else {
+                                if let Some(stop) = self.stop_signal.take() {
+                                    let _ = stop.send(());
+                                }
+                                crate::v2ray::kill_all_xray_processes();
+                                self.worker_active = false;
+                                self.is_running = false;
+                                self.update_message(Message::ToggleTunnel)
                             }
-                            crate::v2ray::kill_all_xray_processes();
-                            self.worker_active = false;
-                            self.is_running = false;
-                            self.update_message(Message::ToggleTunnel)
                         }
                     } else {
                         Task::none()
@@ -2534,15 +2570,45 @@ impl NetrayApp {
                     notif.countdown_secs = None;
                     notif.is_reconnecting = true;
                 }
-                self.push_log("Supervisor", "Reconnect triggered by user...", LogLevel::Info);
+                self.push_log("Supervisor", "Reconnect triggered by user; re-establishing V2Ray server connection...", LogLevel::Info);
                 self.user_stopped = false;
-                if let Some(stop) = self.stop_signal.take() {
-                    let _ = stop.send(());
+                if self.worker_active && self.stop_signal.is_some() {
+                    if self.tunnel_mode == TunnelMode::V2RayXray {
+                        let port = self
+                            .local_socks_port
+                            .parse::<u16>()
+                            .unwrap_or(10808)
+                            .saturating_add(1);
+                        Task::perform(
+                            async move { v2ray::ping_local_http_proxy(port).await },
+                            Message::PeriodicHealthCheckFinished,
+                        )
+                    } else {
+                        let target = format!("{}:{}", self.ssh_host, self.ssh_port);
+                        Task::perform(
+                            async move {
+                                let start = std::time::Instant::now();
+                                tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    tokio::net::TcpStream::connect(&target),
+                                )
+                                .await
+                                .map_err(|_| "SSH server connection timed out".to_string())?
+                                .map_err(|e| format!("SSH server unreachable: {e}"))?;
+                                Ok(start.elapsed().as_millis())
+                            },
+                            Message::PeriodicHealthCheckFinished,
+                        )
+                    }
+                } else {
+                    if let Some(stop) = self.stop_signal.take() {
+                        let _ = stop.send(());
+                    }
+                    crate::v2ray::kill_all_xray_processes();
+                    self.worker_active = false;
+                    self.is_running = false;
+                    self.update_message(Message::ToggleTunnel)
                 }
-                crate::v2ray::kill_all_xray_processes();
-                self.worker_active = false;
-                self.is_running = false;
-                self.update_message(Message::ToggleTunnel)
             }
             Message::CancelAutoReconnect => {
                 self.error_notification = None;
@@ -2883,7 +2949,7 @@ impl NetrayApp {
             subscriptions
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick));
         }
-        if self.is_running {
+        if (self.is_running || self.worker_active) && !self.user_stopped {
             subscriptions.push(
                 iced::time::every(Duration::from_secs(10)).map(|_| Message::PeriodicHealthCheckTick),
             );
@@ -4033,20 +4099,14 @@ impl NetrayApp {
                 .size(13)
                 .color(TEXT_MUTED),
             Space::with_width(Length::Fill),
-            text(if self.is_running {
+            text(if self.is_running || self.worker_active {
                 "Tunnel active"
-            } else if is_reconnecting {
-                "Reconnecting…"
-            } else if self.worker_active {
-                "Connecting…"
             } else {
                 "Offline"
             })
             .size(12)
-            .color(if self.is_running {
+            .color(if self.is_running || self.worker_active {
                 SUCCESS_GREEN
-            } else if is_reconnecting || self.worker_active {
-                WARNING_AMBER
             } else {
                 TEXT_MUTED
             }),
