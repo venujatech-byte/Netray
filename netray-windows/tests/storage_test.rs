@@ -27,3 +27,33 @@ fn test_windows_storage_roundtrip() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_windows_pending_release_notes_integration() {
+    use netray_windows::storage::{
+        PendingReleaseNotes, load_and_clear_pending_release_notes_from, save_pending_release_notes_to,
+    };
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "netray_win_notes_{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let notes = PendingReleaseNotes {
+        version: "1.0.30".to_string(),
+        release_name: "Netray v1.0.30".to_string(),
+        notes: "### Auto Update\n- Linux privileged updater\n- Windows architecture readiness".to_string(),
+    };
+
+    assert!(save_pending_release_notes_to(&temp_dir, &notes).is_ok());
+
+    let fetched = load_and_clear_pending_release_notes_from(&temp_dir);
+    assert_eq!(fetched, Some(notes));
+
+    // File should have been deleted upon consumption
+    let empty = load_and_clear_pending_release_notes_from(&temp_dir);
+    assert!(empty.is_none());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
