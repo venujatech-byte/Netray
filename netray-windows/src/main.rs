@@ -2165,7 +2165,11 @@ impl NetrayApp {
                     }
                 }
 
-                let unexpected_stop = stopped && !self.user_stopped && was_running;
+                let is_already_reconnecting = self
+                    .error_notification
+                    .as_ref()
+                    .map_or(false, |n| n.is_reconnecting || n.countdown_secs.is_some());
+                let unexpected_stop = stopped && !self.user_stopped && was_running && !is_already_reconnecting;
                 let is_crash = entry.message.contains("Core process exited with:");
                 let is_conn_fail = entry.message.contains("Connection check failed");
                 let is_log_error = entry.level == LogLevel::Error || entry.source == "Error";
@@ -2513,6 +2517,7 @@ impl NetrayApp {
                             if let Some(stop) = self.stop_signal.take() {
                                 let _ = stop.send(());
                             }
+                            crate::v2ray::kill_all_xray_processes();
                             self.worker_active = false;
                             self.is_running = false;
                             self.update_message(Message::ToggleTunnel)
@@ -2534,6 +2539,7 @@ impl NetrayApp {
                 if let Some(stop) = self.stop_signal.take() {
                     let _ = stop.send(());
                 }
+                crate::v2ray::kill_all_xray_processes();
                 self.worker_active = false;
                 self.is_running = false;
                 self.update_message(Message::ToggleTunnel)
