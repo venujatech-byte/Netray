@@ -3134,7 +3134,9 @@ impl NetrayApp {
         if self.error_notification.is_some() {
             main_col = main_col.push(self.view_notification_toast());
         }
-        if !matches!(self.update_state, updater::UpdateState::Idle | updater::UpdateState::UpToDate(_)) {
+        if self.view_mode != ViewMode::SshSettings
+            && !matches!(self.update_state, updater::UpdateState::Idle | updater::UpdateState::UpToDate(_))
+        {
             main_col = main_col.push(self.view_update_toast());
         }
         main_col = main_col.push(content);
@@ -5376,21 +5378,21 @@ impl NetrayApp {
         let update_action_btn: Element<'_, Message> = match &self.update_state {
             updater::UpdateState::Available(_) => {
                 button(text("Upgrade Now").size(12).color(Color::WHITE))
-                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 16.0, right: 16.0 })
                     .style(primary_action_btn)
                     .on_press(Message::StartInAppUpgrade)
                     .into()
             }
             updater::UpdateState::ReadyToRestart { .. } => {
                 button(text("Restart Now").size(12).color(Color::WHITE))
-                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 16.0, right: 16.0 })
                     .style(primary_action_btn)
                     .on_press(Message::ApplyUpdateAndRestart)
                     .into()
             }
             _ => {
                 button(text("Check for Updates").size(12).color(Color::WHITE))
-                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 16.0, right: 16.0 })
                     .style(primary_action_btn)
                     .on_press(Message::CheckForUpdates)
                     .into()
@@ -5410,11 +5412,14 @@ impl NetrayApp {
                     .color(TEXT_MUTED),
                 Space::with_height(6),
                 row![
-                    text(update_status_desc).size(12).color(self.text_primary()),
+                    container(text(update_status_desc).size(12).color(self.text_primary()))
+                        .width(Length::Fill),
                     Space::with_width(12),
-                    update_action_btn,
+                    container(update_action_btn)
+                        .width(Length::Shrink),
                 ]
-                .align_y(Alignment::Center),
+                .align_y(Alignment::Center)
+                .width(Length::Fill),
             ]
             .spacing(6)
             .width(Length::Fill)
