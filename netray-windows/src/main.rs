@@ -2401,6 +2401,7 @@ impl NetrayApp {
                 }
             }
             Message::ConfirmExit => {
+                crate::v2ray::kill_all_xray_processes();
                 if self.worker_active {
                     self.exit_after_stop = true;
                     if let Some(stop) = self.stop_signal.take() {
@@ -5514,6 +5515,12 @@ impl NetrayApp {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+    }
+}
+
+impl Drop for NetrayApp {
+    fn drop(&mut self) {
+        crate::v2ray::kill_all_xray_processes();
     }
 }
 
