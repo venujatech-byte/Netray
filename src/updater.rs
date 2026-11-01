@@ -363,7 +363,14 @@ fn copy_auxiliary_assets(extract_dir: &Path, staged_binary: &Path) {
 }
 
 /// Replaces the current running application executable with the staged binary and relaunches the app.
-pub fn apply_update_and_restart(staged_binary: &Path) -> Result<(), String> {
+pub fn apply_update_and_restart(
+    staged_binary: &Path,
+    pending_notes: Option<&crate::storage::PendingReleaseNotes>,
+) -> Result<(), String> {
+    if let Some(notes) = pending_notes {
+        let _ = crate::storage::save_pending_release_notes(notes);
+    }
+
     let current_exe = std::env::current_exe()
         .map_err(|e| format!("Cannot determine current executable path: {e}"))?;
 
@@ -413,43 +420,142 @@ pub fn apply_update_and_restart(staged_binary: &Path) -> Result<(), String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        // On Linux / Unix, an open running binary can be replaced via atomic rename
-        let new_dest = current_exe.with_extension("new");
-        std::fs::copy(staged_binary, &new_dest)
-            .map_err(|e| format!("Failed to copy new binary: {e}"))?;
+        let can_write_directly = {
+            let probe = current_dir.join(format!(".netray_write_probe_{}", std::process::id()));
+            match std::fs::File::create(&probe) {
+                Ok(_) => {
+                    let _ = std::fs::remove_file(probe);
+                    true
+                }
+                Err(_) => false,
+            }
+        };
 
-        // Ensure executable permissions
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&new_dest, std::fs::Permissions::from_mode(0o755));
-        }
+        if can_write_directly {
+            // User has direct write permissions (e.g. portable build in home folder)
+            let new_dest = current_exe.with_extension("new");
+            std::fs::copy(staged_binary, &new_dest)
+                .map_err(|e| format!("Failed to copy new binary: {e}"))?;
 
-        std::fs::rename(&new_dest, &current_exe)
-            .map_err(|e| format!("Failed to replace running executable: {e}"))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&new_dest, std::fs::Permissions::from_mode(0o755));
+            }
 
-        // Copy auxiliary files (xray, dat files) if present
-        if let Some(staged_dir) = staged_binary.parent() {
-            for name in &["xray", "geoip.dat", "geosite.dat"] {
-                let src = staged_dir.join(name);
-                if src.exists() {
-                    let dest = current_dir.join(name);
-                    let _ = std::fs::copy(&src, &dest);
-                    #[cfg(unix)]
-                    if name == &"xray" {
-                        use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+            std::fs::rename(&new_dest, &current_exe)
+                .map_err(|e| format!("Failed to replace running executable: {e}"))?;
+
+            if let Some(staged_dir) = staged_binary.parent() {
+                for name in &["xray", "geoip.dat", "geosite.dat"] {
+                    let src = staged_dir.join(name);
+                    if src.exists() {
+                        let dest = current_dir.join(name);
+                        let _ = std::fs::copy(&src, &dest);
+                        #[cfg(unix)]
+                        if name == &"xray" {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+                        }
                     }
                 }
             }
+
+            std::process::Command::new(&current_exe)
+                .spawn()
+                .map_err(|e| format!("Failed to relaunch updated Netray: {e}"))?;
+
+            std::process::exit(0);
+        } else {
+            // System-level installation (/usr/bin/netray or root directory).
+            // Elevate via Polkit (pkexec) or sudo, and relaunch after old process exits.
+            let app_pid = std::process::id();
+            let staged_dir = staged_binary
+                .parent()
+                .ok_or("Staged binary has no parent directory")?;
+
+            let helper_script = std::env::temp_dir().join(format!("netray_upgrade_{}.sh", app_pid));
+            let root_install_script = std::env::temp_dir().join(format!("netray_root_{}.sh", app_pid));
+
+            let root_script_content = format!(
+                r#"#!/bin/sh
+set -e
+cp -f "{staged_binary}" "{target_exe}"
+chmod 755 "{target_exe}"
+if [ -f "{staged_dir}/xray" ] && [ -d "{target_dir}" ]; then
+    cp -f "{staged_dir}/xray" "{target_dir}/xray" 2>/dev/null || true
+    chmod 755 "{target_dir}/xray" 2>/dev/null || true
+fi
+if [ -f "{staged_dir}/geoip.dat" ] && [ -d "{target_dir}" ]; then
+    cp -f "{staged_dir}/geoip.dat" "{target_dir}/geoip.dat" 2>/dev/null || true
+fi
+if [ -f "{staged_dir}/geosite.dat" ] && [ -d "{target_dir}" ]; then
+    cp -f "{staged_dir}/geosite.dat" "{target_dir}/geosite.dat" 2>/dev/null || true
+fi
+exit 0
+"#,
+                staged_binary = staged_binary.to_string_lossy(),
+                target_exe = current_exe.to_string_lossy(),
+                staged_dir = staged_dir.to_string_lossy(),
+                target_dir = current_dir.to_string_lossy(),
+            );
+
+            std::fs::write(&root_install_script, &root_script_content)
+                .map_err(|e| format!("Failed to prepare root install script: {e}"))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&root_install_script, std::fs::Permissions::from_mode(0o755));
+            }
+
+            let helper_script_content = format!(
+                r#"#!/bin/sh
+PID="{app_pid}"
+ROOT_SCRIPT="{root_script}"
+TARGET_EXE="{target_exe}"
+
+# Wait for running Netray instance to exit
+while kill -0 "$PID" 2>/dev/null; do
+    sleep 0.15
+done
+
+# Elevate using Polkit graphical prompt or sudo
+if command -v pkexec >/dev/null 2>&1; then
+    pkexec /bin/sh "$ROOT_SCRIPT"
+elif command -v sudo >/dev/null 2>&1; then
+    sudo /bin/sh "$ROOT_SCRIPT"
+fi
+
+rm -f "$ROOT_SCRIPT"
+
+# Relaunch Netray as the desktop user
+sleep 0.4
+nohup "$TARGET_EXE" >/dev/null 2>&1 &
+rm -f "$0"
+exit 0
+"#,
+                app_pid = app_pid,
+                root_script = root_install_script.to_string_lossy(),
+                target_exe = current_exe.to_string_lossy(),
+            );
+
+            std::fs::write(&helper_script, &helper_script_content)
+                .map_err(|e| format!("Failed to write update helper script: {e}"))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&helper_script, std::fs::Permissions::from_mode(0o755));
+            }
+
+            std::process::Command::new("/bin/sh")
+                .arg(&helper_script)
+                .spawn()
+                .map_err(|e| format!("Failed to launch upgrade helper: {e}"))?;
+
+            std::process::exit(0);
         }
-
-        // Relaunch
-        std::process::Command::new(&current_exe)
-            .spawn()
-            .map_err(|e| format!("Failed to relaunch updated Netray: {e}"))?;
-
-        std::process::exit(0);
     }
 }
 
