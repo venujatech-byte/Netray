@@ -10,8 +10,8 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <!-- WinTun and Registry proxy benefit from standard or elevated privileges -->
-        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+        <!-- WinTun and Registry proxy require elevated administrator privileges -->
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>
