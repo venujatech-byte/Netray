@@ -4,12 +4,65 @@ use russh::client;
 use russh_keys::key;
 use rustls_pki_types::ServerName;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_rustls::{rustls, TlsConnector};
+
+#[derive(Debug, Default)]
+pub struct TunnelMetrics {
+    pub active_connections: AtomicUsize,
+    pub total_proxied_connections: AtomicU64,
+    pub total_bypassed_connections: AtomicU64,
+}
+
+static METRICS: TunnelMetrics = TunnelMetrics {
+    active_connections: AtomicUsize::new(0),
+    total_proxied_connections: AtomicU64::new(0),
+    total_bypassed_connections: AtomicU64::new(0),
+};
+
+/// Returns (active_connections, total_proxied, total_bypassed)
+pub fn get_tunnel_metrics() -> (usize, u64, u64) {
+    (
+        METRICS.active_connections.load(Ordering::Relaxed),
+        METRICS.total_proxied_connections.load(Ordering::Relaxed),
+        METRICS.total_bypassed_connections.load(Ordering::Relaxed),
+    )
+}
+
+pub fn record_connection_start(is_direct: bool) {
+    METRICS.active_connections.fetch_add(1, Ordering::Relaxed);
+    if is_direct {
+        METRICS.total_bypassed_connections.fetch_add(1, Ordering::Relaxed);
+    } else {
+        METRICS.total_proxied_connections.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub fn record_connection_end() {
+    let mut current = METRICS.active_connections.load(Ordering::Relaxed);
+    while current > 0 {
+        match METRICS.active_connections.compare_exchange_weak(
+            current,
+            current - 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+pub fn reset_tunnel_metrics() {
+    METRICS.active_connections.store(0, Ordering::Relaxed);
+    METRICS.total_proxied_connections.store(0, Ordering::Relaxed);
+    METRICS.total_bypassed_connections.store(0, Ordering::Relaxed);
+}
 
 #[derive(Clone)]
 pub struct TunnelConfig {
@@ -85,6 +138,7 @@ pub async fn run_real_tunnel_worker(
         send_log(&log_tx, "SystemProxy", "System proxy disabled. Network restored.", LogLevel::Info).await;
     }
 
+    reset_tunnel_metrics();
     send_log(&log_tx, "Supervisor", "Tunnel is offline.", LogLevel::Info).await;
 }
 
@@ -240,6 +294,44 @@ fn classify_xray_log(line: &str) -> LogLevel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrayConnectionInfo {
+    pub client_port: Option<u16>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub protocol: String,
+    pub route: String,
+}
+
+pub fn parse_xray_connection(line: &str) -> Option<XrayConnectionInfo> {
+    if let Some((left, right)) = line.split_once(" accepted ") {
+        let client_port = left.rsplit_once(':').and_then(|(_, p)| p.trim().parse::<u16>().ok());
+        let mut tokens = right.split_whitespace();
+        let target_token = tokens.next()?;
+        let route_raw = tokens.next().unwrap_or("[proxy]");
+        let route = route_raw.trim_matches(&['[', ']'][..]).to_string();
+
+        let parts: Vec<&str> = target_token.split(':').collect();
+        if parts.len() >= 3 {
+            let protocol = parts[0].to_string();
+            let port_str = parts[parts.len() - 1];
+            let host = parts[1..parts.len() - 1].join(":");
+            if let Ok(port) = port_str.parse::<u16>() {
+                if !host.is_empty() {
+                    return Some(XrayConnectionInfo {
+                        client_port,
+                        target_host: host,
+                        target_port: port,
+                        protocol,
+                        route,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
 fn strip_xray_log_prefix(line: &str) -> &str {
     let trimmed = line.trim();
     if trimmed.len() > 20
@@ -262,7 +354,22 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
         while let Ok(Some(line)) = reader.next_line().await {
             let lvl = classify_xray_log(&line);
             let cleaned = strip_xray_log_prefix(&line);
-            send_log(&tx, "Xray", cleaned, lvl).await;
+            if let Some(conn) = parse_xray_connection(cleaned) {
+                let is_direct = conn.route.eq_ignore_ascii_case("direct") || conn.route.eq_ignore_ascii_case("bypass");
+                record_connection_start(is_direct);
+                crate::send_connection_log(
+                    &tx,
+                    "Xray",
+                    cleaned,
+                    lvl,
+                    &conn.target_host,
+                    conn.target_port,
+                    None,
+                    Some(conn.route),
+                ).await;
+            } else {
+                send_log(&tx, "Xray", cleaned, lvl).await;
+            }
         }
     });
 }
