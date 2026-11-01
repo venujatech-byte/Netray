@@ -102,12 +102,44 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Download build packages
         uses: actions/download-artifact@v8
         with:
           pattern: netray-*
           path: dist
           merge-multiple: true
+
+      - name: Generate release notes
+        env:
+          VERSION: 1.0.${{ github.run_number }}
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)")
+          else
+            COMMITS=$(git log -n 20 --pretty=format:"* %s (%h)")
+          fi
+
+          cat << EOF > dist/RELEASE_NOTES.md
+          ## Netray v$VERSION
+
+          ### 🚀 Changes in this Build
+          ${COMMITS:-* Automated CI build and release package}
+
+          ### 📦 Built Packages
+          - **Windows 64-bit Portable**: \`netray-windows-$VERSION.zip\` (bundled with Wintun driver & Xray-core)
+          - **Linux RPM Package**: \`netray-$VERSION-1.x86_64.rpm\` (Fedora, RHEL, openSUSE)
+          - **Linux 64-bit Portable**: \`netray-linux-linux-64-$VERSION.tar.gz\` (bundled with Xray-core)
+
+          ### 🔒 Integrity & Security
+          - Bundled with unmodified, official Xray-core v26.10.21.
+          - Built on GitHub CI from commit \`${GITHUB_SHA}\`.
+          EOF
 
       - name: Create or update versioned release
         env:
@@ -118,8 +150,9 @@ jobs:
           tag="v$VERSION"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/*.zip dist/*.rpm dist/*.tar.gz --clobber
+            gh release edit "$tag" -F dist/RELEASE_NOTES.md --title "Netray $tag"
           else
             gh release create "$tag" dist/*.zip dist/*.rpm dist/*.tar.gz --target "${GITHUB_SHA}" \
               --title "Netray $tag" \
-              --notes "Automated Netray release from commit ${GITHUB_SHA}."
+              -F dist/RELEASE_NOTES.md
           fi
