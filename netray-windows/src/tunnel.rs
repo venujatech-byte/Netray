@@ -43,6 +43,7 @@ pub fn record_connection_start(is_direct: bool) {
     }
 }
 
+#[allow(dead_code)]
 pub fn record_connection_end() {
     let mut current = METRICS.active_connections.load(Ordering::Relaxed);
     while current > 0 {
