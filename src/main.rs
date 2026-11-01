@@ -5084,6 +5084,7 @@ impl NetrayApp {
 
     fn view_ssh_screen(&self) -> Element<'_, Message> {
         let is_dark_active = self.is_dark();
+        let locked = self.config_locked();
         let top_bar = row![
             button(
                 container(icons::lucide_icon(icons::BACK, 20, self.text_primary()))
@@ -5390,29 +5391,106 @@ impl NetrayApp {
             .style(move |_, status| theme::pick_list_style(is_dark_active, status))
             .menu_style(move |_| theme::pick_list_menu_style(is_dark_active)),
             Space::with_width(8),
-            button(
-                row![
-                    icons::lucide_icon(icons::FILE_PLUS, 15, Color::WHITE),
-                    Space::with_width(4),
-                    text("Browse...").size(12).color(Color::WHITE),
-                ]
-                .align_y(Alignment::Center)
-            )
-            .padding(iced::Padding {
-                top: 6.0,
-                bottom: 6.0,
-                left: 10.0,
-                right: 10.0,
-            })
-            .style(primary_action_btn)
-            .on_press(Message::BrowseAppExecutable),
+            if locked {
+                button(
+                    row![
+                        icons::lucide_icon(icons::LOCK, 15, TEXT_MUTED),
+                        Space::with_width(4),
+                        text("Browse...").size(12).color(TEXT_MUTED),
+                    ]
+                    .align_y(Alignment::Center)
+                )
+                .padding(iced::Padding {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 10.0,
+                    right: 10.0,
+                })
+                .style(toast_cancel_btn)
+            } else {
+                button(
+                    row![
+                        icons::lucide_icon(icons::FILE_PLUS, 15, Color::WHITE),
+                        Space::with_width(4),
+                        text("Browse...").size(12).color(Color::WHITE),
+                    ]
+                    .align_y(Alignment::Center)
+                )
+                .padding(iced::Padding {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 10.0,
+                    right: 10.0,
+                })
+                .style(primary_action_btn)
+                .on_press(Message::BrowseAppExecutable)
+            },
         ]
         .align_y(Alignment::Center)
         .width(Length::Fill);
 
+        let whitelist_apps_input: Element<'_, Message> = if locked {
+            container(
+                text(if self.whitelist_apps.is_empty() { "No application whitelist configured" } else { &self.whitelist_apps })
+                    .size(13)
+                    .color(TEXT_MUTED)
+            )
+            .padding(iced::Padding { top: 8.0, bottom: 8.0, left: 10.0, right: 10.0 })
+            .style(move |_| container::Style {
+                background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                border: iced::Border {
+                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
+            })
+            .width(Length::Fill)
+            .into()
+        } else {
+            modern_text_input("e.g. curl, firefox, chrome, discord", &self.whitelist_apps, is_dark_active)
+                .on_input(Message::WhitelistAppsChanged)
+                .width(Length::Fill)
+                .into()
+        };
+
+        let whitelist_urls_input: Element<'_, Message> = if locked {
+            container(
+                text(if self.whitelist_urls.is_empty() { "No domain whitelist configured" } else { &self.whitelist_urls })
+                    .size(13)
+                    .color(TEXT_MUTED)
+            )
+            .padding(iced::Padding { top: 8.0, bottom: 8.0, left: 10.0, right: 10.0 })
+            .style(move |_| container::Style {
+                background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                border: iced::Border {
+                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
+            })
+            .width(Length::Fill)
+            .into()
+        } else {
+            modern_text_input("e.g. *.internal.net, 10.0.0.0/8, https://work.com", &self.whitelist_urls, is_dark_active)
+                .on_input(Message::WhitelistUrlsChanged)
+                .width(Length::Fill)
+                .into()
+        };
+
         let whitelist_card = container(
             column![
-                text("Bypass Whitelist (Split Tunneling)").size(15).color(Color::WHITE),
+                row![
+                    text("Bypass Whitelist (Split Tunneling)").size(15).color(Color::WHITE),
+                    Space::with_width(Length::Fill),
+                    if locked {
+                        text("Locked while active").size(11).color(WARNING_AMBER)
+                    } else {
+                        text("")
+                    },
+                ]
+                .align_y(Alignment::Center),
                 text("Traffic from these applications and URLs/domains will bypass the proxy tunnel and connect directly. Active in both TUN and System Proxy modes.")
                     .size(12)
                     .color(TEXT_MUTED),
@@ -5420,17 +5498,13 @@ impl NetrayApp {
                 text("Whitelist Applications:").size(13).color(ACCENT_BLUE_LIGHT),
                 app_picker_row,
                 chips_col,
-                modern_text_input("e.g. curl, firefox, chrome, discord", &self.whitelist_apps, is_dark_active)
-                    .on_input(Message::WhitelistAppsChanged)
-                    .width(Length::Fill),
+                whitelist_apps_input,
                 text("Select from catalog, browse executable, or enter comma/newline-separated names.")
                     .size(11)
                     .color(TEXT_MUTED),
                 Space::with_height(8),
                 text("Whitelist URLs & Domains:").size(13).color(ACCENT_BLUE_LIGHT),
-                modern_text_input("e.g. *.internal.net, 10.0.0.0/8, https://work.com", &self.whitelist_urls, is_dark_active)
-                    .on_input(Message::WhitelistUrlsChanged)
-                    .width(Length::Fill),
+                whitelist_urls_input,
                 text("Comma or newline-separated URLs, domains, wildcards (*.site.com), or IP CIDRs.")
                     .size(11)
                     .color(TEXT_MUTED),
@@ -5490,91 +5564,250 @@ impl NetrayApp {
         .style(form_card_style)
         .width(Length::Fill);
 
-        let content = scrollable(
-            column![
-                theme_card,
-                Space::with_height(12),
-                startup_card,
-                Space::with_height(12),
-                update_card,
-                Space::with_height(12),
-                ip_card,
-                Space::with_height(12),
-                whitelist_card,
-                Space::with_height(14),
-                text("Tunneling Mode:").size(14).color(TEXT_MUTED),
-                pick_list(
-                    &TUNNEL_MODES[..],
-                    Some(self.tunnel_mode),
-                    Message::TunnelModeChanged
-                )
-                .width(Length::Fill)
-                .padding(iced::Padding {
-                    top: 8.0,
-                    bottom: 8.0,
-                    left: 10.0,
-                    right: 8.0,
-                })
-                .text_size(13)
-                .handle(pick_list::Handle::Arrow {
-                    size: Some(10.into()),
-                })
-                .style(move |_, status| theme::pick_list_style(is_dark_active, status))
-                .menu_style(move |_| theme::pick_list_menu_style(is_dark_active)),
-                Space::with_height(10),
-                text("HTTP Payload Template:").size(14).color(TEXT_MUTED),
-                modern_text_input("Enter HTTP payload...", &self.payload_text, is_dark_active)
-                    .on_input(Message::PayloadChanged),
-                Space::with_height(6),
+        let is_ssh_mode = matches!(self.tunnel_mode, TunnelMode::SshPayload | TunnelMode::SshSslSni);
+
+        let mode_selector: Element<'_, Message> = if locked {
+            container(
                 row![
-                    checkbox("Keep-Alive", self.gen_keep_alive).on_toggle(Message::ToggleKeepAlive),
-                    checkbox("X-Online-Host", self.gen_online_host)
-                        .on_toggle(Message::ToggleOnlineHost),
-                    checkbox("Use [split]", self.gen_split).on_toggle(Message::ToggleSplit),
+                    icons::lucide_icon(icons::LOCK, 14, WARNING_AMBER),
+                    Space::with_width(8),
+                    text(format!("{} (Locked while connected)", self.tunnel_mode))
+                        .size(13)
+                        .color(TEXT_MUTED),
                 ]
-                .spacing(15),
-                Space::with_height(6),
-                button("Generate Template Payload").on_press(Message::GeneratePayload),
-                Space::with_height(14),
-                text("Bug Host / CDN Host:").size(14).color(TEXT_MUTED),
-                modern_text_input("cdn.host.com", &self.bug_host, is_dark_active)
-                    .on_input(Message::BugHostChanged),
-                Space::with_height(10),
-                text("TLS SNI Host:").size(14).color(TEXT_MUTED),
-                modern_text_input("sni.host.com", &self.sni_host, is_dark_active)
-                    .on_input(Message::SniChanged),
-                Space::with_height(14),
-                text("SSH Server Details:").size(14).color(TEXT_MUTED),
-                row![
-                    modern_text_input("Host", &self.ssh_host, is_dark_active)
-                        .on_input(Message::SshHostChanged)
-                        .width(Length::FillPortion(3)),
-                    Space::with_width(8),
-                    modern_text_input("Port", &self.ssh_port, is_dark_active)
-                        .on_input(Message::SshPortChanged)
-                        .width(Length::FillPortion(1)),
-                ],
-                Space::with_height(8),
-                row![
-                    modern_text_input("User", &self.ssh_user, is_dark_active)
-                        .on_input(Message::SshUserChanged)
-                        .width(Length::Fill),
-                    Space::with_width(8),
-                    modern_text_input("Pass", &self.ssh_pass, is_dark_active)
-                        .on_input(Message::SshPassChanged)
-                        .secure(true)
-                        .width(Length::Fill),
-                ],
-                Space::with_height(20),
-            ]
-            .spacing(6)
+                .align_y(Alignment::Center)
+            )
+            .padding(iced::Padding {
+                top: 8.0,
+                bottom: 8.0,
+                left: 10.0,
+                right: 8.0,
+            })
+            .style(move |_| container::Style {
+                background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                border: iced::Border {
+                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
+            })
+            .width(Length::Fill)
+            .into()
+        } else {
+            pick_list(
+                &TUNNEL_MODES[..],
+                Some(self.tunnel_mode),
+                Message::TunnelModeChanged
+            )
             .width(Length::Fill)
             .padding(iced::Padding {
-                top: 0.0,
-                bottom: 20.0,
-                left: 16.0,
-                right: 16.0,
-            }),
+                top: 8.0,
+                bottom: 8.0,
+                left: 10.0,
+                right: 8.0,
+            })
+            .text_size(13)
+            .handle(pick_list::Handle::Arrow {
+                size: Some(10.into()),
+            })
+            .style(move |_, status| theme::pick_list_style(is_dark_active, status))
+            .menu_style(move |_| theme::pick_list_menu_style(is_dark_active))
+            .into()
+        };
+
+        let ssh_card = if is_ssh_mode {
+            let mut ssh_col = column![
+                row![
+                    icons::lucide_icon(icons::SERVER, 16, ACCENT_BLUE_LIGHT),
+                    Space::with_width(6),
+                    text("SSH Tunnel & Payload Configuration").size(14).color(self.text_primary()),
+                ]
+                .align_y(Alignment::Center),
+                text("Configure custom HTTP payload injection, Bug Host, TLS SNI, and remote SSH server credentials.")
+                    .size(12)
+                    .color(TEXT_MUTED),
+                Space::with_height(10),
+                text("HTTP Payload Template:").size(13).color(ACCENT_BLUE_LIGHT),
+            ];
+
+            if locked {
+                ssh_col = ssh_col.push(
+                    container(text(if self.payload_text.is_empty() { "No payload template set" } else { &self.payload_text }).size(12).color(TEXT_MUTED))
+                        .padding(8)
+                        .style(move |_| container::Style {
+                            background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 1.0, radius: 6.0.into() },
+                            ..Default::default()
+                        })
+                        .width(Length::Fill)
+                );
+                ssh_col = ssh_col.push(Space::with_height(8));
+                ssh_col = ssh_col.push(text("Bug Host / CDN Host:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(
+                    container(text(if self.bug_host.is_empty() { "None" } else { &self.bug_host }).size(12).color(TEXT_MUTED))
+                        .padding(8)
+                        .style(move |_| container::Style {
+                            background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 1.0, radius: 6.0.into() },
+                            ..Default::default()
+                        })
+                        .width(Length::Fill)
+                );
+                ssh_col = ssh_col.push(Space::with_height(8));
+                ssh_col = ssh_col.push(text("TLS SNI Host:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(
+                    container(text(if self.sni_host.is_empty() { "None" } else { &self.sni_host }).size(12).color(TEXT_MUTED))
+                        .padding(8)
+                        .style(move |_| container::Style {
+                            background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 1.0, radius: 6.0.into() },
+                            ..Default::default()
+                        })
+                        .width(Length::Fill)
+                );
+                ssh_col = ssh_col.push(Space::with_height(8));
+                ssh_col = ssh_col.push(text("SSH Server Details:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(
+                    container(text(format!("{}:{} (User: {})", self.ssh_host, self.ssh_port, self.ssh_user)).size(12).color(TEXT_MUTED))
+                        .padding(8)
+                        .style(move |_| container::Style {
+                            background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 1.0, radius: 6.0.into() },
+                            ..Default::default()
+                        })
+                        .width(Length::Fill)
+                );
+            } else {
+                ssh_col = ssh_col.push(
+                    modern_text_input("Enter HTTP payload...", &self.payload_text, is_dark_active)
+                        .on_input(Message::PayloadChanged)
+                );
+                ssh_col = ssh_col.push(Space::with_height(6));
+                ssh_col = ssh_col.push(
+                    row![
+                        checkbox("Keep-Alive", self.gen_keep_alive).on_toggle(Message::ToggleKeepAlive),
+                        checkbox("X-Online-Host", self.gen_online_host).on_toggle(Message::ToggleOnlineHost),
+                        checkbox("Use [split]", self.gen_split).on_toggle(Message::ToggleSplit),
+                    ]
+                    .spacing(15)
+                );
+                ssh_col = ssh_col.push(Space::with_height(6));
+                ssh_col = ssh_col.push(button("Generate Template Payload").on_press(Message::GeneratePayload));
+                ssh_col = ssh_col.push(Space::with_height(14));
+                ssh_col = ssh_col.push(text("Bug Host / CDN Host:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(
+                    modern_text_input("cdn.host.com", &self.bug_host, is_dark_active)
+                        .on_input(Message::BugHostChanged)
+                );
+                ssh_col = ssh_col.push(Space::with_height(10));
+                ssh_col = ssh_col.push(text("TLS SNI Host:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(
+                    modern_text_input("sni.host.com", &self.sni_host, is_dark_active)
+                        .on_input(Message::SniChanged)
+                );
+                ssh_col = ssh_col.push(Space::with_height(14));
+                ssh_col = ssh_col.push(text("SSH Server Details:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(
+                    row![
+                        modern_text_input("Host", &self.ssh_host, is_dark_active)
+                            .on_input(Message::SshHostChanged)
+                            .width(Length::FillPortion(3)),
+                        Space::with_width(8),
+                        modern_text_input("Port", &self.ssh_port, is_dark_active)
+                            .on_input(Message::SshPortChanged)
+                            .width(Length::FillPortion(1)),
+                    ]
+                );
+                ssh_col = ssh_col.push(Space::with_height(8));
+                ssh_col = ssh_col.push(
+                    row![
+                        modern_text_input("User", &self.ssh_user, is_dark_active)
+                            .on_input(Message::SshUserChanged)
+                            .width(Length::Fill),
+                        Space::with_width(8),
+                        modern_text_input("Pass", &self.ssh_pass, is_dark_active)
+                            .on_input(Message::SshPassChanged)
+                            .secure(true)
+                            .width(Length::Fill),
+                    ]
+                );
+            }
+
+            Some(
+                container(ssh_col.spacing(6).width(Length::Fill))
+                    .padding(12)
+                    .style(form_card_style)
+                    .width(Length::Fill)
+            )
+        } else {
+            None
+        };
+
+        let mut settings_col = column![];
+
+        if locked {
+            settings_col = settings_col.push(
+                container(
+                    row![
+                        icons::lucide_icon(icons::LOCK, 16, WARNING_AMBER),
+                        Space::with_width(8),
+                        column![
+                            text("Settings Locked: Tunnel is Active").size(13).color(WARNING_AMBER),
+                            text("Network routing and tunneling parameters cannot be altered while the tunnel is connected. Disconnect first to change these settings.")
+                                .size(11)
+                                .color(TEXT_MUTED),
+                        ]
+                        .spacing(2)
+                    ]
+                    .align_y(Alignment::Center)
+                )
+                .padding(12)
+                .style(form_card_style)
+                .width(Length::Fill)
+            );
+            settings_col = settings_col.push(Space::with_height(12));
+        }
+
+        settings_col = settings_col.push(theme_card);
+        settings_col = settings_col.push(Space::with_height(12));
+        settings_col = settings_col.push(startup_card);
+        settings_col = settings_col.push(Space::with_height(12));
+        settings_col = settings_col.push(update_card);
+        settings_col = settings_col.push(Space::with_height(12));
+        settings_col = settings_col.push(ip_card);
+        settings_col = settings_col.push(Space::with_height(12));
+        settings_col = settings_col.push(whitelist_card);
+        settings_col = settings_col.push(Space::with_height(14));
+        settings_col = settings_col.push(
+            row![
+                text("Tunneling Mode:").size(14).color(TEXT_MUTED),
+                Space::with_width(Length::Fill),
+                if locked {
+                    text("Disconnect to switch mode").size(11).color(WARNING_AMBER)
+                } else {
+                    text("")
+                },
+            ]
+            .align_y(Alignment::Center)
+        );
+        settings_col = settings_col.push(mode_selector);
+
+        if let Some(card) = ssh_card {
+            settings_col = settings_col.push(Space::with_height(14));
+            settings_col = settings_col.push(card);
+        }
+
+        let content = scrollable(
+            settings_col
+                .spacing(6)
+                .width(Length::Fill)
+                .padding(iced::Padding {
+                    top: 0.0,
+                    bottom: 20.0,
+                    left: 16.0,
+                    right: 16.0,
+                }),
         )
         .id(scrollable::Id::new("settings_scroll"))
         .width(Length::Fill)
