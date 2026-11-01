@@ -422,6 +422,9 @@ async fn run_xray_engine(
         send_log(log_tx, "SystemProxy", format!("Proxy active -> SOCKS5 127.0.0.1:{}, HTTP 127.0.0.1:{}", cfg.local_socks_port, http_port), LogLevel::Success).await;
     }
 
+    // Ensure any stale or orphaned xray instances are cleared before spawning
+    crate::v2ray::kill_all_xray_processes();
+
     send_log(log_tx, "Xray", "Spawning Xray process...", LogLevel::Info).await;
 
     let mut cmd = Command::new(&xray_bin);
@@ -469,6 +472,7 @@ async fn run_xray_engine(
         _ = &mut *stop_rx => {
             send_log(log_tx, "Supervisor", "Connection check cancelled; stopping Xray.", LogLevel::Warn).await;
             let _ = child.kill().await;
+            crate::v2ray::kill_all_xray_processes();
             None
         }
     };
@@ -484,9 +488,14 @@ async fn run_xray_engine(
         _ = &mut *stop_rx => {
             send_log(log_tx, "Supervisor", "Stopping Xray core and tearing down WinTun interface...", LogLevel::Info).await;
             let _ = child.kill().await;
+            crate::v2ray::kill_all_xray_processes();
         }
-    }; } else { let _ = child.kill().await; }
+    }; } else {
+        let _ = child.kill().await;
+        crate::v2ray::kill_all_xray_processes();
+    }
 
     let _ = tokio::fs::remove_file(&config_path).await;
+    crate::v2ray::kill_all_xray_processes();
     Ok(())
 }
