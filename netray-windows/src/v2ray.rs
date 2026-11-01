@@ -551,6 +551,18 @@ pub async fn check_public_ip() -> Result<String, String> {
     .unwrap_or_else(|e| Err(format!("Task execution error: {e}")))
 }
 
+/// Forcefully terminates all running instances of xray.exe and their child processes on Windows.
+pub fn kill_all_xray_processes() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("taskkill");
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.args(["/F", "/T", "/IM", "xray.exe"]);
+        let _ = cmd.output();
+    }
+}
+
 /// Parses and validates the IP address returned by ifconfig.me
 pub fn parse_ifconfig_output(raw: &str) -> Result<String, String> {
     let clean = raw.trim();
