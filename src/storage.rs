@@ -109,10 +109,19 @@ impl Default for AppData {
 }
 
 pub fn get_config_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        let p = PathBuf::from(home).join(".config").join("netray");
+    if let Ok(dir) = std::env::var("NETRAY_CONFIG_DIR") {
+        let p = PathBuf::from(dir);
         let _ = fs::create_dir_all(&p);
         p
+    } else if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home).join(".config").join("netray");
+        if fs::create_dir_all(&p).is_ok() {
+            p
+        } else {
+            let p = PathBuf::from("./netray_data");
+            let _ = fs::create_dir_all(&p);
+            p
+        }
     } else {
         let p = PathBuf::from("./netray_data");
         let _ = fs::create_dir_all(&p);
@@ -227,6 +236,39 @@ pub fn save_active_xray_json(xray_json: &str) -> Result<PathBuf, String> {
     Ok(file_path)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingReleaseNotes {
+    pub version: String,
+    pub release_name: String,
+    pub notes: String,
+}
+
+pub fn save_pending_release_notes_to(dir: &std::path::Path, notes: &PendingReleaseNotes) -> Result<(), String> {
+    let file_path = dir.join("pending_release_notes.json");
+    let json_str = serde_json::to_string_pretty(notes)
+        .map_err(|e| format!("Failed to serialize pending release notes: {e}"))?;
+    fs::write(&file_path, json_str)
+        .map_err(|e| format!("Failed to write pending release notes to {}: {e}", file_path.display()))
+}
+
+pub fn save_pending_release_notes(notes: &PendingReleaseNotes) -> Result<(), String> {
+    save_pending_release_notes_to(&get_config_dir(), notes)
+}
+
+pub fn load_and_clear_pending_release_notes_from(dir: &std::path::Path) -> Option<PendingReleaseNotes> {
+    let file_path = dir.join("pending_release_notes.json");
+    if !file_path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(&file_path).ok()?;
+    let _ = fs::remove_file(file_path);
+    serde_json::from_str(&content).ok()
+}
+
+pub fn load_and_clear_pending_release_notes() -> Option<PendingReleaseNotes> {
+    load_and_clear_pending_release_notes_from(&get_config_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +335,28 @@ mod tests {
         assert!(!loaded.v2ray_profiles.is_empty());
         let path = get_config_path();
         assert!(path.exists(), "config.json must exist at {}", path.display());
+    }
+
+    #[test]
+    fn test_pending_release_notes_lifecycle() {
+        let temp_dir = std::env::temp_dir().join(format!("netray_test_notes_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let notes = PendingReleaseNotes {
+            version: "1.0.30".to_string(),
+            release_name: "Netray v1.0.30".to_string(),
+            notes: "### New Features\n- Privileged updater with Polkit\n".to_string(),
+        };
+
+        save_pending_release_notes_to(&temp_dir, &notes).expect("Saving pending release notes should succeed");
+
+        let loaded = load_and_clear_pending_release_notes_from(&temp_dir).expect("Loading pending release notes should succeed");
+        assert_eq!(loaded.version, "1.0.30");
+        assert_eq!(loaded.release_name, "Netray v1.0.30");
+        assert!(loaded.notes.contains("Privileged updater"));
+
+        // Second load must return None because it was cleared
+        let second_load = load_and_clear_pending_release_notes_from(&temp_dir);
+        assert!(second_load.is_none());
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
