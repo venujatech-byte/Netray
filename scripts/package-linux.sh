@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-app_version=${1:-0.1.0}
+app_version=${1:-1.0.0}
 if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "Version must use MAJOR.MINOR.PATCH format." >&2
     exit 1
