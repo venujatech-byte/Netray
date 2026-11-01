@@ -1084,6 +1084,22 @@ impl NetrayApp {
                     | Message::EditShortIdChanged(_)
                     | Message::OpenQrScanModal
                     | Message::TriggerQrScan(_)
+                    | Message::TunnelModeChanged(_)
+                    | Message::PayloadChanged(_)
+                    | Message::BugHostChanged(_)
+                    | Message::SshHostChanged(_)
+                    | Message::SshPortChanged(_)
+                    | Message::SshUserChanged(_)
+                    | Message::SshPassChanged(_)
+                    | Message::ProxyIpChanged(_)
+                    | Message::ProxyPortChanged(_)
+                    | Message::LocalSocksPortChanged(_)
+                    | Message::WhitelistAppsChanged(_)
+                    | Message::WhitelistUrlsChanged(_)
+                    | Message::ToggleKeepAlive(_)
+                    | Message::ToggleOnlineHost(_)
+                    | Message::ToggleSplit(_)
+                    | Message::GeneratePayload
             )
         {
             return Task::none();
