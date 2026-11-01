@@ -876,6 +876,13 @@ pub struct ShareModalState {
     pub copied: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseNotesModalState {
+    pub version: String,
+    pub release_name: String,
+    pub notes: String,
+}
+
 
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 5;
 pub const RECONNECT_COUNTDOWN_SECONDS: u32 = 3;
@@ -999,6 +1006,8 @@ pub struct NetrayApp {
     tray_icon: Option<TrayIcon>,
     tray_connect_item: Option<MenuItem>,
     worker_active: bool,
+    pub release_notes_modal: Option<ReleaseNotesModalState>,
+    pub latest_release_info: Option<updater::ReleaseInfo>,
 }
 
 // ============================================================================
@@ -1027,6 +1036,7 @@ pub enum Message {
     ShareProfile(String),
     ShareProfileIndex(usize),
     CloseShareModal,
+    CloseReleaseNotesModal,
     CopyShareLink,
     ToggleShareProtect,
     AddNewProfile,
@@ -1172,6 +1182,13 @@ impl NetrayApp {
         let profile_count = saved.v2ray_profiles.len();
         let has_profiles = !saved.v2ray_profiles.is_empty();
 
+        let pending_release_notes = storage::load_and_clear_pending_release_notes();
+        let release_notes_modal = pending_release_notes.map(|p| ReleaseNotesModalState {
+            version: p.version,
+            release_name: p.release_name,
+            notes: p.notes,
+        });
+
         let app = Self {
             view_mode: ViewMode::Profiles,
             is_running: false,
@@ -1246,6 +1263,8 @@ impl NetrayApp {
             tray_icon: None,
             tray_connect_item: None,
             worker_active: false,
+            release_notes_modal,
+            latest_release_info: None,
         };
 
         let initial_task = if app.auto_check_updates {
@@ -2743,6 +2762,7 @@ impl NetrayApp {
                 match res {
                     Ok(Some(info)) => {
                         let ver = info.version.clone();
+                        self.latest_release_info = Some(info.clone());
                         self.update_state = updater::UpdateState::Available(info);
                         notifications::send_desktop_notification(
                             "Netray Update Available",
@@ -2764,6 +2784,7 @@ impl NetrayApp {
             }
             Message::StartInAppUpgrade => {
                 if let updater::UpdateState::Available(info) = &self.update_state {
+                    self.latest_release_info = Some(info.clone());
                     let info_clone = info.clone();
                     let ver = info.version.clone();
                     self.update_state = updater::UpdateState::Downloading {
@@ -2787,7 +2808,14 @@ impl NetrayApp {
                             _ => "latest".to_string(),
                         };
                         self.push_log("Updater", format!("Update v{} downloaded & staged. Applying...", ver), LogLevel::Success);
-                        if let Err(e) = updater::apply_update_and_restart(&staged_binary) {
+                        let pending_notes = self.latest_release_info.as_ref().map(|info| {
+                            storage::PendingReleaseNotes {
+                                version: info.version.clone(),
+                                release_name: info.release_name.clone(),
+                                notes: info.release_notes.clone(),
+                            }
+                        });
+                        if let Err(e) = updater::apply_update_and_restart(&staged_binary, pending_notes.as_ref()) {
                             self.push_log("Updater", format!("Failed to apply update: {}", e), LogLevel::Error);
                             self.update_state = updater::UpdateState::Error(e);
                         }
@@ -2800,11 +2828,26 @@ impl NetrayApp {
                 Task::none()
             }
             Message::ApplyUpdateAndRestart => {
-                if let updater::UpdateState::Downloaded { staged_binary, .. } = &self.update_state {
-                    if let Err(e) = updater::apply_update_and_restart(staged_binary) {
+                if let updater::UpdateState::Downloaded { staged_binary, info } = &self.update_state {
+                    let pending_notes = storage::PendingReleaseNotes {
+                        version: info.version.clone(),
+                        release_name: info.release_name.clone(),
+                        notes: info.release_notes.clone(),
+                    };
+                    if let Err(e) = updater::apply_update_and_restart(staged_binary, Some(&pending_notes)) {
                         self.update_state = updater::UpdateState::Error(e);
                     }
+                } else if let updater::UpdateState::ReadyToRestart { .. } = &self.update_state {
+                    // Direct restart if binary was already replaced
+                    if let Ok(exe) = std::env::current_exe() {
+                        let _ = std::process::Command::new(exe).spawn();
+                        std::process::exit(0);
+                    }
                 }
+                Task::none()
+            }
+            Message::CloseReleaseNotesModal => {
+                self.release_notes_modal = None;
                 Task::none()
             }
             Message::DismissUpdateToast => {
@@ -3201,6 +3244,18 @@ impl NetrayApp {
             iced::widget::stack![
                 base_content,
                 self.view_qr_scan_modal(),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            base_content
+        };
+
+        let base_content = if self.release_notes_modal.is_some() {
+            iced::widget::stack![
+                base_content,
+                self.view_release_notes_modal(),
             ]
             .width(Length::Fill)
             .height(Length::Fill)
@@ -3850,6 +3905,116 @@ impl NetrayApp {
             .center_y(Length::Fill)
             .style(|_| container::Style {
                 background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn view_release_notes_modal(&self) -> Element<'_, Message> {
+        let Some(modal) = &self.release_notes_modal else {
+            return Space::with_width(0).into();
+        };
+
+        let header = row![
+            icons::lucide_icon(icons::DOWNLOAD, 20, ACCENT_BLUE_LIGHT),
+            Space::with_width(8),
+            column![
+                text(format!("Welcome to Netray v{}", modal.version))
+                    .size(16)
+                    .color(Color::WHITE),
+                text("The update was installed successfully. Here is what's new:")
+                    .size(11)
+                    .color(TEXT_MUTED),
+            ]
+            .spacing(2)
+            .width(Length::Fill),
+            button(icons::lucide_icon(icons::CLOSE, 14, Color::from_rgb(0.8, 0.8, 0.8)))
+                .padding(4)
+                .style(|_, status| button::Style {
+                    background: match status {
+                        button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.1).into()),
+                        _ => None,
+                    },
+                    border: iced::Border {
+                        radius: 999.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .on_press(Message::CloseReleaseNotesModal),
+        ]
+        .align_y(Alignment::Center);
+
+        let notes_content = if modal.notes.trim().is_empty() {
+            "Performance optimizations, automated connection dropout detection, and core stability improvements across proxy protocols."
+        } else {
+            modal.notes.as_str()
+        };
+
+        let notes_box = container(
+            scrollable(
+                column![
+                    text(notes_content)
+                        .size(12)
+                        .color(Color::from_rgb(0.9, 0.9, 0.9))
+                ]
+                .spacing(4)
+                .padding(10)
+            )
+            .height(Length::Fixed(220.0))
+            .width(Length::Fill)
+        )
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.08, 0.09, 0.12, 0.85).into()),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+            },
+            ..Default::default()
+        })
+        .width(Length::Fill);
+
+        let close_btn = button(text("Got it!").size(12).color(Color::WHITE))
+            .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 20.0, right: 20.0 })
+            .style(primary_action_btn)
+            .on_press(Message::CloseReleaseNotesModal);
+
+        let bottom_row = row![
+            Space::with_width(Length::Fill),
+            close_btn,
+        ]
+        .align_y(Alignment::Center);
+
+        let dialog = container(
+            column![
+                header,
+                Space::with_height(4),
+                notes_box,
+                Space::with_height(4),
+                bottom_row,
+            ]
+            .spacing(12)
+            .padding(18),
+        )
+        .style(|_| container::Style {
+            background: Some(Color::from_rgb(0.14, 0.16, 0.20).into()),
+            border: iced::Border {
+                radius: 16.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.24, 0.27, 0.35),
+            },
+            ..Default::default()
+        })
+        .width(Length::Fixed(440.0));
+
+        container(dialog)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.70).into()),
                 ..Default::default()
             })
             .into()
@@ -6753,6 +6918,31 @@ trojan://secretpass@server2.com:443?type=ws#NodeB
         assert!(app.error_notification.is_some());
         let notif = app.error_notification.as_ref().unwrap();
         assert_eq!(notif.countdown_secs, None);
+    }
+
+    #[test]
+    fn test_release_notes_modal_lifecycle_and_rendering() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let window_id = iced::window::Id::unique();
+
+        assert!(app.release_notes_modal.is_none());
+
+        // 1. Set release notes modal
+        app.release_notes_modal = Some(ReleaseNotesModalState {
+            version: "1.0.30".to_string(),
+            release_name: "Netray v1.0.30".to_string(),
+            notes: "### Highlights\n- Linux privileged update integration\n- Settings scroll fix\n".to_string(),
+        });
+
+        // 2. Render view with modal present
+        let el = app.view(window_id);
+        drop(el);
+
+        // 3. Close release notes modal
+        let _ = app.update(Message::CloseReleaseNotesModal);
+        assert!(app.release_notes_modal.is_none());
+        let el_after = app.view(window_id);
+        drop(el_after);
     }
 }
 
