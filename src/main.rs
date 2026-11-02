@@ -1099,6 +1099,7 @@ pub enum Message {
     CancelAutoReconnect,
     DismissNotification,
     ToggleAutoReconnect(bool),
+    ToggleConnectionDropNotifications(bool),
 
     CheckForUpdates,
     UpdateCheckFinished(Result<Option<updater::ReleaseInfo>, String>),
@@ -2727,6 +2728,20 @@ impl NetrayApp {
                     "Automatic reconnect on error disabled."
                 };
                 self.push_log("Supervisor", msg, LogLevel::Info);
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::ToggleConnectionDropNotifications(enabled) => {
+                self.notify_connection_drops = enabled;
+                self.push_log(
+                    "Settings",
+                    if enabled {
+                        "Connection drop desktop notifications enabled."
+                    } else {
+                        "Connection drop desktop notifications disabled."
+                    },
+                    LogLevel::Info,
+                );
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -6745,6 +6760,10 @@ mod performance_tests {
         assert!(!app.auto_reconnect);
         let _ = app.update(Message::ToggleAutoReconnect(true));
         assert!(app.auto_reconnect);
+        let _ = app.update(Message::ToggleConnectionDropNotifications(false));
+        assert!(!app.notify_connection_drops);
+        let _ = app.update(Message::ToggleConnectionDropNotifications(true));
+        assert!(app.notify_connection_drops);
     }
 
     #[test]
