@@ -5088,6 +5088,12 @@ impl NetrayApp {
                 .on_toggle(Message::ToggleAutoReconnect),
                 Space::with_height(2),
                 checkbox(
+                    "Connection drop desktop notifications (drop and reconnect alerts)",
+                    self.notify_connection_drops,
+                )
+                .on_toggle(Message::ToggleConnectionDropNotifications),
+                Space::with_height(2),
+                checkbox(
                     "Automatically check for updates on startup",
                     self.auto_check_updates,
                 )
