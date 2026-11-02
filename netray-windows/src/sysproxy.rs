@@ -13,23 +13,19 @@ pub async fn enable_system_proxy(socks_port: u16, http_port: u16) -> Result<(), 
     let reg_path = r#"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings"#;
     let proxy_server = format!("http=127.0.0.1:{};https=127.0.0.1:{};socks=127.0.0.1:{}", http_port, http_port, socks_port);
 
-    // 1. Enable proxy
-    let _ = proxy_command("reg")
-        .args(["add", reg_path, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"])
-        .output()
-        .await;
-
-    // 2. Set server string
-    let _ = proxy_command("reg")
-        .args(["add", reg_path, "/v", "ProxyServer", "/t", "REG_SZ", "/d", &proxy_server, "/f"])
-        .output()
-        .await;
-
-    // 3. Bypass local intranet
-    let _ = proxy_command("reg")
-        .args(["add", reg_path, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "<local>;localhost;127.0.0.1", "/f"])
-        .output()
-        .await;
+    // Enable only after the target and bypass list have been written successfully.
+    for (name, kind, value) in [
+        ("ProxyServer", "REG_SZ", proxy_server.as_str()),
+        ("ProxyOverride", "REG_SZ", "<local>;localhost;127.0.0.1"),
+        ("ProxyEnable", "REG_DWORD", "1"),
+    ] {
+        let output = proxy_command("reg")
+            .args(["add", reg_path, "/v", name, "/t", kind, "/d", value, "/f"])
+            .output().await.map_err(|error| format!("Could not run reg: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("Could not set {name}: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+    }
 
     // 4. Force WinINet / Internet Settings refresh via PowerShell or rundll32
     let _ = proxy_command("powershell")
