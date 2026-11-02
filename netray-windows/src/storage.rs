@@ -111,6 +111,17 @@ impl Default for AppData {
     }
 }
 
+#[cfg(test)]
+pub fn get_config_dir() -> PathBuf {
+    // Tests must never overwrite real profiles, even when run without a sandbox.
+    let path = std::env::temp_dir().join(format!(
+        "netray-tests-{}-{:?}", std::process::id(), std::thread::current().id()
+    ));
+    fs::create_dir_all(&path).expect("create isolated test config directory");
+    path
+}
+
+#[cfg(not(test))]
 pub fn get_config_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -375,5 +386,10 @@ mod tests {
         assert!(!loaded.v2ray_profiles.is_empty());
         let path = get_config_path();
         assert!(path.exists(), "config.json must exist at {}", path.display());
+        assert!(path.starts_with(std::env::temp_dir()));
+        let mut changed = loaded;
+        changed.notify_connection_drops = false;
+        save_data(&changed).unwrap();
+        assert!(!load_data().notify_connection_drops);
     }
 }

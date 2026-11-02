@@ -1,6 +1,9 @@
 //! System Startup / Autostart Management for Netray Windows
 
 pub fn set_run_at_startup(enable: bool) -> Result<(), String> {
+    if cfg!(test) {
+        return Ok(()); // UI tests must not modify desktop files or the user's Run registry.
+    }
     #[cfg(target_os = "windows")]
     {
         set_windows_autostart(enable)
