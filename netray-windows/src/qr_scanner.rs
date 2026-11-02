@@ -14,7 +14,7 @@ pub fn decode_qr_from_image_bytes(bytes: &[u8]) -> Result<String, String> {
 
     let img = image::load_from_memory(bytes)
         .map_err(|e| format!("Failed to decode image payload: {e}"))?;
-    let luma = img.to_luma8();
+    let luma = img.into_luma8();
     let mut prepared = PreparedImage::prepare(luma);
     let grids = prepared.detect_grids();
 
@@ -47,6 +47,11 @@ pub fn decode_qr_from_file<P: AsRef<Path>>(path: P) -> Result<String, String> {
 
 /// Decodes QR code content from raw grayscale (luma8) pixel buffer.
 pub fn decode_qr_from_luma(width: usize, height: usize, luma_data: Vec<u8>) -> Result<String, String> {
+    if width == 0 || height == 0 || width > u32::MAX as usize || height > u32::MAX as usize
+        || width.checked_mul(height) != Some(luma_data.len())
+    {
+        return Err("Invalid raw grayscale image buffer dimensions".into());
+    }
     let img = image::GrayImage::from_raw(width as u32, height as u32, luma_data)
         .ok_or_else(|| "Invalid raw grayscale image buffer dimensions".to_string())?;
     let mut prepared = PreparedImage::prepare(img);
@@ -410,6 +415,13 @@ mod tests {
         let res = decode_qr_from_image_bytes(&[1, 2, 3, 4, 5]);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Failed to decode image payload"));
+    }
+
+    #[test]
+    fn rejects_invalid_grayscale_dimensions() {
+        assert!(decode_qr_from_luma(0, 1, vec![]).is_err());
+        assert!(decode_qr_from_luma(2, 2, vec![0; 3]).is_err());
+        assert!(decode_qr_from_luma(usize::MAX, 2, vec![]).is_err());
     }
 
     #[test]
