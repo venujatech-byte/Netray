@@ -159,11 +159,11 @@ pub fn style_primary_light(_: &Theme, _: svg::Status) -> svg::Style {
 }
 
 pub fn style_inactive_dark(_: &Theme, _: svg::Status) -> svg::Style {
-    svg::Style { color: Some(Color::from_rgb(0.40, 0.43, 0.50)) }
+    svg::Style { color: Some(Color::from_rgb(0.38, 0.42, 0.48)) }
 }
 
 pub fn style_inactive_light(_: &Theme, _: svg::Status) -> svg::Style {
-    svg::Style { color: Some(Color::from_rgb(0.65, 0.68, 0.74)) }
+    svg::Style { color: Some(Color::from_rgb(0.68, 0.72, 0.78)) }
 }
 
 pub fn style_light_gray(_: &Theme, _: svg::Status) -> svg::Style {
@@ -199,9 +199,9 @@ pub fn lucide_icon(svg_bytes: &'static [u8], size: u16, color: Color) -> Svg<'st
         s.style(style_primary_dark)
     } else if is_color(color, 0.12, 0.14, 0.18) {
         s.style(style_primary_light)
-    } else if is_color(color, 0.40, 0.43, 0.50) {
+    } else if is_color(color, 0.38, 0.42, 0.48) {
         s.style(style_inactive_dark)
-    } else if is_color(color, 0.65, 0.68, 0.74) {
+    } else if is_color(color, 0.68, 0.72, 0.78) {
         s.style(style_inactive_light)
     } else if is_color(color, 0.85, 0.85, 0.85) {
         s.style(style_light_gray)
