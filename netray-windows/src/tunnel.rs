@@ -418,12 +418,12 @@ async fn run_xray_engine(
     // 4. Enable System Proxy if requested
     if cfg.enable_sysproxy {
         send_log(log_tx, "SystemProxy", "Configuring Windows system proxy in Registry...", LogLevel::Info).await;
-        let _ = crate::sysproxy::enable_system_proxy(cfg.local_socks_port, http_port).await;
-        send_log(log_tx, "SystemProxy", format!("Proxy active -> SOCKS5 127.0.0.1:{}, HTTP 127.0.0.1:{}", cfg.local_socks_port, http_port), LogLevel::Success).await;
+        match crate::sysproxy::enable_system_proxy(cfg.local_socks_port, http_port).await {
+            Ok(()) => send_log(log_tx, "SystemProxy", format!("Proxy active -> SOCKS5 127.0.0.1:{}, HTTP 127.0.0.1:{}", cfg.local_socks_port, http_port), LogLevel::Success).await,
+            Err(error) => send_log(log_tx, "SystemProxy", format!("Could not enable system proxy: {error}"), LogLevel::Warn).await,
+        }
     }
 
-    // Ensure any stale or orphaned xray instances are cleared before spawning
-    crate::v2ray::kill_all_xray_processes();
 
     send_log(log_tx, "Xray", "Spawning Xray process...", LogLevel::Info).await;
 
@@ -438,7 +438,13 @@ async fn run_xray_engine(
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
 
-    let mut child = cmd.spawn()?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&config_path).await;
+            return Err(error.into());
+        }
+    };
 
     if let Some(stdout) = child.stdout.take() {
         spawn_xray_log_pipe(stdout, log_tx.clone());
@@ -450,18 +456,23 @@ async fn run_xray_engine(
     send_log(
         log_tx,
         "Xray",
-        format!("Checking https://www.gstatic.com/generate_204 through HTTP proxy 127.0.0.1:{http_port}; connection requires HTTP 204."),
+        format!("Checking http://www.gstatic.com/generate_204 through HTTP proxy 127.0.0.1:{http_port}; connection requires HTTP 204."),
         LogLevel::Info,
     )
     .await;
     let ping_ms = tokio::select! {
-        result = crate::v2ray::wait_for_http_proxy(http_port) => match result {
-            Ok(ms) => Some(ms),
-            Err(error) => {
-                send_log(log_tx, "Error", format!("Connection check failed: {error}"), LogLevel::Error).await;
-                None
+        // Verification may fail during an outage; keep the same core and routes alive.
+        ms = async {
+            loop {
+                match crate::v2ray::wait_for_http_proxy(http_port).await {
+                    Ok(ms) => break ms,
+                    Err(error) => {
+                        send_log(log_tx, "Supervisor", format!("Connection not yet verified: {error}. Keeping Xray running; retrying in 30 seconds."), LogLevel::Warn).await;
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    }
+                }
             }
-        },
+        } => Some(ms),
         status = child.wait() => {
             match status {
                 Ok(status) => send_log(log_tx, "Error", format!("Xray exited before connection verification: {status}"), LogLevel::Error).await,
@@ -472,7 +483,6 @@ async fn run_xray_engine(
         _ = &mut *stop_rx => {
             send_log(log_tx, "Supervisor", "Connection check cancelled; stopping Xray.", LogLevel::Warn).await;
             let _ = child.kill().await;
-            crate::v2ray::kill_all_xray_processes();
             None
         }
     };
@@ -482,20 +492,19 @@ async fn run_xray_engine(
 
     if ping_ms.is_some() { tokio::select! {
         res = child.wait() => {
-            let status = res?;
-            send_log(log_tx, "Xray", format!("Core process exited: {}", status), LogLevel::Warn).await;
+            match res {
+                Ok(status) => send_log(log_tx, "Xray", format!("Core process exited: {status}"), LogLevel::Warn).await,
+                Err(error) => send_log(log_tx, "Error", format!("Could not wait for Xray: {error}"), LogLevel::Error).await,
+            }
         }
         _ = &mut *stop_rx => {
             send_log(log_tx, "Supervisor", "Stopping Xray core and tearing down WinTun interface...", LogLevel::Info).await;
             let _ = child.kill().await;
-            crate::v2ray::kill_all_xray_processes();
         }
     }; } else {
         let _ = child.kill().await;
-        crate::v2ray::kill_all_xray_processes();
     }
 
     let _ = tokio::fs::remove_file(&config_path).await;
-    crate::v2ray::kill_all_xray_processes();
     Ok(())
 }
