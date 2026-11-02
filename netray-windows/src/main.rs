@@ -257,21 +257,6 @@ fn transparent_text_btn(_: &Theme, _: button::Status) -> button::Style {
     }
 }
 
-fn sub_bar_add_btn(_: &Theme, status: button::Status) -> button::Style {
-    let bg = match status {
-        button::Status::Hovered => ACCENT_BLUE_LIGHT,
-        _ => ACCENT_BLUE,
-    };
-    button::Style {
-        background: Some(bg.into()),
-        border: iced::Border {
-            radius: 18.0.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
 fn ping_btn_pinging(_: &Theme, _: button::Status) -> button::Style {
     button::Style {
         background: Some(ACCENT_BLUE_LIGHT.into()),
@@ -300,8 +285,10 @@ fn ping_btn_active(_: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-pub fn ping_btn_style(pinging: bool) -> fn(&Theme, button::Status) -> button::Style {
-    if pinging {
+pub fn ping_btn_style(is_dark: bool, active: bool, pinging: bool) -> fn(&Theme, button::Status) -> button::Style {
+    if !active {
+        rounded_icon_btn_style(is_dark, false)
+    } else if pinging {
         ping_btn_pinging
     } else {
         ping_btn_active
@@ -3833,6 +3820,9 @@ impl NetrayApp {
 
     fn view_profiles_screen(&self) -> Element<'_, Message> {
         let config_locked = self.config_locked();
+        let is_dark = self.is_dark();
+        let action_color = theme::icon_color_for_state(is_dark, !config_locked);
+        let inactive_color = theme::icon_color_for_state(is_dark, false);
         let brand_icon = iced::widget::svg(iced::widget::svg::Handle::from_memory(include_bytes!(
             "../../packaging/netray.svg"
         )))
@@ -3849,15 +3839,15 @@ impl NetrayApp {
             Space::with_width(8),
             text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
-            button(icons::lucide_icon(icons::FILE_PLUS, 20, self.text_primary()))
+            button(icons::lucide_icon(icons::FILE_PLUS, 20, action_color))
                 .padding(6)
                 .style(transparent_icon_btn)
                 .on_press_maybe((!config_locked).then(|| Message::RequestFileImport)),
-            button(icons::lucide_icon(icons::QR_CODE, 20, self.text_primary()))
+            button(icons::lucide_icon(icons::QR_CODE, 20, action_color))
                 .padding(6)
                 .style(transparent_icon_btn)
                 .on_press_maybe((!config_locked).then(|| Message::OpenQrScanModal)),
-            button(icons::lucide_icon(icons::LINK, 20, self.text_primary()))
+            button(icons::lucide_icon(icons::LINK, 20, action_color))
                 .padding(6)
                 .style(transparent_icon_btn)
                 .on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
@@ -3885,9 +3875,9 @@ impl NetrayApp {
             .map_or(false, |n| n.countdown_secs.is_some() || n.is_reconnecting);
 
         let sub_bar = row![
-            button(icons::lucide_icon(icons::PLUS, 18, Color::WHITE))
+            button(icons::lucide_icon(icons::PLUS, 18, if config_locked { inactive_color } else { Color::WHITE }))
                 .padding(8)
-                .style(sub_bar_add_btn)
+                .style(ping_btn_style(is_dark, !config_locked, false))
                 .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
             Space::with_width(10),
             text(self.profile_count_label.as_str())
@@ -3942,6 +3932,7 @@ impl NetrayApp {
                             && is_active
                             && self.tunnel_mode == TunnelMode::V2RayXray)))
                     .then_some(Message::PingProfileIndex(idx));
+                let ping_active = ping_press.is_some() || pinging;
                 let ping_result = if pinging {
                     "Testing…"
                 } else {
@@ -3991,21 +3982,21 @@ impl NetrayApp {
                                 text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
                                 text(ping_result).size(11).color(ping_color),
                                 Space::with_width(Length::Fill),
-                                button(icons::lucide_icon(icons::ACTIVITY, 18, Color::WHITE))
+                                button(icons::lucide_icon(icons::ACTIVITY, 18, if ping_active { Color::WHITE } else { inactive_color }))
                                     .padding(10)
-                                    .style(ping_btn_style(pinging))
+                                    .style(ping_btn_style(is_dark, ping_active, pinging))
                                     .on_press_maybe(ping_press),
                                 button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
                                     .padding(6)
                                     .style(transparent_muted_btn)
                                     .on_press(Message::ShareProfileIndex(idx)),
-                                button(icons::lucide_icon(icons::PENCIL, 16, TEXT_MUTED))
+                                button(icons::lucide_icon(icons::PENCIL, 16, if config_locked { inactive_color } else { TEXT_MUTED }))
                                     .padding(6)
                                     .style(transparent_muted_btn)
                                     .on_press_maybe(
                                         (!config_locked).then_some(Message::EditProfileIndex(idx))
                                     ),
-                                button(icons::lucide_icon(icons::TRASH, 16, TEXT_MUTED))
+                                button(icons::lucide_icon(icons::TRASH, 16, if config_locked { inactive_color } else { TEXT_MUTED }))
                                     .padding(6)
                                     .style(transparent_muted_btn)
                                     .on_press_maybe(
@@ -5735,6 +5726,15 @@ mod performance_tests {
         assert!(!app.auto_reconnect);
         let _ = app.update_message(Message::ToggleConnectionDropNotifications(false));
         assert!(!app.notify_connection_drops);
+    }
+
+    #[test]
+    fn disabled_ping_uses_inactive_colors_in_both_themes() {
+        for is_dark in [true, false] {
+            let style = ping_btn_style(is_dark, false, false)(&Theme::Dark, button::Status::Disabled);
+            assert_eq!(style.text_color, theme::icon_color_for_state(is_dark, false));
+            assert_ne!(style.background, Some(ACCENT_BLUE.into()));
+        }
     }
 
     #[test]
