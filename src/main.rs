@@ -967,6 +967,7 @@ pub struct NetrayApp {
     pub run_at_startup: bool,
     pub connect_at_startup: bool,
     pub auto_reconnect: bool,
+    pub notify_connection_drops: bool,
     pub user_stopped: bool,
     pub reconnect_attempts: u32,
     pub consecutive_errors: u32,
@@ -1226,6 +1227,7 @@ impl NetrayApp {
             run_at_startup: saved.run_at_startup,
             connect_at_startup: saved.connect_at_startup,
             auto_reconnect: saved.auto_reconnect,
+            notify_connection_drops: saved.notify_connection_drops,
             user_stopped: false,
             reconnect_attempts: 0,
             consecutive_errors: 0,
@@ -1406,6 +1408,7 @@ impl NetrayApp {
             run_at_startup: self.run_at_startup,
             connect_at_startup: self.connect_at_startup,
             auto_reconnect: self.auto_reconnect,
+            notify_connection_drops: self.notify_connection_drops,
             auto_check_updates: self.auto_check_updates,
         };
         storage::save_state_ref(&app_ref)
