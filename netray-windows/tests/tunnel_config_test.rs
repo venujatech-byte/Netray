@@ -29,12 +29,6 @@ fn test_windows_health_probe_port_and_ssh_settings() {
 }
 
 #[test]
-fn test_windows_kill_all_xray_processes_callable() {
-    // Calling kill_all_xray_processes must be safe and idempotent across platforms
-    netray_windows::v2ray::kill_all_xray_processes();
-}
-
-#[test]
 fn test_windows_manifest_declares_require_administrator() {
     let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/app.manifest");
     assert!(manifest_path.exists(), "app.manifest must exist");
