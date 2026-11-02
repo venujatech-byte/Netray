@@ -932,8 +932,6 @@ pub struct NetrayApp {
     pub is_running: bool,
     pub connected_at: Option<Instant>,
     pub ping_ms: Option<u128>,
-    pub health_check_in_progress: bool,
-    pub health_check_consecutive_failures: u32,
     pub tunnel_mode: TunnelMode,
 
     // Payload & SNI State
@@ -970,7 +968,6 @@ pub struct NetrayApp {
     pub notify_connection_drops: bool,
     pub user_stopped: bool,
     pub reconnect_attempts: u32,
-    pub consecutive_errors: u32,
     pub error_notification: Option<ErrorNotification>,
     pub startup_connect_prompt: bool,
     pub qr_scan_modal: QrScanModalState,
@@ -1028,8 +1025,6 @@ pub enum Message {
     PingProfile(String),
     PingProfileIndex(usize),
     PingFinished(String, Result<u128, String>),
-    PeriodicHealthCheckTick,
-    PeriodicHealthCheckFinished(Result<u128, String>),
     EditProfile(String),
     EditProfileIndex(usize),
     DeleteProfile(String),
@@ -1093,7 +1088,6 @@ pub enum Message {
     ToggleConnectAtStartup(bool),
     DismissStartupConnectPrompt,
     ConfirmStartupConnectPrompt,
-    TriggerErrorAutoReconnect(String),
     ReconnectCountdownTick,
     ExecuteAutoReconnect,
     CancelAutoReconnect,
@@ -1196,8 +1190,6 @@ impl NetrayApp {
             is_running: false,
             connected_at: None,
             ping_ms: None,
-            health_check_in_progress: false,
-            health_check_consecutive_failures: 0,
             tunnel_mode,
 
             payload_text: saved.payload_text,
@@ -1231,7 +1223,6 @@ impl NetrayApp {
             notify_connection_drops: saved.notify_connection_drops,
             user_stopped: false,
             reconnect_attempts: 0,
-            consecutive_errors: 0,
             error_notification: None,
             startup_connect_prompt: saved.connect_at_startup && has_profiles,
             qr_scan_modal: QrScanModalState::default(),
@@ -1427,7 +1418,7 @@ impl NetrayApp {
     }
 
     fn handle_detected_error(&mut self, err_msg: &str) -> Task<Message> {
-        if self.user_stopped {
+        if self.user_stopped || self.worker_active {
             return Task::none();
         }
         if let Some(notif) = &self.error_notification {
@@ -1443,7 +1434,6 @@ impl NetrayApp {
 
         // Transition status from Connected to Connecting when error occurs
         self.is_running = false;
-        self.worker_active = true;
         self.refresh_status_badge();
 
         let title = "Tunnel Connection Error".to_string();
@@ -1451,7 +1441,7 @@ impl NetrayApp {
         if self.notify_connection_drops {
             notifications::send_desktop_notification(
                 &title,
-                &format!("Error: {}. Attempting auto-reconnect ({}/{})", display_err, attempt, MAX_RECONNECT_ATTEMPTS),
+                &format!("Tunnel stopped: {}", display_err),
                 notifications::NotificationUrgency::Normal,
             );
         }
@@ -1492,6 +1482,7 @@ impl NetrayApp {
             self.push_log("Supervisor", reason, LogLevel::Error);
         }
 
+        self.refresh_status_badge();
         Task::none()
     }
 
@@ -1733,95 +1724,6 @@ impl NetrayApp {
                     self.push_log("Ping", log, level);
                 }
                 Task::none()
-            }
-            Message::PeriodicHealthCheckTick => {
-                if self.user_stopped
-                    || self.health_check_in_progress
-                    || (!self.is_running && !self.worker_active)
-                {
-                    Task::none()
-                } else {
-                    self.health_check_in_progress = true;
-                    if self.tunnel_mode == TunnelMode::V2RayXray {
-                        let port = self
-                            .local_socks_port
-                            .parse::<u16>()
-                            .unwrap_or(10808)
-                            .saturating_add(1);
-                        Task::perform(
-                            async move { v2ray::ping_local_http_proxy(port).await },
-                            Message::PeriodicHealthCheckFinished,
-                        )
-                    } else {
-                        let target = format!("{}:{}", self.ssh_host, self.ssh_port);
-                        Task::perform(
-                            async move {
-                                let start = Instant::now();
-                                tokio::time::timeout(
-                                    Duration::from_secs(5),
-                                    tokio::net::TcpStream::connect(&target),
-                                )
-                                .await
-                                .map_err(|_| "SSH server connection timed out".to_string())?
-                                .map_err(|e| format!("SSH server unreachable: {e}"))?;
-                                Ok(start.elapsed().as_millis())
-                            },
-                            Message::PeriodicHealthCheckFinished,
-                        )
-                    }
-                }
-            }
-            Message::PeriodicHealthCheckFinished(result) => {
-                self.health_check_in_progress = false;
-                if self.user_stopped {
-                    Task::none()
-                } else {
-                    match result {
-                        Ok(ms) => {
-                            self.ping_ms = Some(ms);
-                            self.health_check_consecutive_failures = 0;
-                            self.consecutive_errors = 0;
-                            self.reconnect_attempts = 0;
-                            let was_reconnecting = self
-                                .error_notification
-                                .as_ref()
-                                .map_or(false, |n| n.is_reconnecting);
-                            self.error_notification = None;
-                            if !self.is_running && self.worker_active {
-                                self.is_running = true;
-                                if self.connected_at.is_none() {
-                                    self.connected_at = Some(Instant::now());
-                                }
-                                if was_reconnecting && self.notify_connection_drops {
-                                    notifications::send_desktop_notification(
-                                        "Netray Connected",
-                                        "V2Ray server connection re-established.",
-                                        notifications::NotificationUrgency::Normal,
-                                    );
-                                }
-                            }
-                            self.refresh_status_badge();
-                            Task::none()
-                        }
-                        Err(err) => {
-                            if self.is_running {
-                                self.health_check_consecutive_failures =
-                                    self.health_check_consecutive_failures.saturating_add(1);
-                                self.push_log(
-                                    "HealthCheck",
-                                    format!(
-                                        "Periodic server ping test failed (failure {}): {}",
-                                        self.health_check_consecutive_failures, err
-                                    ),
-                                    LogLevel::Warn,
-                                );
-                                self.handle_detected_error(&format!("Server connection dropped: {err}"))
-                            } else {
-                                Task::none()
-                            }
-                        }
-                    }
-                }
             }
             Message::ShareProfile(id) => {
                 if let Some(p) = self.v2ray_profiles.iter().find(|p| p.id == id).cloned() {
@@ -2486,12 +2388,11 @@ impl NetrayApp {
                     .and_then(|value| value.parse::<u128>().ok());
                 let ssh_ready =
                     entry.source == "SSH" && entry.message == "SSH Authenticated successfully!";
-                if (ready_ping.is_some() || ssh_ready) && self.worker_active {
+                if (ready_ping.is_some() || ssh_ready) && self.worker_active && !self.user_stopped {
                     self.is_running = true;
                     self.connected_at = Some(Instant::now());
                     self.ping_ms = ready_ping;
                     self.reconnect_attempts = 0;
-                    self.consecutive_errors = 0;
                     if let Some(notif) = &self.error_notification {
                         if notif.is_reconnecting && self.notify_connection_drops {
                             notifications::send_desktop_notification(
@@ -2505,7 +2406,7 @@ impl NetrayApp {
                     self.refresh_status_badge();
                 }
                 let stopped = entry.source == "Supervisor" && entry.message.contains("offline");
-                let was_running = self.is_running;
+                let was_active = self.worker_active;
                 if stopped || (entry.source == "Error" && entry.message.contains("Engine failed")) {
                     self.is_running = false;
                     self.connected_at = None;
@@ -2519,44 +2420,11 @@ impl NetrayApp {
                     self.refresh_status_badge();
                 }
 
-                let is_healthy_event = (entry.source == "Supervisor" && entry.message.contains("Tunnel ready"))
-                    || entry.message.contains("HTTP 204 through proxy")
-                    || entry.message.contains("got answer")
-                    || (entry.source == "DNS" && entry.message.contains("resolved"))
-                    || entry.level == LogLevel::Success;
-
-                if is_healthy_event {
-                    self.consecutive_errors = 0;
-                    if !self.is_running && self.worker_active {
-                        self.is_running = true;
-                        if self.connected_at.is_none() {
-                            self.connected_at = Some(Instant::now());
-                        }
-                        self.reconnect_attempts = 0;
-                        self.error_notification = None;
-                        self.refresh_status_badge();
+                // Per-request DNS/HTTP errors do not mean the core has stopped.
+                let auto_task = if stopped && was_active && !self.user_stopped {
+                    if let Some(notif) = &mut self.error_notification {
+                        notif.is_reconnecting = false;
                     }
-                }
-
-                let unexpected_stop = stopped && !self.user_stopped && was_running;
-                let is_crash = entry.message.contains("Core process exited with:");
-                let is_conn_fail = entry.message.contains("Connection check failed");
-                let is_log_error = entry.level == LogLevel::Error || entry.source == "Error";
-
-                let should_reconnect = if unexpected_stop || is_crash {
-                    self.consecutive_errors = 3;
-                    true
-                } else if is_conn_fail {
-                    self.consecutive_errors = self.consecutive_errors.saturating_add(1);
-                    self.consecutive_errors >= 2
-                } else if is_log_error {
-                    self.consecutive_errors = self.consecutive_errors.saturating_add(1);
-                    self.consecutive_errors >= 3
-                } else {
-                    false
-                };
-
-                let auto_task = if should_reconnect && !self.user_stopped {
                     self.handle_detected_error(&entry.message)
                 } else {
                     Task::none()
@@ -2724,10 +2592,16 @@ impl NetrayApp {
             }
             Message::ToggleAutoReconnect(enabled) => {
                 self.auto_reconnect = enabled;
+                if !enabled {
+                    if let Some(notif) = &mut self.error_notification {
+                        notif.countdown_secs = None;
+                    }
+                    self.refresh_status_badge();
+                }
                 let msg = if enabled {
-                    "Automatic reconnect on error enabled."
+                    "Automatic restart after tunnel exit enabled."
                 } else {
-                    "Automatic reconnect on error disabled."
+                    "Automatic restart after tunnel exit disabled."
                 };
                 self.push_log("Supervisor", msg, LogLevel::Info);
                 let _ = self.save_current_state();
@@ -2747,109 +2621,29 @@ impl NetrayApp {
                 let _ = self.save_current_state();
                 Task::none()
             }
-            Message::TriggerErrorAutoReconnect(err) => self.handle_detected_error(&err),
             Message::ReconnectCountdownTick => {
                 if let Some(notif) = &mut self.error_notification {
                     if let Some(secs) = notif.countdown_secs {
                         if secs > 1 {
                             notif.countdown_secs = Some(secs - 1);
-                            Task::none()
-                        } else {
-                            notif.countdown_secs = None;
-                            notif.is_reconnecting = true;
-                            self.push_log(
-                                "Supervisor",
-                                "Automatic reconnect countdown elapsed; re-establishing V2Ray server connection...",
-                                LogLevel::Info,
-                            );
-                            self.user_stopped = false;
-                            if self.worker_active && self.stop_signal.is_some() {
-                                if self.tunnel_mode == TunnelMode::V2RayXray {
-                                    let port = self
-                                        .local_socks_port
-                                        .parse::<u16>()
-                                        .unwrap_or(10808)
-                                        .saturating_add(1);
-                                    Task::perform(
-                                        async move { v2ray::ping_local_http_proxy(port).await },
-                                        Message::PeriodicHealthCheckFinished,
-                                    )
-                                } else {
-                                    let target = format!("{}:{}", self.ssh_host, self.ssh_port);
-                                    Task::perform(
-                                        async move {
-                                            let start = std::time::Instant::now();
-                                            tokio::time::timeout(
-                                                std::time::Duration::from_secs(5),
-                                                tokio::net::TcpStream::connect(&target),
-                                            )
-                                            .await
-                                            .map_err(|_| "SSH server connection timed out".to_string())?
-                                            .map_err(|e| format!("SSH server unreachable: {e}"))?;
-                                            Ok(start.elapsed().as_millis())
-                                        },
-                                        Message::PeriodicHealthCheckFinished,
-                                    )
-                                }
-                            } else {
-                                if let Some(stop) = self.stop_signal.take() {
-                                    let _ = stop.send(());
-                                }
-                                self.worker_active = false;
-                                self.is_running = false;
-                                self.update_message(Message::ToggleTunnel)
-                            }
+                            self.refresh_status_badge();
+                            return Task::none();
                         }
-                    } else {
-                        Task::none()
+                        return self.update_message(Message::ExecuteAutoReconnect);
                     }
-                } else {
-                    Task::none()
                 }
+                Task::none()
             }
             Message::ExecuteAutoReconnect => {
+                // Never replace a live worker: Xray retries outbound connections itself.
+                if self.worker_active || self.user_stopped {
+                    return Task::none();
+                }
                 if let Some(notif) = &mut self.error_notification {
                     notif.countdown_secs = None;
                     notif.is_reconnecting = true;
                 }
-                self.push_log("Supervisor", "Reconnect triggered by user; re-establishing V2Ray server connection...", LogLevel::Info);
-                self.user_stopped = false;
-                if self.worker_active && self.stop_signal.is_some() {
-                    if self.tunnel_mode == TunnelMode::V2RayXray {
-                        let port = self
-                            .local_socks_port
-                            .parse::<u16>()
-                            .unwrap_or(10808)
-                            .saturating_add(1);
-                        Task::perform(
-                            async move { v2ray::ping_local_http_proxy(port).await },
-                            Message::PeriodicHealthCheckFinished,
-                        )
-                    } else {
-                        let target = format!("{}:{}", self.ssh_host, self.ssh_port);
-                        Task::perform(
-                            async move {
-                                let start = std::time::Instant::now();
-                                tokio::time::timeout(
-                                    std::time::Duration::from_secs(5),
-                                    tokio::net::TcpStream::connect(&target),
-                                )
-                                .await
-                                .map_err(|_| "SSH server connection timed out".to_string())?
-                                .map_err(|e| format!("SSH server unreachable: {e}"))?;
-                                Ok(start.elapsed().as_millis())
-                            },
-                            Message::PeriodicHealthCheckFinished,
-                        )
-                    }
-                } else {
-                    if let Some(stop) = self.stop_signal.take() {
-                        let _ = stop.send(());
-                    }
-                    self.worker_active = false;
-                    self.is_running = false;
-                    self.update_message(Message::ToggleTunnel)
-                }
+                self.update_message(Message::ToggleTunnel)
             }
             Message::CancelAutoReconnect => {
                 self.error_notification = None;
@@ -2996,8 +2790,6 @@ impl NetrayApp {
                     self.user_stopped = true;
                     self.error_notification = None;
                     self.reconnect_attempts = 0;
-                    self.health_check_in_progress = false;
-                    self.health_check_consecutive_failures = 0;
                     self.is_running = false;
                     self.connected_at = None;
                     self.ping_ms = None;
@@ -3220,11 +3012,6 @@ impl NetrayApp {
         if !self.hidden_to_tray && self.is_running && self.view_mode == ViewMode::Profiles {
             subscriptions
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick));
-        }
-        if (self.is_running || self.worker_active) && !self.user_stopped {
-            subscriptions.push(
-                iced::time::every(Duration::from_secs(10)).map(|_| Message::PeriodicHealthCheckTick),
-            );
         }
         if let Some(notif) = &self.error_notification {
             if notif.countdown_secs.is_some() {
@@ -5628,14 +5415,14 @@ impl NetrayApp {
                 Space::with_height(6),
                 row![
                     toggler(self.auto_reconnect)
-                        .label("Automatic reconnect on error")
+                        .label("Automatic restart after tunnel exit")
                         .size(18)
                         .on_toggle(Message::ToggleAutoReconnect),
                 ]
                 .align_y(Alignment::Center),
                 Space::with_height(2),
                 text(if self.auto_reconnect {
-                    "Auto-detects dropped connections and reconnects automatically."
+                    "Restarts an exited tunnel. Network request failures keep it running."
                 } else {
                     "Automatic reconnect disabled."
                 })
@@ -6307,15 +6094,15 @@ mod performance_tests {
             |app: &NetrayApp| iced::advanced::subscription::into_recipes(app.subscription()).len();
         assert_eq!(subscriptions(&app), 3);
         app.is_running = true;
-        assert_eq!(subscriptions(&app), 5);
+        assert_eq!(subscriptions(&app), 4);
         for view in [ViewMode::Logs, ViewMode::EditNode, ViewMode::SshSettings] {
             app.view_mode = view;
-            assert_eq!(subscriptions(&app), 4);
+            assert_eq!(subscriptions(&app), 3);
         }
         app.view_mode = ViewMode::Profiles;
-        assert_eq!(subscriptions(&app), 5);
-        app.hidden_to_tray = true;
         assert_eq!(subscriptions(&app), 4);
+        app.hidden_to_tray = true;
+        assert_eq!(subscriptions(&app), 3);
         app.hidden_to_tray = false;
         app.is_running = false;
         assert_eq!(subscriptions(&app), 3);
@@ -6672,161 +6459,60 @@ mod performance_tests {
     }
 
     #[test]
-    fn test_auto_reconnect_error_lifecycle_and_actions() {
-        let mut data = storage::AppData::default();
-        data.auto_reconnect = true;
-        let (mut app, _) = NetrayApp::from_saved(data);
-        let window_id = iced::window::Id::unique();
-
-        assert!(app.auto_reconnect);
-        assert_eq!(app.reconnect_attempts, 0);
-        assert!(app.error_notification.is_none());
-        assert!(!app.user_stopped);
-
-        // 1. Simulate active tunnel
-        app.is_running = true;
-        app.worker_active = true;
-
-        // 2. Unexpected error arrival in logs triggers auto-reconnect
-        let _ = app.update(Message::NewLog(LogEntry::new(
-            "Error",
-            "Connection check failed: Latency endpoint returned HTTP 503",
-            LogLevel::Error,
-        )));
-        let _ = app.update(Message::NewLog(LogEntry::new(
-            "Supervisor",
-            "Tunnel is offline.",
-            LogLevel::Warn,
-        )));
-
-        assert_eq!(app.reconnect_attempts, 1);
-        assert!(!app.is_running);
-        assert!(app.status_badge_text.contains("CONNECTING"));
-        let notif = app.error_notification.as_ref().expect("Notification toast should be present");
-        assert_eq!(notif.attempt, 1);
-        assert_eq!(notif.max_attempts, MAX_RECONNECT_ATTEMPTS);
-        assert_eq!(notif.countdown_secs, Some(RECONNECT_COUNTDOWN_SECONDS));
-        assert!(!notif.is_reconnecting);
-
-        // 3. Verify view renders toast banner without error
-        drop(app.view(window_id));
-
-        // 4. Tick countdown: 3 -> 2 -> 1
-        let _ = app.update(Message::ReconnectCountdownTick);
-        assert_eq!(app.error_notification.as_ref().unwrap().countdown_secs, Some(2));
-        let _ = app.update(Message::ReconnectCountdownTick);
-        assert_eq!(app.error_notification.as_ref().unwrap().countdown_secs, Some(1));
-
-        // 5. Final tick reaches zero: triggers reconnection
-        let _ = app.update(Message::ReconnectCountdownTick);
-        let notif = app.error_notification.as_ref().unwrap();
-        assert_eq!(notif.countdown_secs, None);
-        assert!(notif.is_reconnecting);
-        assert!(app.worker_active);
-        drop(app.view(window_id));
-
-        // 6. Successful connection clears notification and resets attempt counter
-        let _ = app.update(Message::NewLog(LogEntry::new(
-            "Supervisor",
-            "Tunnel ready · HTTP 204 through proxy in 64 ms.",
-            LogLevel::Success,
-        )));
-        assert!(app.is_running);
-        assert_eq!(app.reconnect_attempts, 0);
-        assert!(app.error_notification.is_none());
-
-        // 7. Manual cancel stops auto-reconnect and marks user_stopped = true
-        app.is_running = false;
-        let _ = app.update(Message::TriggerErrorAutoReconnect("Process crashed".into()));
-        assert!(app.error_notification.is_some());
-        let _ = app.update(Message::CancelAutoReconnect);
-        assert!(app.error_notification.is_none());
-        assert_eq!(app.reconnect_attempts, 0);
-        assert!(app.user_stopped);
-
-        // 8. While user_stopped is true, incoming errors must NOT trigger auto-reconnect
-        let _ = app.update(Message::NewLog(LogEntry::new(
-            "Error",
-            "Core process exited with: 1",
-            LogLevel::Error,
-        )));
-        assert!(app.error_notification.is_none());
-        assert_eq!(app.reconnect_attempts, 0);
-
-        // 9. Manual start / retry resets user_stopped
-        app.user_stopped = false;
-        let _ = app.update(Message::TriggerErrorAutoReconnect("Timeout error".into()));
-        assert!(app.error_notification.is_some());
-        let _ = app.update(Message::ExecuteAutoReconnect);
-        assert!(app.error_notification.as_ref().unwrap().is_reconnecting);
+    fn retry_limits_and_notification_preferences_remain_independent() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.notify_connection_drops = false;
+        app.reconnect_attempts = MAX_RECONNECT_ATTEMPTS;
+        let _ = app.handle_detected_error("core exited");
+        assert!(!app.worker_active);
         assert_eq!(app.error_notification.as_ref().unwrap().countdown_secs, None);
-
-        // 10. Dismiss notification
-        let _ = app.update(Message::DismissNotification);
-        assert!(app.error_notification.is_none());
-
-        // 11. Intentional user disconnect does NOT trigger auto-reconnect
-        app.is_running = true;
-        app.worker_active = true;
-        let _ = app.update(Message::ToggleTunnel); // User stops tunnel
-        assert!(!app.is_running);
-        assert!(app.user_stopped);
-        assert!(app.error_notification.is_none());
-
-        // 12. ToggleAutoReconnect setting persistence
-        let _ = app.update(Message::ToggleAutoReconnect(false));
-        assert!(!app.auto_reconnect);
-        let _ = app.update(Message::ToggleAutoReconnect(true));
-        assert!(app.auto_reconnect);
-        let _ = app.update(Message::ToggleConnectionDropNotifications(false));
-        assert!(!app.notify_connection_drops);
-        let _ = app.update(Message::ToggleConnectionDropNotifications(true));
+        app.reconnect_attempts = 0;
+        app.error_notification = None;
+        let _ = app.handle_detected_error("core exited");
+        assert!(app.error_notification.as_ref().unwrap().countdown_secs.is_some());
+        let _ = app.update_message(Message::ToggleAutoReconnect(false));
+        assert_eq!(app.error_notification.as_ref().unwrap().countdown_secs, None);
+        let _ = app.update_message(Message::ReconnectCountdownTick);
+        assert!(!app.worker_active);
+        let _ = app.update_message(Message::ToggleConnectionDropNotifications(true));
         assert!(app.notify_connection_drops);
+        assert!(!app.auto_reconnect);
+        let _ = app.update_message(Message::ToggleConnectionDropNotifications(false));
+        assert!(!app.notify_connection_drops);
     }
 
     #[test]
-    fn test_transient_dns_error_does_not_reconnect_but_continuous_errors_reconnect() {
-        let mut data = storage::AppData::default();
-        data.auto_reconnect = true;
-        let (mut app, _) = NetrayApp::from_saved(data);
-
-        app.is_running = true;
+    fn only_worker_exit_triggers_recovery() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.notify_connection_drops = false;
         app.worker_active = true;
-        app.refresh_status_badge();
-        assert!(app.status_badge_text.contains("CONNECTED"));
-
-        // 1. A single DNS lookup timeout/empty response (transient error)
-        let _ = app.update(Message::NewLog(LogEntry::new(
-            "Xray",
-            "app/dns: failed to lookup ip for domain alive.github.com at server DOH//1.1.1.1 in serial query mode > features/dns: empty response",
-            LogLevel::Warn,
-        )));
-        // Should NOT trigger reconnect
-        assert_eq!(app.reconnect_attempts, 0);
-        assert!(app.error_notification.is_none());
-        assert!(app.is_running);
-
-        // 2. DNS query answered shortly after resets any error count
-        let _ = app.update(Message::NewLog(LogEntry::new(
-            "Xray",
-            "app/dns: DOH//1.1.1.1 got answer: alive.github.com. Type[140.82.113.26], rtt: 86.444767ms",
-            LogLevel::Info,
-        )));
-        assert_eq!(app.consecutive_errors, 0);
-        assert!(app.is_running);
-
-        // 3. Continuous errors (3 consecutive) trigger reconnect and change status to CONNECTING
-        for i in 1..=3 {
-            let _ = app.update(Message::NewLog(LogEntry::new(
-                "Error",
-                format!("Connection handshake timeout attempt {}", i),
-                LogLevel::Error,
-            )));
+        let _ = app.update_message(Message::NewLog(LogEntry::new("DNS", "resolved", LogLevel::Success)));
+        assert!(!app.is_running, "DNS success is not tunnel readiness");
+        let _ = app.update_message(Message::NewLog(LogEntry::new("Supervisor", "Tunnel ready · HTTP 204 through proxy in 64 ms.", LogLevel::Success)));
+        let connected_at = app.connected_at;
+        for _ in 0..10 {
+            let _ = app.update_message(Message::NewLog(LogEntry::new("Error", "Connection check failed: HTTP 503", LogLevel::Error)));
         }
+        assert!(app.is_running);
+        assert_eq!(app.connected_at, connected_at);
+        assert!(app.error_notification.is_none());
+        let _ = app.update_message(Message::ExecuteAutoReconnect);
+        assert!(app.is_running, "Retry must not replace a live worker");
+        let _ = app.update_message(Message::NewLog(LogEntry::new("Supervisor", "Tunnel is offline.", LogLevel::Warn)));
+        assert!(!app.worker_active);
         assert_eq!(app.reconnect_attempts, 1);
-        assert!(app.error_notification.is_some());
-        assert!(!app.is_running);
-        assert!(app.status_badge_text.contains("CONNECTING"));
+        assert_eq!(app.error_notification.as_ref().unwrap().countdown_secs, Some(RECONNECT_COUNTDOWN_SECONDS));
+        for _ in 0..RECONNECT_COUNTDOWN_SECONDS {
+            let _ = app.update_message(Message::ReconnectCountdownTick);
+        }
+        assert!(app.worker_active);
+        let _ = app.update_message(Message::ToggleTunnel);
+        assert!(app.user_stopped);
+        let _ = app.update_message(Message::NewLog(LogEntry::new("Supervisor", "Tunnel ready · HTTP 204 through proxy in 64 ms.", LogLevel::Success)));
+        assert!(!app.is_running, "Late readiness must not undo Disconnect");
+        let _ = app.update_message(Message::NewLog(LogEntry::new("Supervisor", "Tunnel is offline.", LogLevel::Warn)));
+        assert!(!app.worker_active);
+        assert!(app.error_notification.is_none());
     }
 
     #[test]
@@ -7031,58 +6717,6 @@ trojan://secretpass@server2.com:443?type=ws#NodeB
         let _ = app.update(Message::DeleteProfileIndex(0));
         app.sync_profile_display_cache();
         assert_eq!(app.profile_count_label, "9 profiles");
-    }
-
-    #[test]
-    fn test_periodic_health_check_success_and_dropout_reconnect() {
-        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
-        app.is_running = true;
-        app.connected_at = Some(Instant::now());
-
-        // 1. Successful ping probe updates ping_ms and resets failure counter
-        let _ = app.update(Message::PeriodicHealthCheckFinished(Ok(45)));
-        assert_eq!(app.ping_ms, Some(45));
-        assert_eq!(app.health_check_consecutive_failures, 0);
-        assert!(!app.health_check_in_progress);
-
-        // 2. Failed ping probe triggers error notification, reconnect countdown, and increments failure count
-        let _ = app.update(Message::PeriodicHealthCheckFinished(Err("Connection reset by peer".to_string())));
-        assert_eq!(app.health_check_consecutive_failures, 1);
-        assert!(!app.is_running);
-        assert!(app.worker_active);
-        assert!(app.error_notification.is_some());
-        let notif = app.error_notification.as_ref().unwrap();
-        assert_eq!(notif.attempt, 1);
-        assert_eq!(notif.countdown_secs, Some(RECONNECT_COUNTDOWN_SECONDS));
-
-        // 3. Subsequent successful ping probe restores is_running = true and transitions badge out of connecting
-        let _ = app.update(Message::PeriodicHealthCheckFinished(Ok(38)));
-        assert!(app.is_running);
-        assert_eq!(app.ping_ms, Some(38));
-        assert!(app.error_notification.is_none());
-        assert!(app.status_badge_text.contains("CONNECTED"));
-        assert!(!app.status_badge_text.contains("CONNECTING"));
-    }
-
-    #[test]
-    fn test_health_check_stops_when_user_stopped_and_max_reconnects() {
-        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
-        app.is_running = true;
-        app.user_stopped = true;
-
-        // When user explicitly stopped tunnel, periodic tick produces no task and doesn't set in_progress
-        let _ = app.update(Message::PeriodicHealthCheckTick);
-        assert!(!app.health_check_in_progress);
-
-        // When max reconnect attempts are exceeded, auto-reconnect countdown is not rescheduled
-        app.user_stopped = false;
-        app.is_running = true;
-        app.reconnect_attempts = MAX_RECONNECT_ATTEMPTS;
-        let _ = app.update(Message::PeriodicHealthCheckFinished(Err("Connection lost".to_string())));
-        assert_eq!(app.reconnect_attempts, MAX_RECONNECT_ATTEMPTS + 1);
-        assert!(app.error_notification.is_some());
-        let notif = app.error_notification.as_ref().unwrap();
-        assert_eq!(notif.countdown_secs, None);
     }
 
     #[test]
