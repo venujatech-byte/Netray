@@ -8,6 +8,9 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn set_run_at_startup(enable: bool) -> Result<(), String> {
+    if cfg!(test) {
+        return Ok(()); // UI tests must not modify desktop files or the user's Run registry.
+    }
     #[cfg(target_os = "linux")]
     {
         set_linux_autostart(enable)
