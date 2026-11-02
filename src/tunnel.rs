@@ -634,13 +634,16 @@ trap cleanup TERM INT HUP EXIT
 # Remove any standalone capabilities so Xray runs consistently under the elevated supervisor
 setcap -r "$xray_bin" 2>/dev/null || true
 
-"$xray_bin" run -c "$cfg" &
+# Preserve stdin before POSIX shells redirect background jobs to /dev/null.
+exec 3<&0
+"$xray_bin" run -c "$cfg" 3<&- &
 XRAY_PID=$!
 
 # Watch parent EOF without polling, while the supervisor waits for the actual core.
 supervisor_pid=$$
-(while read -r line; do :; done; kill -TERM "$supervisor_pid") <&0 &
+(while read -r line; do :; done; kill -TERM "$supervisor_pid") <&3 3<&- &
 WATCHER_PID=$!
+exec 3<&-
 wait "$XRAY_PID"
 status=$?
 # On a signal, cleanup still owns the live core; after natural exit it is reaped.
