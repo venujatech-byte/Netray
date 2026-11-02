@@ -10,6 +10,8 @@ pub mod qr_scanner;
 pub mod storage;
 pub mod sysproxy;
 pub mod theme;
+#[path = "../../src/tray_status.rs"]
+mod tray_status;
 mod tunnel;
 pub mod updater;
 pub mod v2ray;
@@ -757,6 +759,7 @@ impl Default for QrScanModalState {
 pub struct NetrayApp {
     pub view_mode: ViewMode,
     pub is_running: bool,
+    connection_error: bool,
     pub connected_at: Option<Instant>,
     pub ping_ms: Option<u128>,
     pub tunnel_mode: TunnelMode,
@@ -820,6 +823,7 @@ pub struct NetrayApp {
     pub log_sender: Option<mpsc::Sender<LogEntry>>,
     pub stop_signal: Option<tokio::sync::oneshot::Sender<()>>,
     close_confirmation: Option<iced::window::Id>,
+    delete_confirmation: Option<String>,
     window_id: Option<iced::window::Id>,
     hidden_to_tray: bool,
     exit_after_stop: bool,
@@ -843,6 +847,8 @@ pub enum Message {
     EditProfile(String),
     EditProfileIndex(usize),
     DeleteProfile(String),
+    ConfirmDeleteProfile,
+    CancelDeleteProfile,
     DeleteProfileIndex(usize),
     ShareProfile(String),
     ShareProfileIndex(usize),
@@ -985,6 +991,7 @@ impl NetrayApp {
         let app = Self {
             view_mode: ViewMode::Profiles,
             is_running: false,
+            connection_error: false,
             connected_at: None,
             ping_ms: None,
             tunnel_mode,
@@ -1052,6 +1059,7 @@ impl NetrayApp {
             log_sender: None,
             stop_signal: None,
             close_confirmation: None,
+            delete_confirmation: None,
             window_id: None,
             hidden_to_tray: false,
             exit_after_stop: false,
@@ -1274,7 +1282,19 @@ impl NetrayApp {
                 | Message::SetViewMode(ViewMode::Logs)
                 | Message::AutoScrollLogs(true)
         );
+        let previous_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
+        let tray_opened = matches!(message, Message::WindowOpened(_));
         let task = self.update_message(message);
+        let current_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
+        if tray_opened || previous_tray != current_tray {
+            if let Some(tray) = &self.tray_icon {
+                let result = current_tray.icon().and_then(|icon| tray.set_icon(Some(icon)).map_err(|e| e.to_string()));
+                if let Err(error) = result {
+                    self.push_log("Tray", format!("Could not update status icon: {error}"), LogLevel::Warn);
+                }
+            }
+        }
+
         if scroll && self.auto_scroll_logs && self.view_mode == ViewMode::Logs {
             task.chain(scrollable::snap_to(
                 scrollable::Id::new("logs"),
@@ -1294,6 +1314,7 @@ impl NetrayApp {
                     | Message::SelectProfileIndex(_)
                     | Message::EditProfile(_)
                     | Message::EditProfileIndex(_)
+                    | Message::ConfirmDeleteProfile
                     | Message::DeleteProfile(_)
                     | Message::DeleteProfileIndex(_)
                     | Message::AddNewProfile
@@ -1482,6 +1503,7 @@ impl NetrayApp {
                                 || self.v2ray_uri_or_json == profile.config
                         });
                     if active && self.is_running {
+                        self.connection_error = ping_latency.is_none();
                         self.ping_ms = ping_latency;
                     }
                     self.ping_results.insert(id, display);
@@ -1852,6 +1874,16 @@ impl NetrayApp {
                 Task::none()
             }
             Message::DeleteProfile(id) => {
+                self.delete_confirmation = self.v2ray_profiles.iter()
+                    .find(|profile| profile.id == id).map(|profile| profile.id.clone());
+                Task::none()
+            }
+            Message::CancelDeleteProfile => {
+                self.delete_confirmation = None;
+                Task::none()
+            }
+            Message::ConfirmDeleteProfile => {
+                let Some(id) = self.delete_confirmation.take() else { return Task::none(); };
                 self.v2ray_profiles.retain(|p| p.id != id);
                 self.profile_display_cache.remove(&id);
                 self.ping_results.remove(&id);
@@ -1860,10 +1892,10 @@ impl NetrayApp {
                 }
                 if self.active_profile_id.as_deref() == Some(&id) {
                     self.active_profile_id = self.v2ray_profiles.first().map(|p| p.id.clone());
-                    if let Some(first) = self.v2ray_profiles.first() {
-                        self.v2ray_uri_or_json = first.config.clone();
-                    }
+                    self.v2ray_uri_or_json = self.v2ray_profiles.first()
+                        .map(|profile| profile.config.clone()).unwrap_or_default();
                 }
+                self.profile_count_label = format!("{} profiles", self.v2ray_profiles.len());
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -2003,6 +2035,12 @@ impl NetrayApp {
                 Task::none()
             }
             Message::NewLog(entry) => {
+                if self.worker_active && !self.user_stopped
+                    && ((entry.level == LogLevel::Error && matches!(entry.source.as_str(), "Xray" | "Error" | "DNS"))
+                        || (entry.source == "Supervisor" && entry.message.starts_with("Connection not yet verified:")))
+                {
+                    self.connection_error = true;
+                }
                 let ready_ping = (entry.source == "Supervisor")
                     .then(|| {
                         entry
@@ -2016,6 +2054,7 @@ impl NetrayApp {
                     entry.source == "SSH" && entry.message == "SSH Authenticated successfully!";
                 if (ready_ping.is_some() || ssh_ready) && self.worker_active && !self.user_stopped {
                     self.is_running = true;
+                    self.connection_error = false;
                     self.connected_at = Some(Instant::now());
                     self.ping_ms = ready_ping;
                     self.reconnect_attempts = 0;
@@ -2033,6 +2072,9 @@ impl NetrayApp {
                 }
                 let stopped = entry.source == "Supervisor" && entry.message.contains("offline");
                 let was_active = self.worker_active;
+                if stopped && was_active && !self.user_stopped {
+                    self.connection_error = true;
+                }
                 if stopped || (entry.source == "Error" && entry.message.contains("Engine failed")) {
                     self.is_running = false;
                     self.connected_at = None;
@@ -2499,6 +2541,8 @@ impl NetrayApp {
                 Task::none()
             }
             Message::ToggleTunnel => {
+                self.delete_confirmation = None;
+                self.connection_error = false;
                 if self.worker_active && !self.is_running {
                     if let Some(stop) = self.stop_signal.take() {
                         let _ = stop.send(());
@@ -2819,6 +2863,33 @@ impl NetrayApp {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+        } else {
+            base_content
+        };
+
+        let base_content = if let Some(id) = &self.delete_confirmation {
+            let name = self.v2ray_profiles.iter().find(|profile| &profile.id == id)
+                .map(|profile| profile.name.as_str()).unwrap_or("this profile");
+            let dialog = container(
+                column![
+                    text("Delete V2Ray profile?").size(20),
+                    text(format!("Delete “{name}”? This cannot be undone.")).size(14),
+                    row![
+                        button("Cancel").on_press(Message::CancelDeleteProfile),
+                        button("Delete").style(button::danger).on_press(Message::ConfirmDeleteProfile),
+                    ].spacing(10),
+                ].spacing(16).padding(20),
+            ).style(form_card_style).width(Length::Fixed(340.0));
+            iced::widget::stack![
+                base_content,
+                iced::widget::opaque(container(dialog)
+                    .width(Length::Fill).height(Length::Fill)
+                    .center_x(Length::Fill).center_y(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.62).into()),
+                        ..Default::default()
+                    })),
+            ].width(Length::Fill).height(Length::Fill).into()
         } else {
             base_content
         };
@@ -5652,6 +5723,7 @@ mod performance_tests {
 
         // 3. Delete profile and verify cache cleans up
         let _ = app.update_message(Message::DeleteProfile(created_id.clone()));
+        let _ = app.update_message(Message::ConfirmDeleteProfile);
         assert!(!app.profile_display_cache.contains_key(&created_id));
 
         // 4. Verify whitelist chips cache updates without re-parsing during view
@@ -5738,6 +5810,29 @@ mod performance_tests {
     }
 
     #[test]
+    fn profile_deletion_requires_confirmation_and_respects_lock() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        let id = app.v2ray_profiles[0].id.clone();
+        let count = app.v2ray_profiles.len();
+        let _ = app.update_message(Message::DeleteProfile(id.clone()));
+        assert_eq!(app.v2ray_profiles.len(), count);
+        assert_eq!(app.delete_confirmation.as_ref(), Some(&id));
+        let _ = app.update_message(Message::CancelDeleteProfile);
+        let _ = app.update_message(Message::ConfirmDeleteProfile);
+        assert_eq!(app.v2ray_profiles.len(), count);
+        let _ = app.update_message(Message::DeleteProfile(id.clone()));
+        app.worker_active = true;
+        let _ = app.update_message(Message::ConfirmDeleteProfile);
+        assert_eq!(app.v2ray_profiles.len(), count);
+        app.worker_active = false;
+        let _ = app.update_message(Message::ConfirmDeleteProfile);
+        assert!(!app.v2ray_profiles.iter().any(|profile| profile.id == id));
+        assert!(app.delete_confirmation.is_none());
+        assert!(app.v2ray_uri_or_json.is_empty());
+        assert!(storage::load_data().v2ray_profiles.is_empty());
+    }
+
+    #[test]
     fn only_worker_exit_triggers_recovery() {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
         app.notify_connection_drops = false;
@@ -5750,6 +5845,7 @@ mod performance_tests {
             let _ = app.update_message(Message::NewLog(LogEntry::new("Error", "Connection check failed: HTTP 503", LogLevel::Error)));
         }
         assert!(app.is_running);
+        assert!(app.connection_error);
         assert_eq!(app.connected_at, connected_at);
         assert!(app.error_notification.is_none());
         let _ = app.update_message(Message::ExecuteAutoReconnect);
@@ -5966,6 +6062,7 @@ trojan://secretpass@server2.com:443?type=ws#WinNodeB
         // 4. Test index-based deletion (when tunnel is stopped / config unlocked)
         app.is_running = false;
         let _ = app.update_message(Message::DeleteProfileIndex(0));
+        let _ = app.update_message(Message::ConfirmDeleteProfile);
         app.sync_profile_display_cache();
         assert_eq!(app.profile_count_label, "9 profiles");
     }
