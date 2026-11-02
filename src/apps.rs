@@ -126,7 +126,7 @@ pub fn discover_installed_linux_apps() -> Vec<AppPreset> {
     }
 
     // Sort alphabetically by label
-    apps.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    apps.sort_by_cached_key(|app| app.label.to_lowercase());
     // Cap at 40 presets to avoid pick_list shaper overhead on scroll
     apps.truncate(40);
     apps
