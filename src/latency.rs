@@ -131,15 +131,21 @@ async fn response_latency(mut stream: TcpStream) -> Result<u128, String> {
     let started = Instant::now();
     stream.write_all(b"GET http://www.gstatic.com/generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
         .await.map_err(|e| e.to_string())?;
-    let mut header = Vec::with_capacity(128);
+    let mut header = Vec::with_capacity(512);
+    let mut buffer = [0; 512];
     while header.len() < 8192 {
-        let byte = stream
-            .read_u8()
-            .await
+        let remaining = buffer.len().min(8192 - header.len());
+        let count = stream.read(&mut buffer[..remaining]).await
             .map_err(|e| format!("No complete proxy response: {e}"))?;
-        header.push(byte);
-        if header.ends_with(b"\r\n\r\n") {
-            let status = std::str::from_utf8(&header)
+        if count == 0 {
+            return Err("No complete proxy response: unexpected EOF".into());
+        }
+        // Only rescan the boundary and new bytes, including split CRLF sequences.
+        let start = header.len().saturating_sub(3);
+        header.extend_from_slice(&buffer[..count]);
+        if let Some(end) = header[start..].windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+            let header = &header[..start + end + 4];
+            let status = std::str::from_utf8(header)
                 .ok()
                 .and_then(|s| s.lines().next())
                 .and_then(|line| line.split_whitespace().nth(1));
@@ -220,6 +226,31 @@ mod tests {
             assert!(response_latency(stream).await.unwrap() >= 50);
         }
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn headers_handle_fragmentation_eof_and_size_limit() {
+        for response in [
+            b"HTTP/1.1 204 No Content\r\n\r\n".to_vec(),
+            b"HTTP/1.1 204 No Content\r\n".to_vec(),
+            vec![b'x'; 8192],
+        ] {
+            let complete = response.ends_with(b"\r\n\r\n");
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 512];
+                stream.read(&mut request).await.unwrap();
+                for chunk in response.chunks(3) {
+                    stream.write_all(chunk).await.unwrap();
+                    tokio::task::yield_now().await;
+                }
+            });
+            let result = response_latency(TcpStream::connect(address).await.unwrap()).await;
+            assert_eq!(result.is_ok(), complete);
+            server.await.unwrap();
+        }
     }
 
     #[tokio::test]
