@@ -1241,11 +1241,13 @@ impl NetrayApp {
 
         let title = "Tunnel Connection Error".to_string();
 
-        notifications::send_desktop_notification(
-            &title,
-            &format!("Error: {}. Attempting auto-reconnect ({}/{})", display_err, attempt, MAX_RECONNECT_ATTEMPTS),
-            notifications::NotificationUrgency::Normal,
-        );
+        if self.notify_connection_drops {
+            notifications::send_desktop_notification(
+                &title,
+                &format!("Error: {}. Attempting auto-reconnect ({}/{})", display_err, attempt, MAX_RECONNECT_ATTEMPTS),
+                notifications::NotificationUrgency::Normal,
+            );
+        }
 
         if self.auto_reconnect && attempt <= MAX_RECONNECT_ATTEMPTS {
             self.error_notification = Some(ErrorNotification {
