@@ -1792,7 +1792,7 @@ impl NetrayApp {
                                 if self.connected_at.is_none() {
                                     self.connected_at = Some(Instant::now());
                                 }
-                                if was_reconnecting {
+                                if was_reconnecting && self.notify_connection_drops {
                                     notifications::send_desktop_notification(
                                         "Netray Connected",
                                         "V2Ray server connection re-established.",
@@ -2493,7 +2493,7 @@ impl NetrayApp {
                     self.reconnect_attempts = 0;
                     self.consecutive_errors = 0;
                     if let Some(notif) = &self.error_notification {
-                        if notif.is_reconnecting {
+                        if notif.is_reconnecting && self.notify_connection_drops {
                             notifications::send_desktop_notification(
                                 "Netray Connected",
                                 "Tunnel reconnected successfully.",
