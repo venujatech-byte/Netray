@@ -54,7 +54,9 @@ jobs:
 
       - name: Run Linux tests
         if: runner.os == 'Linux'
-        run: cargo test --locked
+        run: |
+          python3 scripts/test-supervisor.py
+          cargo test --locked
 
       - name: Run Windows tests
         if: runner.os == 'Windows'

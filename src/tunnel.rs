@@ -39,6 +39,14 @@ pub fn record_connection_start(is_direct: bool) {
     }
 }
 
+// Balance accounting on early I/O errors and cancelled relay futures too.
+struct ActiveConnection;
+impl Drop for ActiveConnection {
+    fn drop(&mut self) {
+        record_connection_end();
+    }
+}
+
 pub fn record_connection_end() {
     let mut current = METRICS.active_connections.load(Ordering::Relaxed);
     while current > 0 {
@@ -341,6 +349,7 @@ async fn handle_socks5_client(
     let app_display = app_name.as_deref().unwrap_or("app");
 
     record_connection_start(false);
+    let _active_connection = ActiveConnection;
 
     crate::send_connection_log(
         &log_tx,
@@ -362,7 +371,6 @@ async fn handle_socks5_client(
     let channel = match channel_result {
         Ok(c) => c,
         Err(e) => {
-            record_connection_end();
             crate::send_connection_log(
                 &log_tx,
                 "SOCKS5",
@@ -384,7 +392,6 @@ async fn handle_socks5_client(
     // 5. Bi-directional zero-copy relay between local app and SSH channel
     let mut ssh_stream = channel.into_stream();
     let relay_res = tokio::io::copy_bidirectional(&mut sock, &mut ssh_stream).await;
-    record_connection_end();
 
     if let Ok((upload, download)) = relay_res {
         crate::send_connection_log(
@@ -434,48 +441,6 @@ fn binary_has_cap_net_admin(bin: &Path) -> bool {
         return text.contains("cap_net_admin");
     }
     false
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct XrayConnectionInfo {
-    pub client_port: Option<u16>,
-    pub target_host: String,
-    pub target_port: u16,
-    pub protocol: String,
-    pub route: String,
-}
-
-/// Parses Xray access log lines to extract connecting client endpoint, target website/host, port, and route.
-pub fn parse_xray_connection(line: &str) -> Option<XrayConnectionInfo> {
-    if let Some((left, right)) = line.split_once(" accepted ") {
-        // Extract client port from left side (e.g. "... 127.0.0.1:54321")
-        let client_port = left.rsplit_once(':').and_then(|(_, p)| p.trim().parse::<u16>().ok());
-
-        // Right side format: "tcp:www.google.com:443 [proxy]" or "tcp:github.com:443 [direct]"
-        let mut tokens = right.split_whitespace();
-        let target_token = tokens.next()?;
-        let route_raw = tokens.next().unwrap_or("[proxy]");
-        let route = route_raw.trim_matches(&['[', ']'][..]).to_string();
-
-        let parts: Vec<&str> = target_token.split(':').collect();
-        if parts.len() >= 3 {
-            let protocol = parts[0].to_string();
-            let port_str = parts[parts.len() - 1];
-            let host = parts[1..parts.len() - 1].join(":");
-            if let Ok(port) = port_str.parse::<u16>() {
-                if !host.is_empty() {
-                    return Some(XrayConnectionInfo {
-                        client_port,
-                        target_host: host,
-                        target_port: port,
-                        protocol,
-                        route,
-                    });
-                }
-            }
-        }
-    }
-    None
 }
 
 fn classify_xray_log(line: &str) -> LogLevel {
@@ -590,7 +555,14 @@ async fn run_xray_engine(
 
     // 4. Write temporary configuration
     let config_path = format!("/tmp/netray_xray_{}.json", std::process::id());
-    tokio::fs::write(&config_path, &config_json).await?;
+    // Never follow a pre-existing /tmp symlink or expose server credentials to other users.
+    let mut config_file = tokio::fs::OpenOptions::new()
+        .write(true).create_new(true).mode(0o600).open(&config_path).await?;
+    if let Err(error) = config_file.write_all(config_json.as_bytes()).await {
+        let _ = tokio::fs::remove_file(&config_path).await;
+        return Err(error.into());
+    }
+    drop(config_file);
 
     // 5. Enable System Proxy if requested
     if cfg.enable_sysproxy {
@@ -645,6 +617,8 @@ xray_bin="$1"
 cfg="$2"
 
 cleanup() {
+    trap - TERM INT HUP EXIT
+    kill "$WATCHER_PID" 2>/dev/null
     if [ -n "$XRAY_PID" ]; then
         kill -TERM "$XRAY_PID" 2>/dev/null
         sleep 1
@@ -653,7 +627,6 @@ cleanup() {
     fi
     ip link delete netray0 2>/dev/null
     rm -f "$cfg"
-    exit 0
 }
 
 trap cleanup TERM INT HUP EXIT
@@ -664,8 +637,15 @@ setcap -r "$xray_bin" 2>/dev/null || true
 "$xray_bin" run -c "$cfg" &
 XRAY_PID=$!
 
-cat >/dev/null 2>&1
-cleanup
+# Watch parent EOF without polling, while the supervisor waits for the actual core.
+supervisor_pid=$$
+(while read -r line; do :; done; kill -TERM "$supervisor_pid") <&0 &
+WATCHER_PID=$!
+wait "$XRAY_PID"
+status=$?
+# On a signal, cleanup still owns the live core; after natural exit it is reaped.
+if ! kill -0 "$XRAY_PID" 2>/dev/null; then XRAY_PID=; fi
+exit "$status"
 "#;
 
     let xray_bin_str = xray_bin.to_string_lossy().to_string();
@@ -705,25 +685,23 @@ cleanup
     send_log(
         log_tx,
         "Xray",
-        format!("Checking https://www.gstatic.com/generate_204 through HTTP proxy 127.0.0.1:{http_port}; connection requires HTTP 204."),
+        format!("Checking http://www.gstatic.com/generate_204 through HTTP proxy 127.0.0.1:{http_port}; connection requires HTTP 204."),
         LogLevel::Info,
     )
     .await;
     let ping_ms = tokio::select! {
-        result = crate::v2ray::wait_for_http_proxy(http_port) => match result {
-            Ok(ms) => Some(ms),
-            Err(error) => {
-                send_log(log_tx, "Error", format!("Connection check failed: {error}"), LogLevel::Error).await;
-                send_log(
-                    log_tx,
-                    "Supervisor",
-                    "Hint: Ensure that the proxy node server is online and reachable from your network.",
-                    LogLevel::Warn,
-                )
-                .await;
-                None
+        // Verification may fail during an outage; keep the same core and routes alive.
+        ms = async {
+            loop {
+                match crate::v2ray::wait_for_http_proxy(http_port).await {
+                    Ok(ms) => break ms,
+                    Err(error) => {
+                        send_log(log_tx, "Supervisor", format!("Connection not yet verified: {error}. Keeping Xray running; retrying in 30 seconds."), LogLevel::Warn).await;
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    }
+                }
             }
-        },
+        } => Some(ms),
         status = child.wait() => {
             match status {
                 Ok(status) => send_log(log_tx, "Error", format!("Xray exited before connection verification: {status}"), LogLevel::Error).await,
@@ -743,7 +721,13 @@ cleanup
 
     let status_opt = if ping_ms.is_some() { tokio::select! {
         res = child.wait() => {
-            Some(res?)
+            match res {
+                Ok(status) => Some(status),
+                Err(error) => {
+                    send_log(log_tx, "Error", format!("Could not wait for Xray: {error}"), LogLevel::Error).await;
+                    None
+                }
+            }
         }
         _ = &mut *stop_rx => {
             send_log(log_tx, "Supervisor", "Stopping Xray core and tearing down TUN interface...", LogLevel::Info).await;
@@ -790,34 +774,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_xray_connection_standard_proxy() {
-        let line = "2026/10/30 18:30:00 127.0.0.1:54321 accepted tcp:www.google.com:443 [proxy]";
-        let info = parse_xray_connection(line).expect("must parse connection");
-        assert_eq!(info.client_port, Some(54321));
-        assert_eq!(info.target_host, "www.google.com");
-        assert_eq!(info.target_port, 443);
-        assert_eq!(info.protocol, "tcp");
-        assert_eq!(info.route, "proxy");
-    }
-
-    #[test]
-    fn test_parse_xray_connection_direct_bypass() {
-        let line = "127.0.0.1:48210 accepted tcp:github.com:22 [direct]";
-        let info = parse_xray_connection(line).expect("must parse direct bypass");
-        assert_eq!(info.client_port, Some(48210));
-        assert_eq!(info.target_host, "github.com");
-        assert_eq!(info.target_port, 22);
-        assert_eq!(info.protocol, "tcp");
-        assert_eq!(info.route, "direct");
-    }
-
-    #[test]
-    fn test_parse_xray_connection_non_matching_lines() {
-        assert_eq!(parse_xray_connection("Xray 1.8.23 started"), None);
-        assert_eq!(parse_xray_connection("[Warning] defaultroute failed"), None);
-    }
-
-    #[test]
     fn test_tunnel_metrics_lifecycle() {
         reset_tunnel_metrics();
         assert_eq!(get_tunnel_metrics(), (0, 0, 0));
@@ -828,7 +784,7 @@ mod tests {
         record_connection_start(true);
         assert_eq!(get_tunnel_metrics(), (2, 1, 1));
 
-        record_connection_end();
+        drop(ActiveConnection);
         assert_eq!(get_tunnel_metrics(), (1, 1, 1));
 
         reset_tunnel_metrics();
