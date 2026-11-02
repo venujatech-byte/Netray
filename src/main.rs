@@ -5635,12 +5635,28 @@ impl NetrayApp {
                 .align_y(Alignment::Center),
                 Space::with_height(2),
                 text(if self.auto_reconnect {
-                    "Auto-detects dropped connections, shows desktop notification & reconnects."
+                    "Auto-detects dropped connections and reconnects automatically."
                 } else {
                     "Automatic reconnect disabled."
                 })
                 .size(11)
                 .color(if self.auto_reconnect { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
+                Space::with_height(6),
+                row![
+                    toggler(self.notify_connection_drops)
+                        .label("Connection drop desktop notifications")
+                        .size(18)
+                        .on_toggle(Message::ToggleConnectionDropNotifications),
+                ]
+                .align_y(Alignment::Center),
+                Space::with_height(2),
+                text(if self.notify_connection_drops {
+                    "Shows an alert when the tunnel drops or reconnects."
+                } else {
+                    "Connection drop and reconnect alerts are muted."
+                })
+                .size(11)
+                .color(if self.notify_connection_drops { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
                 Space::with_height(6),
                 row![
                     toggler(self.auto_check_updates)
