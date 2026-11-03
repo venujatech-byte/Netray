@@ -409,6 +409,15 @@ fn whitelist_chip_style(_: &Theme) -> container::Style {
     }
 }
 
+fn disabled_update_btn(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: Some(Color::from_rgb(0.28, 0.30, 0.34).into()),
+        text_color: Color::from_rgb(0.62, 0.64, 0.68),
+        border: iced::Border { radius: 999.0.into(), ..Default::default() },
+        ..Default::default()
+    }
+}
+
 fn primary_action_btn(_: &Theme, _: button::Status) -> button::Style {
     button::Style {
         background: Some(ACCENT_BLUE.into()),
@@ -2470,6 +2479,13 @@ impl NetrayApp {
                 Task::none()
             }
             Message::CheckForUpdates => {
+                if matches!(self.update_state,
+                    updater::UpdateState::Checking | updater::UpdateState::Downloading { .. }
+                    | updater::UpdateState::Downloaded { .. } | updater::UpdateState::Applying
+                    | updater::UpdateState::ReadyToRestart { .. })
+                {
+                    return Task::none();
+                }
                 self.update_state = updater::UpdateState::Checking;
                 Task::perform(
                     updater::check_for_updates(APP_VERSION),
@@ -4983,6 +4999,14 @@ impl NetrayApp {
                     .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
                     .style(primary_action_btn)
                     .on_press(Message::ApplyUpdateAndRestart)
+                    .into()
+            }
+            updater::UpdateState::Checking | updater::UpdateState::Downloading { .. }
+            | updater::UpdateState::Downloaded { .. } | updater::UpdateState::Applying => {
+                button(text("Check for Updates").size(12).color(Color::from_rgb(0.62, 0.64, 0.68)))
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .style(disabled_update_btn)
+                    .on_press_maybe(None::<Message>)
                     .into()
             }
             _ => {
