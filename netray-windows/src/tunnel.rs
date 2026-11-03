@@ -309,8 +309,8 @@ pub fn parse_xray_connection(line: &str) -> Option<XrayConnectionInfo> {
         let client_port = left.rsplit_once(':').and_then(|(_, p)| p.trim().parse::<u16>().ok());
         let mut tokens = right.split_whitespace();
         let target_token = tokens.next()?;
-        let route_raw = tokens.next().unwrap_or("[proxy]");
-        let route = route_raw.trim_matches(&['[', ']'][..]).to_string();
+        let route = right.rsplit_once('[').map(|(_, route)| route.trim_end_matches(']'))
+            .unwrap_or("proxy").rsplit("->").next().unwrap_or("proxy").trim().to_owned();
 
         let parts: Vec<&str> = target_token.split(':').collect();
         if parts.len() >= 3 {
@@ -356,6 +356,9 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
             let lvl = classify_xray_log(&line);
             let cleaned = strip_xray_log_prefix(&line);
             if let Some(conn) = parse_xray_connection(cleaned) {
+                let app_name = if let Some(port) = conn.client_port {
+                    tokio::task::spawn_blocking(move || crate::apps::resolve_socket_process_name(port)).await.ok().flatten()
+                } else { None };
                 let is_direct = conn.route.eq_ignore_ascii_case("direct") || conn.route.eq_ignore_ascii_case("bypass");
                 record_connection_start(is_direct);
                 crate::send_connection_log(
@@ -365,7 +368,7 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
                     lvl,
                     &conn.target_host,
                     conn.target_port,
-                    None,
+                    app_name,
                     Some(conn.route),
                 ).await;
             } else {
@@ -400,6 +403,10 @@ async fn run_xray_engine(
         &cfg.whitelist_apps,
         &cfg.whitelist_urls,
     )?;
+
+    let mut logging_config: serde_json::Value = serde_json::from_str(&config_json)?;
+    logging_config["log"] = serde_json::json!({"loglevel": "info", "access": "", "error": ""});
+    let config_json = serde_json::to_string(&logging_config)?;
 
     let config_json = if cfg.enable_tun {
         let mut config: serde_json::Value = serde_json::from_str(&config_json)?;
