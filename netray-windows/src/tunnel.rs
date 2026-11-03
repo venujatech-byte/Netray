@@ -270,15 +270,9 @@ async fn handle_socks5_client(
 
     sock.write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x04, 0x38]).await?;
 
-    let (mut sock_rx, mut sock_tx) = sock.split();
     let mut chan_stream = channel.into_stream();
-    let (mut chan_rx, mut chan_tx) = tokio::io::split(&mut chan_stream);
-
-    let client_to_ssh = tokio::io::copy(&mut sock_rx, &mut chan_tx);
-    let ssh_to_client = tokio::io::copy(&mut chan_rx, &mut sock_tx);
-    tokio::select! {
-        _ = client_to_ssh => {}
-        _ = ssh_to_client => {}
+    if let Ok((upload, download)) = tokio::io::copy_bidirectional(&mut sock, &mut chan_stream).await {
+        crate::storage::record_usage(upload, download);
     }
     Ok(())
 }
