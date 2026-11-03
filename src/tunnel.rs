@@ -394,6 +394,7 @@ async fn handle_socks5_client(
     let relay_res = tokio::io::copy_bidirectional(&mut sock, &mut ssh_stream).await;
 
     if let Ok((upload, download)) = relay_res {
+        crate::storage::record_usage(upload, download);
         crate::send_connection_log(
             &log_tx,
             "SOCKS5",
