@@ -37,11 +37,13 @@ Ensure you have Rust (2021 edition). Development builds can use an installed `xr
 # Check and run
 cargo run
 
-# Build portable and RPM packages with bundled Xray-core (also requires rpm-build)
+# Build portable, RPM, Debian, and Arch packages with bundled Xray-core
 bash scripts/package-linux.sh 0.1.1
 ```
 
-The packages are written to `dist/`. Install the RPM with `sudo dnf install ./dist/netray-0.1.1-1.x86_64.rpm`; it installs Netray and Xray together, adds Netray to the desktop application menu, and preserves Xray's upstream license and source notice. RPM architecture follows the build host; portable archives support Linux x86-64 and ARM64.
+The packages are written to `dist/`. Install the RPM with `sudo dnf install ./dist/netray-0.1.1-1.x86_64.rpm`, the Debian package with `sudo apt install ./dist/netray-0.1.1-1.amd64.deb`, or the Arch package with `sudo pacman -U ./dist/netray-0.1.1-1-x86_64.pkg.tar.zst`. Each installer includes Netray and Xray, adds a desktop launcher, and preserves Xray's upstream license and source notice. Package architecture follows the build host; portable archives support Linux x86-64 and ARM64.
+
+Settings shows daily uploaded and downloaded tunnel traffic. Xray traffic is sampled once per minute through its local Stats API; SSH relay bytes are counted when a connection closes. Daily totals are stored in `usage.json` beside the app configuration and are never included in the repository.
 
 Every push to `main` or `master` builds Windows and Linux packages and publishes a GitHub Release tagged `v0.1.<run number>`. Pull requests build both platforms without publishing a release.
 
