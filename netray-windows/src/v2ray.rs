@@ -49,6 +49,45 @@ pub fn find_xray_binary() -> Result<PathBuf, String> {
     Err("Xray core was not found. Install xray.exe or place it beside Netray, in its bin folder, or on PATH.".to_string())
 }
 
+pub async fn query_xray_traffic() -> Result<(u64, u64), String> {
+    let mut command = tokio::process::Command::new(find_xray_binary()?);
+    let server = format!("127.0.0.1:{}", xray_stats_port());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command
+        .args(["api", "statsquery", "-s", &server, "-pattern", "outbound>>>", "-reset"])
+        .output()
+        .await
+        .map_err(|error| format!("Could not query Xray traffic stats: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let response: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Invalid Xray stats response: {error}"))?;
+    let mut uploaded = 0u64;
+    let mut downloaded = 0u64;
+    for stat in response["stat"].as_array().into_iter().flatten() {
+        let name = stat["name"].as_str().unwrap_or_default();
+        let tag = name.split(">>>").nth(1).unwrap_or_default();
+        if !name.starts_with("outbound>>>") || matches!(tag, "direct" | "blocked" | "netray-api") {
+            continue;
+        }
+        if name.ends_with(">>>uplink") {
+            uploaded = uploaded.saturating_add(stat["value"].as_u64().unwrap_or(0));
+        } else if name.ends_with(">>>downlink") {
+            downloaded = downloaded.saturating_add(stat["value"].as_u64().unwrap_or(0));
+        }
+    }
+    Ok((uploaded, downloaded))
+}
+
+pub fn xray_stats_port() -> u16 {
+    30_000 + (std::process::id() % 30_000) as u16
+}
+
 /// Extract human-readable node name or remark from link
 pub fn extract_node_name(raw_input: &str) -> String {
     let trimmed = raw_input.trim();
