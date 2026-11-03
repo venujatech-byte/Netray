@@ -457,6 +457,44 @@ fn classify_xray_log(line: &str) -> LogLevel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrayConnectionInfo {
+    pub client_port: Option<u16>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub protocol: String,
+    pub route: String,
+}
+
+pub fn parse_xray_connection(line: &str) -> Option<XrayConnectionInfo> {
+    if let Some((left, right)) = line.split_once(" accepted ") {
+        let client_port = left.rsplit_once(':').and_then(|(_, p)| p.trim().parse::<u16>().ok());
+        let mut tokens = right.split_whitespace();
+        let target_token = tokens.next()?;
+        let route = right.rsplit_once('[').map(|(_, route)| route.trim_end_matches(']'))
+            .unwrap_or("proxy").rsplit("->").next().unwrap_or("proxy").trim().to_owned();
+
+        let parts: Vec<&str> = target_token.split(':').collect();
+        if parts.len() >= 3 {
+            let protocol = parts[0].to_string();
+            let port_str = parts[parts.len() - 1];
+            let host = parts[1..parts.len() - 1].join(":");
+            if let Ok(port) = port_str.parse::<u16>() {
+                if !host.is_empty() {
+                    return Some(XrayConnectionInfo {
+                        client_port,
+                        target_host: host,
+                        target_port: port,
+                        protocol,
+                        route,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
 fn strip_xray_log_prefix(line: &str) -> &str {
     let trimmed = line.trim();
     if trimmed.len() > 20
@@ -479,7 +517,25 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
         while let Ok(Some(line)) = reader.next_line().await {
             let lvl = classify_xray_log(&line);
             let cleaned = strip_xray_log_prefix(&line);
-            send_log(&tx, "Xray", cleaned, lvl).await;
+            if let Some(conn) = parse_xray_connection(cleaned) {
+                let app_name = if let Some(port) = conn.client_port {
+                    tokio::task::spawn_blocking(move || crate::apps::resolve_socket_process_name(port)).await.ok().flatten()
+                } else { None };
+                let is_direct = conn.route.eq_ignore_ascii_case("direct") || conn.route.eq_ignore_ascii_case("bypass");
+                record_connection_start(is_direct);
+                crate::send_connection_log(
+                    &tx,
+                    "Xray",
+                    cleaned,
+                    lvl,
+                    &conn.target_host,
+                    conn.target_port,
+                    app_name,
+                    Some(conn.route),
+                ).await;
+            } else {
+                send_log(&tx, "Xray", cleaned, lvl).await;
+            }
         }
     });
 }
@@ -526,6 +582,10 @@ async fn run_xray_engine(
             return Err(e.into());
         }
     };
+
+    let mut logging_config: serde_json::Value = serde_json::from_str(&config_json)?;
+    logging_config["log"] = serde_json::json!({"loglevel": "info", "access": "", "error": ""});
+    let config_json = serde_json::to_string(&logging_config)?;
 
     let config_json = if cfg.enable_tun {
         let mut config: serde_json::Value = serde_json::from_str(&config_json)?;
