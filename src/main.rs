@@ -1447,16 +1447,6 @@ impl NetrayApp {
         self.is_running = false;
         self.refresh_status_badge();
 
-        let title = "Tunnel Connection Error".to_string();
-
-        if self.notify_connection_drops {
-            notifications::send_desktop_notification(
-                &title,
-                &format!("Tunnel stopped: {}", display_err),
-                notifications::NotificationUrgency::Normal,
-            );
-        }
-
         if self.auto_reconnect && attempt <= MAX_RECONNECT_ATTEMPTS {
             self.error_notification = Some(ErrorNotification {
                 title: "Reconnecting to Tunnel".to_string(),
@@ -1511,10 +1501,18 @@ impl NetrayApp {
         );
         let previous = (self.is_running, self.worker_active);
         let opened = matches!(message, Message::WindowOpened(_));
+        let previous_error = self.connection_error;
         let previous_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
         let tray_opened = matches!(message, Message::WindowOpened(_));
         let task = self.update_message(message);
-        if self.connection_error && previous_tray != tray_status::Status::Error {
+        if self.connection_error && !previous_error && !self.user_stopped {
+            if self.notify_connection_drops {
+                notifications::send_desktop_notification(
+                    "Netray connection issue",
+                    "A tunnel connection failed. Check the Logs page for details.",
+                    notifications::NotificationUrgency::Normal,
+                );
+            }
             self.push_log("Connection", "Connection check or core request failed; keeping the tunnel running. Use Ping to verify recovery.", LogLevel::Error);
         }
         let current_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
