@@ -73,6 +73,10 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/package-linux.sh "$NETRAY_VERSION"
 
+      - name: Verify Linux distro packages
+        if: runner.os == 'Linux'
+        run: bash scripts/verify-linux-packages.sh
+
       - name: Test packaged Linux core
         if: runner.os == 'Linux'
         run: |
