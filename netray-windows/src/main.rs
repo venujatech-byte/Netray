@@ -1919,11 +1919,17 @@ impl NetrayApp {
                 Task::none()
             }
             Message::ToggleTunMode(v) => {
+                if self.is_running || self.worker_active {
+                    return Task::none();
+                }
                 self.enable_tun = v;
                 let _ = self.save_current_state();
                 Task::none()
             }
             Message::ToggleSysProxy(v) => {
+                if self.is_running || self.worker_active {
+                    return Task::none();
+                }
                 self.enable_sysproxy = v;
                 let _ = self.save_current_state();
                 Task::none()
@@ -4095,11 +4101,11 @@ impl NetrayApp {
             Space::with_width(12),
             checkbox("WinTun", self.enable_tun)
                 .size(16)
-                .on_toggle(Message::ToggleTunMode),
+                .on_toggle_maybe((!self.is_running && !self.worker_active).then_some(Message::ToggleTunMode)),
             Space::with_width(12),
             checkbox("Proxy", self.enable_sysproxy)
                 .size(16)
-                .on_toggle(Message::ToggleSysProxy),
+                .on_toggle_maybe((!self.is_running && !self.worker_active).then_some(Message::ToggleSysProxy)),
         ]
         .align_y(Alignment::Center)
         .padding(iced::Padding {
