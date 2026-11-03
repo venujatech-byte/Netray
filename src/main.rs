@@ -3124,12 +3124,12 @@ impl NetrayApp {
         let window_control = |icon, label, message, close| {
             iced::widget::tooltip(
                 button(
-                    container(icons::lucide_icon(icon, 16, Color::WHITE))
+                    container(icons::lucide_icon(icon, 14, Color::WHITE))
                         .center_x(Length::Fill)
                         .center_y(Length::Fill),
                 )
-                .width(32)
-                .height(32)
+                .width(28)
+                .height(28)
                 .padding(0)
                 .style(if close { window_btn_close } else { window_btn_normal })
                 .on_press(message),
@@ -3139,7 +3139,13 @@ impl NetrayApp {
         };
         let titlebar = row![
             iced::widget::mouse_area(
-                container(text("Netray").size(14).color(self.text_primary()))
+                container(
+                    iced::widget::svg(iced::widget::svg::Handle::from_memory(
+                        include_bytes!("../packaging/netray.svg").as_slice(),
+                    ))
+                    .width(Length::Fixed(26.0))
+                    .height(Length::Fixed(26.0)),
+                )
                     .padding([0, 10])
                     .center_y(32)
                     .width(Length::Fill)
