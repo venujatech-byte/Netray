@@ -962,6 +962,13 @@ impl Default for QrScanModalState {
 
 pub struct NetrayApp {
     pub view_mode: ViewMode,
+    show_overflow_menu: bool,
+    profile_sort: ProfileSort,
+    usage_records: Vec<storage::DailyUsage>,
+    usage_date_filter: String,
+    usage_stop_pending: bool,
+    skip_final_usage_once: bool,
+    usage_query_pending: bool,
     pub is_running: bool,
     connection_error: bool,
     pub connected_at: Option<Instant>,
@@ -1050,6 +1057,11 @@ pub struct NetrayApp {
 #[derive(Debug, Clone)]
 pub enum Message {
     SetViewMode(ViewMode),
+    ToggleOverflowMenu,
+    ProfileSortChanged(ProfileSort),
+    UsageTick,
+    UsageDateChanged(String),
+    UsageUpdated(Result<(u64, u64), String>),
     TunnelModeChanged(TunnelMode),
     ToggleTunnel,
     MinimizeToTray,
@@ -1225,6 +1237,13 @@ impl NetrayApp {
 
         let app = Self {
             view_mode: ViewMode::Profiles,
+            show_overflow_menu: false,
+            profile_sort: ProfileSort::Name,
+            usage_records: storage::load_usage(),
+            usage_date_filter: "All dates".to_string(),
+            usage_stop_pending: false,
+            skip_final_usage_once: false,
+            usage_query_pending: false,
             is_running: false,
             connection_error: false,
             connected_at: None,
@@ -1642,8 +1661,66 @@ impl NetrayApp {
         }
         match message {
             Message::SetViewMode(mode) => {
+                self.show_overflow_menu = false;
+                if mode == ViewMode::SshSettings {
+                    self.usage_records = storage::load_usage();
+                }
                 self.view_mode = mode;
                 Task::none()
+            }
+            Message::ToggleOverflowMenu => {
+                self.show_overflow_menu = !self.show_overflow_menu;
+                Task::none()
+            }
+            Message::ProfileSortChanged(sort) => {
+                self.profile_sort = sort;
+                self.show_overflow_menu = false;
+                Task::none()
+            }
+            Message::UsageTick => {
+                if self.worker_active && self.tunnel_mode == TunnelMode::V2RayXray {
+                    if self.usage_query_pending {
+                        return Task::none();
+                    }
+                    self.usage_query_pending = true;
+                    Task::perform(v2ray::query_xray_traffic(), Message::UsageUpdated)
+                } else {
+                    self.usage_records = storage::load_usage();
+                    Task::none()
+                }
+            }
+            Message::UsageDateChanged(date) => {
+                self.usage_date_filter = date;
+                Task::none()
+            }
+            Message::UsageUpdated(Ok((uploaded, downloaded))) => {
+                self.usage_query_pending = false;
+                self.usage_records = storage::record_usage(uploaded, downloaded);
+                if self.usage_stop_pending {
+                    self.usage_stop_pending = false;
+                    if self.is_running {
+                        self.skip_final_usage_once = true;
+                        self.update_message(Message::ToggleTunnel)
+                    } else {
+                        Task::none()
+                    }
+                } else {
+                    Task::none()
+                }
+            }
+            Message::UsageUpdated(Err(_)) => {
+                self.usage_query_pending = false;
+                if self.usage_stop_pending {
+                    self.usage_stop_pending = false;
+                    if self.is_running {
+                        self.skip_final_usage_once = true;
+                        self.update_message(Message::ToggleTunnel)
+                    } else {
+                        Task::none()
+                    }
+                } else {
+                    Task::none()
+                }
             }
             Message::TunnelModeChanged(mode) => {
                 self.tunnel_mode = mode;
@@ -6160,6 +6237,20 @@ impl NetrayApp {
             settings_col = settings_col.push(Space::with_height(12));
         }
 
+        let mut usage_dates = vec!["All dates".to_string()];
+        usage_dates.extend(self.usage_records.iter().map(|record| record.date.clone()));
+        let (uploaded, downloaded) = self.usage_records.iter()
+            .filter(|record| self.usage_date_filter == "All dates" || record.date == self.usage_date_filter)
+            .fold((0u64, 0u64), |(up, down), record| (up.saturating_add(record.uploaded), down.saturating_add(record.downloaded)));
+        let usage_card = container(column![
+            row![text("Data Usage").size(15).color(self.text_primary()), Space::with_width(Length::Fill), pick_list(usage_dates, Some(self.usage_date_filter.clone()), Message::UsageDateChanged).width(Length::Fixed(150.0))].align_y(Alignment::Center),
+            row![text("Uploaded").size(12).color(TEXT_MUTED), Space::with_width(Length::Fill), text(storage::format_bytes(uploaded)).size(13).color(self.text_primary())],
+            row![text("Downloaded").size(12).color(TEXT_MUTED), Space::with_width(Length::Fill), text(storage::format_bytes(downloaded)).size(13).color(self.text_primary())],
+            text("Netray tunnel traffic").size(10).color(TEXT_MUTED),
+        ].spacing(8)).padding(12).style(form_card_style).width(Length::Fill);
+
+        settings_col = settings_col.push(usage_card);
+        settings_col = settings_col.push(Space::with_height(12));
         settings_col = settings_col.push(theme_card);
         settings_col = settings_col.push(Space::with_height(12));
         settings_col = settings_col.push(startup_card);
