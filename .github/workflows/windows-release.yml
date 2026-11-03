@@ -38,7 +38,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl unzip rpm pkg-config libasound2-dev libudev-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libvulkan-dev
+          sudo apt-get install -y curl unzip rpm zstd pkg-config libasound2-dev libudev-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libvulkan-dev
 
       - name: Cache Cargo registry and target
         uses: actions/cache@v5
@@ -103,6 +103,8 @@ jobs:
           name: netray-linux
           path: |
             dist/*.rpm
+            dist/*.deb
+            dist/*.pkg.tar.zst
             dist/*.tar.gz
 
   release:
@@ -154,6 +156,8 @@ jobs:
           ### 📦 Built Packages
           - **Windows 64-bit Portable**: \`netray-windows-$VERSION.zip\` (bundled with Wintun driver & Xray-core)
           - **Linux RPM Package**: \`netray-$VERSION-1.x86_64.rpm\` (Fedora, RHEL, openSUSE)
+          - **Debian / Ubuntu Package**: \`netray-$VERSION-1.amd64.deb\`
+          - **Arch Linux Package**: \`netray-$VERSION-1-x86_64.pkg.tar.zst\`
           - **Linux 64-bit Portable**: \`netray-linux-linux-64-$VERSION.tar.gz\` (bundled with Xray-core)
 
           ### 🔒 Integrity & Security
@@ -168,10 +172,10 @@ jobs:
         run: |
           tag="v$VERSION"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/*.zip dist/*.rpm dist/*.tar.gz --clobber
+            gh release upload "$tag" dist/*.zip dist/*.rpm dist/*.deb dist/*.pkg.tar.zst dist/*.tar.gz --clobber
             gh release edit "$tag" -F dist/RELEASE_NOTES.md --title "Netray $tag"
           else
-            gh release create "$tag" dist/*.zip dist/*.rpm dist/*.tar.gz --target "${GITHUB_SHA}" \
+            gh release create "$tag" dist/*.zip dist/*.rpm dist/*.deb dist/*.pkg.tar.zst dist/*.tar.gz --target "${GITHUB_SHA}" \
               --title "Netray $tag" \
               -F dist/RELEASE_NOTES.md
           fi
