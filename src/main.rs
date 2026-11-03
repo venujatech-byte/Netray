@@ -1281,6 +1281,10 @@ impl NetrayApp {
     }
 
     pub fn refresh_status_badge(&mut self) {
+        if self.connection_error && !self.user_stopped {
+            self.status_badge_text = "CONNECTING · CONNECTION ERROR".into();
+            return;
+        }
         if self.is_running {
             let uptime = format_uptime(
                 self.connected_at.map(|at| at.elapsed()).unwrap_or_default(),
@@ -1510,8 +1514,12 @@ impl NetrayApp {
         let previous_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
         let tray_opened = matches!(message, Message::WindowOpened(_));
         let task = self.update_message(message);
+        if self.connection_error && previous_tray != tray_status::Status::Error {
+            self.push_log("Connection", "Connection check or core request failed; keeping the tunnel running. Use Ping to verify recovery.", LogLevel::Error);
+        }
         let current_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
         if tray_opened || previous_tray != current_tray {
+            self.refresh_status_badge();
             if let Some(tray) = &self.tray_icon {
                 let result = current_tray.icon().and_then(|icon| tray.set_icon(Some(icon)).map_err(|e| e.to_string()));
                 if let Err(error) = result {
@@ -4453,7 +4461,9 @@ impl NetrayApp {
                 .size(13)
                 .color(TEXT_MUTED),
             Space::with_width(Length::Fill),
-            text(if self.is_running || self.worker_active {
+            text(if self.connection_error && !self.user_stopped {
+                "Connecting"
+            } else if self.is_running || self.worker_active {
                 "Tunnel active"
             } else {
                 "Offline"
