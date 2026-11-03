@@ -795,6 +795,7 @@ pub struct NetrayApp {
     usage_date_filter: String,
     usage_stop_pending: bool,
     skip_final_usage_once: bool,
+    usage_query_pending: bool,
     pub is_running: bool,
     connection_error: bool,
     pub connected_at: Option<Instant>,
@@ -1040,6 +1041,7 @@ impl NetrayApp {
             usage_date_filter: "All dates".to_string(),
             usage_stop_pending: false,
             skip_final_usage_once: false,
+            usage_query_pending: false,
             is_running: false,
             connection_error: false,
             connected_at: None,
@@ -1443,6 +1445,10 @@ impl NetrayApp {
             }
             Message::UsageTick => {
                 if self.worker_active && self.tunnel_mode == TunnelMode::V2RayXray {
+                    if self.usage_query_pending {
+                        return Task::none();
+                    }
+                    self.usage_query_pending = true;
                     Task::perform(v2ray::query_xray_traffic(), Message::UsageUpdated)
                 } else {
                     self.usage_records = storage::load_usage();
@@ -1454,6 +1460,7 @@ impl NetrayApp {
                 Task::none()
             }
             Message::UsageUpdated(Ok((uploaded, downloaded))) => {
+                self.usage_query_pending = false;
                 self.usage_records = storage::record_usage(uploaded, downloaded);
                 if self.usage_stop_pending {
                     self.usage_stop_pending = false;
@@ -1468,6 +1475,7 @@ impl NetrayApp {
                 }
             }
             Message::UsageUpdated(Err(_)) => {
+                self.usage_query_pending = false;
                 if self.usage_stop_pending {
                     self.usage_stop_pending = false;
                     if self.is_running {
@@ -2682,8 +2690,13 @@ impl NetrayApp {
                     if self.usage_stop_pending {
                         return Task::none();
                     }
+                    if self.usage_query_pending {
+                        self.usage_stop_pending = true;
+                        return Task::none();
+                    }
                     if !self.skip_final_usage_once {
                         self.usage_stop_pending = true;
+                        self.usage_query_pending = true;
                         return Task::perform(v2ray::query_xray_traffic(), Message::UsageUpdated);
                     }
                 }
