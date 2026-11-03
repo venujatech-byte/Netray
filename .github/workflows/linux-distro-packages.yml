@@ -1,0 +1,43 @@
+name: Linux distribution packages
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    name: Build RPM, DEB, Arch, and portable packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build and package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip rpm zstd pkg-config libasound2-dev libudev-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libvulkan-dev
+
+      - name: Calculate package version
+        run: |
+          BUILD_NUM=$(( ${{ github.run_number }} - 29 ))
+          if [ "$BUILD_NUM" -lt 4 ]; then BUILD_NUM=4; fi
+          echo "NETRAY_VERSION=1.0.${BUILD_NUM}" >> "$GITHUB_ENV"
+
+      - name: Build Linux packages
+        run: bash scripts/package-linux.sh "$NETRAY_VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: netray-linux-distro-packages
+          path: |
+            dist/*.rpm
+            dist/*.deb
+            dist/*.pkg.tar.zst
+            dist/*.tar.gz
