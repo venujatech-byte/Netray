@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 pub const GITHUB_REPO: &str = "venujatech-byte/Netray";
 pub const RELEASES_API_URL: &str = "https://api.github.com/repos/venujatech-byte/Netray/releases/latest";
 
+pub fn clean_markdown_inline(line: &str) -> String {
+    line.replace("**", "").replace("__", "").replace('`', "")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleaseInfo {
     pub version: String,

@@ -444,6 +444,7 @@ pub fn main() -> iced::Result {
         ..Default::default()
     };
     iced::application("Netray", NetrayApp::update, NetrayApp::view)
+        .default_font(iced::Font::DEFAULT)
         .subscription(NetrayApp::subscription)
         .theme(|app| app.theme())
         .window(window)
@@ -806,6 +807,7 @@ pub struct NetrayApp {
     pub startup_connect_prompt: bool,
     pub qr_scan_modal: QrScanModalState,
     pub update_state: updater::UpdateState,
+    show_release_notes: bool,
     pub auto_check_updates: bool,
 
     pub enable_tun: bool,
@@ -945,6 +947,7 @@ pub enum Message {
     UpdateDownloadFinished(Result<std::path::PathBuf, String>),
     ApplyUpdateAndRestart,
     DismissUpdateToast,
+    CloseReleaseNotesModal,
     ToggleAutoCheckUpdates(bool),
 
     LoggerReady(mpsc::Sender<LogEntry>),
@@ -1038,6 +1041,7 @@ impl NetrayApp {
             startup_connect_prompt: saved.connect_at_startup && has_profiles,
             qr_scan_modal: QrScanModalState::default(),
             update_state: updater::UpdateState::Idle,
+            show_release_notes: false,
             auto_check_updates: saved.auto_check_updates,
 
             enable_tun: saved.enable_tun,
@@ -2496,6 +2500,7 @@ impl NetrayApp {
                 match res {
                     Ok(Some(info)) => {
                         let ver = info.version.clone();
+                        self.show_release_notes = true;
                         self.update_state = updater::UpdateState::Available(info);
                         notifications::send_desktop_notification(
                             "Netray Update Available",
@@ -2517,6 +2522,7 @@ impl NetrayApp {
             }
             Message::StartInAppUpgrade => {
                 if let updater::UpdateState::Available(info) = &self.update_state {
+                    self.show_release_notes = false;
                     let info_clone = info.clone();
                     let ver = info.version.clone();
                     self.update_state = updater::UpdateState::Downloading {
@@ -2562,6 +2568,10 @@ impl NetrayApp {
             }
             Message::DismissUpdateToast => {
                 self.update_state = updater::UpdateState::Idle;
+                Task::none()
+            }
+            Message::CloseReleaseNotesModal => {
+                self.show_release_notes = false;
                 Task::none()
             }
             Message::ToggleAutoCheckUpdates(v) => {
@@ -2923,6 +2933,91 @@ impl NetrayApp {
             base_content
         };
 
+        if self.show_release_notes {
+            if let updater::UpdateState::Available(info) = &self.update_state {
+                let mut notes = column![].spacing(5);
+                let content = if info.release_notes.trim().is_empty() {
+                    "No release notes were provided."
+                } else {
+                    &info.release_notes
+                };
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        notes = notes.push(Space::with_height(4));
+                    } else if let Some(heading) = line
+                        .strip_prefix("### ")
+                        .or_else(|| line.strip_prefix("## "))
+                        .or_else(|| line.strip_prefix("# "))
+                    {
+                        notes = notes.push(
+                            text(updater::clean_markdown_inline(heading))
+                                .size(13)
+                                .color(ACCENT_BLUE_LIGHT),
+                        );
+                    } else if let Some(bullet) = line
+                        .strip_prefix("- ")
+                        .or_else(|| line.strip_prefix("* "))
+                    {
+                        notes = notes.push(
+                            row![
+                                text("•").color(ACCENT_BLUE),
+                                Space::with_width(6),
+                                text(updater::clean_markdown_inline(bullet)).size(12),
+                            ]
+                            .align_y(Alignment::Start),
+                        );
+                    } else {
+                        notes = notes.push(text(updater::clean_markdown_inline(line)).size(12));
+                    }
+                }
+                let dialog = container(
+                    column![
+                        row![
+                            text(format!("Netray v{} is available", info.version))
+                                .size(17)
+                                .color(Color::WHITE)
+                                .width(Length::Fill),
+                            button("×").on_press(Message::CloseReleaseNotesModal),
+                        ]
+                        .align_y(Alignment::Center),
+                        text("Here’s what changed in this release:")
+                            .size(11)
+                            .color(TEXT_MUTED),
+                        container(scrollable(notes.padding(10)).height(Length::Fixed(220.0)))
+                            .style(form_card_style)
+                            .width(Length::Fill),
+                        row![
+                            Space::with_width(Length::Fill),
+                            button("Later").on_press(Message::CloseReleaseNotesModal),
+                            button("Upgrade now")
+                                .style(primary_action_btn)
+                                .on_press(Message::StartInAppUpgrade),
+                        ]
+                        .spacing(8),
+                    ]
+                    .spacing(12)
+                    .padding(18),
+                )
+                .style(form_card_style)
+                .width(Length::Fixed(420.0));
+                return iced::widget::stack![
+                    base_content,
+                    container(dialog)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .center_x(Length::Fill)
+                        .center_y(Length::Fill)
+                        .style(|_| container::Style {
+                            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.70).into()),
+                            ..Default::default()
+                        }),
+                ]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
+            }
+        }
         if self.close_confirmation.is_some() {
             let dialog = container(
                 column![

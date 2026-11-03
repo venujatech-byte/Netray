@@ -680,6 +680,7 @@ pub fn main() -> iced::Result {
         std::env::remove_var("WAYLAND_SOCKET");
     }
     iced::daemon("Netray", NetrayApp::update, NetrayApp::view)
+        .default_font(iced::Font::DEFAULT)
         .subscription(NetrayApp::subscription)
         .theme(|app, _| app.theme())
         .run_with(NetrayApp::new)
@@ -891,6 +892,7 @@ pub struct ReleaseNotesModalState {
     pub version: String,
     pub release_name: String,
     pub notes: String,
+    pub installed: bool,
 }
 
 
@@ -1197,6 +1199,7 @@ impl NetrayApp {
             version: p.version,
             release_name: p.release_name,
             notes: p.notes,
+            installed: true,
         });
 
         let app = Self {
@@ -2741,6 +2744,12 @@ impl NetrayApp {
                 match res {
                     Ok(Some(info)) => {
                         let ver = info.version.clone();
+                        self.release_notes_modal = Some(ReleaseNotesModalState {
+                            version: info.version.clone(),
+                            release_name: info.release_name.clone(),
+                            notes: info.release_notes.clone(),
+                            installed: false,
+                        });
                         self.latest_release_info = Some(info.clone());
                         self.update_state = updater::UpdateState::Available(info);
                         notifications::send_desktop_notification(
@@ -2763,6 +2772,7 @@ impl NetrayApp {
             }
             Message::StartInAppUpgrade => {
                 if let updater::UpdateState::Available(info) = &self.update_state {
+                    self.release_notes_modal = None;
                     self.latest_release_info = Some(info.clone());
                     let info_clone = info.clone();
                     let ver = info.version.clone();
@@ -3918,10 +3928,14 @@ impl NetrayApp {
             icons::lucide_icon(icons::DOWNLOAD, 20, ACCENT_BLUE_LIGHT),
             Space::with_width(8),
             column![
-                text(format!("Welcome to Netray v{}", modal.version))
+                text(if modal.installed {
+                    format!("Welcome to Netray v{}", modal.version)
+                } else {
+                    format!("Netray v{} is available", modal.version)
+                })
                     .size(16)
                     .color(Color::WHITE),
-                text("The update was installed successfully. Here is what's new:")
+                text(if modal.installed { "The update was installed successfully. Here is what's new:" } else { "A new version is available. Here is what's new:" })
                     .size(11)
                     .color(TEXT_MUTED),
             ]
@@ -3955,23 +3969,23 @@ impl NetrayApp {
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 notes_column = notes_column.push(Space::with_height(4));
-            } else if trimmed.starts_with("# ") {
+            } else if trimmed.starts_with("### ") {
                 notes_column = notes_column.push(
-                    text(trimmed.trim_start_matches('#').trim())
-                        .size(15)
-                        .color(Color::WHITE),
+                    text(updater::clean_markdown_inline(trimmed.trim_start_matches('#').trim()))
+                        .size(12)
+                        .color(Color::from_rgb(0.75, 0.85, 1.0)),
                 );
             } else if trimmed.starts_with("## ") {
                 notes_column = notes_column.push(
-                    text(trimmed.trim_start_matches('#').trim())
+                    text(updater::clean_markdown_inline(trimmed.trim_start_matches('#').trim()))
                         .size(13)
                         .color(ACCENT_BLUE),
                 );
-            } else if trimmed.starts_with("### ") {
+            } else if trimmed.starts_with("# ") {
                 notes_column = notes_column.push(
-                    text(trimmed.trim_start_matches('#').trim())
-                        .size(12)
-                        .color(Color::from_rgb(0.75, 0.85, 1.0)),
+                    text(updater::clean_markdown_inline(trimmed.trim_start_matches('#').trim()))
+                        .size(15)
+                        .color(Color::WHITE),
                 );
             } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
                 let bullet_text = &trimmed[2..];
@@ -3979,13 +3993,13 @@ impl NetrayApp {
                     row![
                         text("•").size(12).color(ACCENT_BLUE),
                         Space::with_width(6),
-                        text(bullet_text).size(12).color(Color::from_rgb(0.9, 0.9, 0.9)),
+                        text(updater::clean_markdown_inline(bullet_text)).size(12).color(Color::from_rgb(0.9, 0.9, 0.9)),
                     ]
                     .align_y(Alignment::Start),
                 );
             } else {
                 notes_column = notes_column.push(
-                    text(trimmed).size(12).color(Color::from_rgb(0.85, 0.85, 0.85)),
+                    text(updater::clean_markdown_inline(trimmed)).size(12).color(Color::from_rgb(0.85, 0.85, 0.85)),
                 );
             }
         }
@@ -4006,10 +4020,10 @@ impl NetrayApp {
         })
         .width(Length::Fill);
 
-        let close_btn = button(text("Got it!").size(12).color(Color::WHITE))
+        let close_btn = button(text(if modal.installed { "Got it!" } else { "Upgrade now" }).size(12).color(Color::WHITE))
             .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 20.0, right: 20.0 })
             .style(primary_action_btn)
-            .on_press(Message::CloseReleaseNotesModal);
+            .on_press(if modal.installed { Message::CloseReleaseNotesModal } else { Message::StartInAppUpgrade });
 
         let bottom_row = row![
             Space::with_width(Length::Fill),
@@ -6874,6 +6888,7 @@ trojan://secretpass@server2.com:443?type=ws#NodeB
             version: "1.0.30".to_string(),
             release_name: "Netray v1.0.30".to_string(),
             notes: "### Highlights\n- Linux privileged update integration\n- Settings scroll fix\n".to_string(),
+            installed: true,
         });
 
         // 2. Render view with modal present
