@@ -406,6 +406,27 @@ async fn run_xray_engine(
 
     let mut logging_config: serde_json::Value = serde_json::from_str(&config_json)?;
     logging_config["log"] = serde_json::json!({"loglevel": "info", "access": "", "error": ""});
+    logging_config["stats"] = serde_json::json!({});
+    if !logging_config["api"].is_object() {
+        logging_config["api"] = serde_json::json!({});
+    }
+    if logging_config["api"]["tag"].as_str().is_none() {
+        logging_config["api"]["tag"] = serde_json::json!("netray-api");
+    }
+    logging_config["api"]["listen"] = serde_json::json!(format!(
+        "127.0.0.1:{}",
+        crate::v2ray::xray_stats_port()
+    ));
+    if !logging_config["api"]["services"].is_array() {
+        logging_config["api"]["services"] = serde_json::json!([]);
+    }
+    if let Some(services) = logging_config["api"]["services"].as_array_mut() {
+        if !services.iter().any(|service| service == "StatsService") {
+            services.push(serde_json::json!("StatsService"));
+        }
+    }
+    logging_config["policy"]["system"]["statsOutboundUplink"] = serde_json::json!(true);
+    logging_config["policy"]["system"]["statsOutboundDownlink"] = serde_json::json!(true);
     let config_json = serde_json::to_string(&logging_config)?;
 
     let config_json = if cfg.enable_tun {
