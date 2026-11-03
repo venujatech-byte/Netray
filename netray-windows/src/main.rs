@@ -5668,6 +5668,20 @@ impl NetrayApp {
             settings_col = settings_col.push(Space::with_height(12));
         }
 
+        let mut usage_dates = vec!["All dates".to_string()];
+        usage_dates.extend(self.usage_records.iter().map(|record| record.date.clone()));
+        let (uploaded, downloaded) = self.usage_records.iter()
+            .filter(|record| self.usage_date_filter == "All dates" || record.date == self.usage_date_filter)
+            .fold((0u64, 0u64), |(up, down), record| (up.saturating_add(record.uploaded), down.saturating_add(record.downloaded)));
+        let usage_card = container(column![
+            row![text("Data Usage").size(15).color(self.text_primary()), Space::with_width(Length::Fill), pick_list(usage_dates, Some(self.usage_date_filter.clone()), Message::UsageDateChanged).width(Length::Fixed(150.0))].align_y(Alignment::Center),
+            row![text("Uploaded").size(12).color(TEXT_MUTED), Space::with_width(Length::Fill), text(storage::format_bytes(uploaded)).size(13).color(self.text_primary())],
+            row![text("Downloaded").size(12).color(TEXT_MUTED), Space::with_width(Length::Fill), text(storage::format_bytes(downloaded)).size(13).color(self.text_primary())],
+            text("Netray tunnel traffic").size(10).color(TEXT_MUTED),
+        ].spacing(8)).padding(12).style(form_card_style).width(Length::Fill);
+
+        settings_col = settings_col.push(usage_card);
+        settings_col = settings_col.push(Space::with_height(12));
         settings_col = settings_col.push(theme_card);
         settings_col = settings_col.push(Space::with_height(12));
         settings_col = settings_col.push(startup_card);
