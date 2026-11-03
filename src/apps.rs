@@ -23,8 +23,26 @@ pub fn parse_inode_from_proc_net_tcp(content: &str, port: u16) -> Option<String>
 }
 
 /// Resolves the process name of the local application connected to/from `port`.
-// ponytail: skip live /proc directory scanning on connection streams to keep CPU and RAM near zero
-pub fn resolve_socket_process_name(_port: u16) -> Option<String> {
+pub fn resolve_socket_process_name(port: u16) -> Option<String> {
+    if port == 0 { return None; }
+    let suffix = format!(":{port:04X}");
+    let inode = ["/proc/net/tcp", "/proc/net/tcp6"].iter().find_map(|path| {
+        let table = std::fs::read_to_string(path).ok()?;
+        table.lines().skip(1).find_map(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next()?;
+            if !fields.next()?.ends_with(&suffix) { return None; }
+            let inode = fields.nth(7)?;
+            (inode != "0").then(|| format!("socket:[{inode}]"))
+        })
+    })?;
+    for process in std::fs::read_dir("/proc").ok()?.flatten() {
+        if process.file_name().to_string_lossy().parse::<u32>().is_err() { continue; }
+        let Ok(fds) = std::fs::read_dir(process.path().join("fd")) else { continue; };
+        if fds.flatten().any(|fd| std::fs::read_link(fd.path()).ok().is_some_and(|target| target == Path::new(&inode))) {
+            return std::fs::read_to_string(process.path().join("comm")).ok().map(|name| name.trim().to_owned());
+        }
+    }
     None
 }
 

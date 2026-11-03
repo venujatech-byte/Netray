@@ -184,8 +184,26 @@ pub fn extract_binary_name(path_str: &str) -> Option<String> {
     }
 }
 
-pub fn resolve_socket_process_name(_port: u16) -> Option<String> {
-    None
+pub fn resolve_socket_process_name(port: u16) -> Option<String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        if port == 0 { return None; }
+        let output = std::process::Command::new("netstat").args(["-ano", "-p", "tcp"])
+            .creation_flags(0x08000000).output().ok()?;
+        let suffix = format!(":{port}");
+        let table = String::from_utf8_lossy(&output.stdout);
+        let pid = table.lines().find_map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            (fields.len() == 5 && fields[1].ends_with(&suffix)).then(|| fields[4])
+        })?;
+        let output = std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .creation_flags(0x08000000).output().ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        return text.lines().find(|line| line.starts_with('"')).and_then(|line| line.split('"').nth(1)).map(str::to_owned);
+    }
+    #[cfg(not(windows))]
+    { let _ = port; None }
 }
 
 #[cfg(test)]
