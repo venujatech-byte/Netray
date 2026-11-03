@@ -68,4 +68,7 @@ rpmbuild -bb packaging/netray.spec \
     --define "netray_release 1"
 find "$topdir/RPMS" -name '*.rpm' -exec cp {} dist/ \; -printf 'RPM package: dist/%f\n'
 
+bash scripts/package-deb.sh "$app_version" "$work/rpmroot" dist
+bash scripts/package-arch.sh "$app_version" "$work/rpmroot" dist
+
 echo "Portable package: $archive"
