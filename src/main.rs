@@ -2420,6 +2420,13 @@ impl NetrayApp {
                 {
                     self.connection_error = true;
                 }
+                if self.worker_active && !self.user_stopped && self.connection_error
+                    && entry.source == "Xray"
+                    && entry.message.contains("proxy/vless/outbound: tunneling request to")
+                {
+                    self.connection_error = false;
+                    self.refresh_status_badge();
+                }
                 let ready_ping = (entry.source == "Supervisor")
                     .then(|| {
                         entry
@@ -6601,6 +6608,14 @@ mod performance_tests {
         assert!(app.error_notification.is_none());
         let _ = app.update_message(Message::ExecuteAutoReconnect);
         assert!(app.is_running, "Retry must not replace a live worker");
+        let _ = app.update_message(Message::NewLog(LogEntry::new(
+            "Xray",
+            "proxy/vless/outbound: tunneling request to tcp:api.github.com:443 via server:443",
+            LogLevel::Info,
+        )));
+        assert!(!app.connection_error, "Successful outbound traffic clears the error state");
+        app.refresh_status_badge();
+        assert!(app.status_badge_text.starts_with("CONNECTED"));
         let _ = app.update_message(Message::NewLog(LogEntry::new("Supervisor", "Tunnel is offline.", LogLevel::Warn)));
         assert!(!app.worker_active);
         assert_eq!(app.reconnect_attempts, 1);
