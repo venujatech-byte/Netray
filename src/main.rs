@@ -760,6 +760,27 @@ pub enum ViewMode {
     SshSettings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileSort {
+    Name,
+    CreatedDate,
+    Type,
+}
+
+impl ProfileSort {
+    const ALL: [Self; 3] = [Self::Name, Self::CreatedDate, Self::Type];
+}
+
+impl std::fmt::Display for ProfileSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Name => "Name",
+            Self::CreatedDate => "Created date",
+            Self::Type => "Type",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TunnelMode {
     SshPayload,
@@ -2857,6 +2878,21 @@ impl NetrayApp {
             Message::ToggleTunnel => {
                 self.delete_confirmation = None;
                 self.connection_error = false;
+                if self.is_running && self.tunnel_mode == TunnelMode::V2RayXray {
+                    if self.usage_stop_pending {
+                        return Task::none();
+                    }
+                    if self.usage_query_pending {
+                        self.usage_stop_pending = true;
+                        return Task::none();
+                    }
+                    if !self.skip_final_usage_once {
+                        self.usage_stop_pending = true;
+                        self.usage_query_pending = true;
+                        return Task::perform(v2ray::query_xray_traffic(), Message::UsageUpdated);
+                    }
+                }
+                self.skip_final_usage_once = false;
                 if self.worker_active && !self.is_running {
                     if let Some(stop) = self.stop_signal.take() {
                         let _ = stop.send(());
@@ -3100,6 +3136,9 @@ impl NetrayApp {
         if !self.hidden_to_tray && self.is_running && self.view_mode == ViewMode::Profiles {
             subscriptions
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick));
+        }
+        if self.worker_active {
+            subscriptions.push(iced::time::every(Duration::from_secs(60)).map(|_| Message::UsageTick));
         }
         if let Some(notif) = &self.error_notification {
             if notif.countdown_secs.is_some() {
@@ -4465,7 +4504,7 @@ impl NetrayApp {
             top_icon_btn(icons::FILE_PLUS, 20, (!config_locked).then(|| Message::RequestFileImport)),
             top_icon_btn(icons::QR_CODE, 20, (!config_locked).then(|| Message::OpenQrScanModal)),
             top_icon_btn(icons::LINK, 20, (!config_locked).then(|| Message::RequestClipboardImport)),
-            top_icon_btn(icons::MORE_VERTICAL, 20, Some(Message::SetViewMode(ViewMode::Logs))),
+            top_icon_btn(icons::MORE_VERTICAL, 20, Some(Message::ToggleOverflowMenu)),
         ]
         .spacing(4)
         .align_y(Alignment::Center)
@@ -4475,6 +4514,21 @@ impl NetrayApp {
             left: 12.0,
             right: 12.0,
         });
+
+        let overflow_menu = container(
+            column![
+                button("Logs")
+                    .width(Length::Fill)
+                    .on_press(Message::SetViewMode(ViewMode::Logs)),
+                text("Sort profiles by").size(11).color(TEXT_MUTED),
+                pick_list(ProfileSort::ALL, Some(self.profile_sort), Message::ProfileSortChanged)
+                    .width(Length::Fill),
+            ]
+            .spacing(8),
+        )
+        .padding(10)
+        .style(form_card_style)
+        .width(Length::Fixed(190.0));
 
         // 2. Category Sub-Bar
         let add_btn_active = !config_locked;
@@ -4539,10 +4593,15 @@ impl NetrayApp {
         });
 
         // 3. Node Cards List
-        let cards: Vec<Element<Message>> = self
-            .v2ray_profiles
-            .iter()
-            .enumerate()
+        let mut ordered_profiles: Vec<_> = self.v2ray_profiles.iter().enumerate().collect();
+        ordered_profiles.sort_by(|(_, a), (_, b)| match self.profile_sort {
+            ProfileSort::Name => a.name.cmp(&b.name),
+            ProfileSort::CreatedDate => b.created_at.cmp(&a.created_at),
+            ProfileSort::Type => self.profile_display_cache.get(&a.id).map(|(_, tag)| tag)
+                .cmp(&self.profile_display_cache.get(&b.id).map(|(_, tag)| tag)),
+        });
+        let cards: Vec<Element<Message>> = ordered_profiles
+            .into_iter()
             .map(|(idx, p)| {
                 let is_active = self.active_profile_id.as_deref() == Some(&p.id)
                     || self.v2ray_uri_or_json == p.config;
@@ -4734,7 +4793,14 @@ impl NetrayApp {
             right: 16.0,
         });
 
-        column![top_bar, sub_bar, list_content, fab_row,]
+        let mut profile_column = column![top_bar];
+        if self.show_overflow_menu {
+            profile_column = profile_column.push(row![Space::with_width(Length::Fill), overflow_menu].padding([0, 12]));
+        }
+        profile_column
+            .push(sub_bar)
+            .push(list_content)
+            .push(fab_row)
             .spacing(4)
             .width(Length::Fill)
             .height(Length::Fill)
