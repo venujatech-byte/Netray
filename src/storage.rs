@@ -10,6 +10,59 @@ pub struct V2RayProfile {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DailyUsage {
+    pub date: String,
+    pub uploaded: u64,
+    pub downloaded: u64,
+}
+
+static USAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn load_usage() -> Vec<DailyUsage> {
+    let _guard = USAGE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    read_usage()
+}
+
+fn read_usage() -> Vec<DailyUsage> {
+    fs::read(get_config_dir().join("usage.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub fn record_usage(uploaded: u64, downloaded: u64) -> Vec<DailyUsage> {
+    let _guard = USAGE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut records = read_usage();
+    if uploaded == 0 && downloaded == 0 {
+        return records;
+    }
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let record = records.iter_mut().find(|record| record.date == date);
+    if let Some(record) = record {
+        record.uploaded = record.uploaded.saturating_add(uploaded);
+        record.downloaded = record.downloaded.saturating_add(downloaded);
+    } else {
+        records.push(DailyUsage { date, uploaded, downloaded });
+    }
+    records.sort_by(|a, b| b.date.cmp(&a.date));
+    if let Ok(bytes) = serde_json::to_vec(&records) {
+        let _ = fs::write(get_config_dir().join("usage.json"), bytes);
+    }
+    records
+}
+
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{bytes} B") } else { format!("{value:.2} {}", UNITS[unit]) }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemePreference {
