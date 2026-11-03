@@ -4598,8 +4598,12 @@ impl NetrayApp {
                     .width(Length::Fill)
                     .on_press(Message::SetViewMode(ViewMode::Logs)),
                 text("Sort profiles by").size(11).color(TEXT_MUTED),
-                pick_list(ProfileSort::ALL, Some(self.profile_sort), Message::ProfileSortChanged)
-                    .width(Length::Fill),
+                modern_pick_list(
+                    ProfileSort::ALL,
+                    Some(self.profile_sort),
+                    Message::ProfileSortChanged,
+                    self.is_dark(),
+                ),
             ]
             .spacing(8),
         )
@@ -4870,18 +4874,34 @@ impl NetrayApp {
             right: 16.0,
         });
 
-        let mut profile_column = column![top_bar];
-        if self.show_overflow_menu {
-            profile_column = profile_column.push(row![Space::with_width(Length::Fill), overflow_menu].padding([0, 12]));
-        }
-        profile_column
+        let profile_column = column![top_bar]
             .push(sub_bar)
             .push(list_content)
             .push(fab_row)
             .spacing(4)
             .width(Length::Fill)
+            .height(Length::Fill);
+        if self.show_overflow_menu {
+            iced::widget::stack![
+                profile_column,
+                container(
+                    row![Space::with_width(Length::Fill), overflow_menu]
+                        .width(Length::Fill)
+                        .padding(iced::Padding {
+                            top: 60.0,
+                            right: 12.0,
+                            ..iced::Padding::ZERO
+                        })
+                )
+                .width(Length::Fill)
+                .height(Length::Fill),
+            ]
+            .width(Length::Fill)
             .height(Length::Fill)
             .into()
+        } else {
+            profile_column.into()
+        }
     }
 
     // ========================================================================
@@ -6243,7 +6263,7 @@ impl NetrayApp {
             .filter(|record| self.usage_date_filter == "All dates" || record.date == self.usage_date_filter)
             .fold((0u64, 0u64), |(up, down), record| (up.saturating_add(record.uploaded), down.saturating_add(record.downloaded)));
         let usage_card = container(column![
-            row![text("Data Usage").size(15).color(self.text_primary()), Space::with_width(Length::Fill), pick_list(usage_dates, Some(self.usage_date_filter.clone()), Message::UsageDateChanged).width(Length::Fixed(150.0))].align_y(Alignment::Center),
+            row![text("Data Usage").size(15).color(self.text_primary()), Space::with_width(Length::Fill), container(modern_pick_list(usage_dates, Some(self.usage_date_filter.clone()), Message::UsageDateChanged, self.is_dark())).width(Length::Fixed(150.0))].align_y(Alignment::Center),
             row![text("Uploaded").size(12).color(TEXT_MUTED), Space::with_width(Length::Fill), text(storage::format_bytes(uploaded)).size(13).color(self.text_primary())],
             row![text("Downloaded").size(12).color(TEXT_MUTED), Space::with_width(Length::Fill), text(storage::format_bytes(downloaded)).size(13).color(self.text_primary())],
             text("Netray tunnel traffic").size(10).color(TEXT_MUTED),
