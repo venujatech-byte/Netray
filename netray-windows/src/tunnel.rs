@@ -351,7 +351,7 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
             let lvl = classify_xray_log(&line);
             let cleaned = strip_xray_log_prefix(&line);
             if let Some(conn) = parse_xray_connection(cleaned) {
-                let app_name = if let Some(port) = conn.client_port {
+                let app_name = if let Some(port) = conn.client_port.filter(|_| crate::log_activity::detailed()) {
                     tokio::task::spawn_blocking(move || crate::apps::resolve_socket_process_name(port)).await.ok().flatten()
                 } else { None };
                 let is_direct = conn.route.eq_ignore_ascii_case("direct") || conn.route.eq_ignore_ascii_case("bypass");

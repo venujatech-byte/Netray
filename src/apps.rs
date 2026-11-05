@@ -24,6 +24,10 @@ pub fn parse_inode_from_proc_net_tcp(content: &str, port: u16) -> Option<String>
 
 /// Resolves the process name of the local application connected to/from `port`.
 pub fn resolve_socket_process_name(port: u16) -> Option<String> {
+    crate::log_activity::resolve_process(port, resolve_socket_process_name_uncached)
+}
+
+fn resolve_socket_process_name_uncached(port: u16) -> Option<String> {
     if port == 0 { return None; }
     let suffix = format!(":{port:04X}");
     let inode = ["/proc/net/tcp", "/proc/net/tcp6"].iter().find_map(|path| {

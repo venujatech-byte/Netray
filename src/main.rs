@@ -1,3 +1,4 @@
+mod log_activity;
 pub mod apps;
 pub mod autostart;
 pub mod icons;
@@ -1177,6 +1178,7 @@ pub enum Message {
     // Real-time Logger Events
     LoggerReady(mpsc::Sender<LogEntry>),
     NewLog(LogEntry),
+    LogBatch(Vec<LogEntry>),
     UptimeTick,
     ClearLogs,
     CopyLogs,
@@ -1550,7 +1552,7 @@ impl NetrayApp {
     fn update(&mut self, message: Message) -> Task<Message> {
         let scroll = matches!(
             message,
-            Message::NewLog(_)
+            Message::NewLog(_) | Message::LogBatch(_)
                 | Message::PingFinished(..)
                 | Message::SetViewMode(ViewMode::Logs)
                 | Message::AutoScrollLogs(true)
@@ -1561,6 +1563,7 @@ impl NetrayApp {
         let previous_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
         let tray_opened = matches!(message, Message::WindowOpened(_));
         let task = self.update_message(message);
+        log_activity::set_detailed(!self.hidden_to_tray && self.view_mode == ViewMode::Logs);
         if self.connection_error && !previous_error && !self.user_stopped {
             if self.notify_connection_drops {
                 notifications::send_desktop_notification(
@@ -1592,7 +1595,7 @@ impl NetrayApp {
                 item.set_enabled(self.is_running || !self.worker_active);
             }
         }
-        if scroll && self.auto_scroll_logs && self.view_mode == ViewMode::Logs {
+        if scroll && !self.hidden_to_tray && self.auto_scroll_logs && self.view_mode == ViewMode::Logs {
             task.chain(scrollable::snap_to(
                 scrollable::Id::new("logs"),
                 scrollable::RelativeOffset::END,
@@ -2541,6 +2544,9 @@ impl NetrayApp {
                 self.log_sender = Some(sender);
                 Task::none()
             }
+            Message::LogBatch(entries) => {
+                Task::batch(entries.into_iter().map(|entry| self.update_message(Message::NewLog(entry))).collect::<Vec<_>>())
+            }
             Message::NewLog(entry) => {
                 if self.worker_active && !self.user_stopped
                     && ((entry.level == LogLevel::Error && matches!(entry.source.as_str(), "Xray" | "Error" | "DNS"))
@@ -3188,8 +3194,26 @@ impl NetrayApp {
             iced::stream::channel(100, |mut output| async move {
                 let (tx, mut rx) = mpsc::channel::<LogEntry>(256);
                 let _ = output.send(Message::LoggerReady(tx)).await;
-                while let Some(log_entry) = rx.recv().await {
-                    let _ = output.send(Message::NewLog(log_entry)).await;
+                while let Some(entry) = rx.recv().await {
+                    if entry.source != "Xray" || !matches!(entry.level, LogLevel::Info) {
+                        if output.send(Message::NewLog(entry)).await.is_err() { break; }
+                        continue;
+                    }
+                    let delay = if log_activity::detailed() { 200 } else { 1000 };
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(delay);
+                    let mut batch = vec![entry];
+                    let mut urgent = None;
+                    while batch.len() < 128 {
+                        match tokio::time::timeout_at(deadline, rx.recv()).await {
+                            Ok(Some(entry)) if entry.source == "Xray" && matches!(entry.level, LogLevel::Info) => batch.push(entry),
+                            Ok(Some(entry)) => { urgent = Some(entry); break; }
+                            _ => break,
+                        }
+                    }
+                    if output.send(Message::LogBatch(batch)).await.is_err() { break; }
+                    if let Some(entry) = urgent {
+                        if output.send(Message::NewLog(entry)).await.is_err() { break; }
+                    }
                 }
             })
         });
@@ -6422,6 +6446,17 @@ mod performance_tests {
         assert_eq!(app.logs.len(), count + 1);
         let _ = app.update(Message::AutoScrollLogs(true));
         assert!(app.auto_scroll_logs);
+    }
+
+    #[test]
+    fn log_batch_preserves_entry_order() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.logs.clear();
+        let entries = vec![LogEntry::new("Xray", "first", LogLevel::Info), LogEntry::new("Xray", "second", LogLevel::Info)];
+        let _ = app.update_message(Message::LogBatch(entries));
+        assert_eq!(app.logs.len(), 2);
+        assert_eq!(app.logs[0].message, "first");
+        assert_eq!(app.logs[1].message, "second");
     }
 
     #[test]

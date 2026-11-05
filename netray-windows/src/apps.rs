@@ -185,6 +185,10 @@ pub fn extract_binary_name(path_str: &str) -> Option<String> {
 }
 
 pub fn resolve_socket_process_name(port: u16) -> Option<String> {
+    crate::log_activity::resolve_process(port, resolve_socket_process_name_uncached)
+}
+
+fn resolve_socket_process_name_uncached(port: u16) -> Option<String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

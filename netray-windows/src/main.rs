@@ -1,5 +1,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+#[path = "../../src/log_activity.rs"]
+mod log_activity;
 pub mod apps;
 pub mod autostart;
 pub mod icons;
@@ -17,7 +19,7 @@ pub mod updater;
 pub mod v2ray;
 
 use chrono::Local;
-use iced::futures::SinkExt;
+use iced::futures::{SinkExt, StreamExt};
 use iced::widget::{
     button, checkbox, column, container, pick_list, row, scrollable, text, text_input, toggler,
     Space,
@@ -987,6 +989,7 @@ pub enum Message {
 
     LoggerReady(mpsc::Sender<LogEntry>),
     NewLog(LogEntry),
+    LogBatch(Vec<LogEntry>),
     UptimeTick,
     ClearLogs,
     CopyLogs,
@@ -996,6 +999,8 @@ pub enum Message {
     CloseRequested(iced::window::Id),
     WindowOpened(iced::window::Id),
     WindowTick,
+    TrayShow,
+    TrayExit,
     Minimized(Option<bool>),
     ConfirmExit,
     CancelExit,
@@ -1328,15 +1333,17 @@ impl NetrayApp {
     fn update(&mut self, message: Message) -> Task<Message> {
         let scroll = matches!(
             message,
-            Message::NewLog(_)
+            Message::NewLog(_) | Message::LogBatch(_)
                 | Message::PingFinished(..)
                 | Message::SetViewMode(ViewMode::Logs)
                 | Message::AutoScrollLogs(true)
         );
+        let previous_connection = (self.is_running, self.worker_active);
         let previous_error = self.connection_error;
         let previous_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
         let tray_opened = matches!(message, Message::WindowOpened(_));
         let task = self.update_message(message);
+        log_activity::set_detailed(!self.hidden_to_tray && self.view_mode == ViewMode::Logs);
         if self.connection_error && !previous_error && !self.user_stopped {
             if self.notify_connection_drops {
                 notifications::send_desktop_notification(
@@ -1358,7 +1365,13 @@ impl NetrayApp {
             }
         }
 
-        if scroll && self.auto_scroll_logs && self.view_mode == ViewMode::Logs {
+        if tray_opened || previous_connection != (self.is_running, self.worker_active) {
+            if let Some(item) = &self.tray_connect_item {
+                item.set_text(if self.is_running { "Disconnect" } else { "Connect" });
+                item.set_enabled(self.is_running || !self.worker_active);
+            }
+        }
+        if scroll && !self.hidden_to_tray && self.auto_scroll_logs && self.view_mode == ViewMode::Logs {
             task.chain(scrollable::snap_to(
                 scrollable::Id::new("logs"),
                 scrollable::RelativeOffset::END,
@@ -2162,6 +2175,9 @@ impl NetrayApp {
                 self.log_sender = Some(sender);
                 Task::none()
             }
+            Message::LogBatch(entries) => {
+                Task::batch(entries.into_iter().map(|entry| self.update_message(Message::NewLog(entry))).collect::<Vec<_>>())
+            }
             Message::NewLog(entry) => {
                 if self.worker_active && !self.user_stopped
                     && ((entry.level == LogLevel::Error && matches!(entry.source.as_str(), "Xray" | "Error" | "DNS"))
@@ -2358,62 +2374,19 @@ impl NetrayApp {
                 }
                 Task::none()
             }
+            Message::TrayExit => {
+                self.close_confirmation = self.window_id;
+                self.update_message(Message::TrayShow)
+            }
+            Message::TrayShow => {
+                self.hidden_to_tray = false;
+                if let Some(id) = self.window_id {
+                    iced::window::change_mode(id, iced::window::Mode::Windowed)
+                        .chain(iced::window::minimize(id, false))
+                        .chain(iced::window::gain_focus(id))
+                } else { Task::none() }
+            }
             Message::WindowTick => {
-                if let Some(item) = &self.tray_connect_item {
-                    item.set_text(if self.is_running {
-                        "Disconnect"
-                    } else {
-                        "Connect"
-                    });
-                    item.set_enabled(self.is_running || !self.worker_active);
-                }
-                if let Ok(event) = TrayIconEvent::receiver().try_recv() {
-                    if matches!(
-                        event,
-                        TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            ..
-                        } | TrayIconEvent::DoubleClick { .. }
-                    ) {
-                        self.hidden_to_tray = false;
-                        if let Some(id) = self.window_id {
-                            return iced::window::change_mode(id, iced::window::Mode::Windowed)
-                                .chain(iced::window::minimize(id, false))
-                                .chain(iced::window::gain_focus(id));
-                        }
-                    }
-                }
-                while let Ok(event) = MenuEvent::receiver().try_recv() {
-                    match event.id().as_ref() {
-                        "show" => {
-                            self.hidden_to_tray = false;
-                            if let Some(id) = self.window_id {
-                                return iced::window::change_mode(id, iced::window::Mode::Windowed)
-                                    .chain(iced::window::minimize(id, false))
-                                    .chain(iced::window::gain_focus(id));
-                            }
-                        }
-                        "hide" => {
-                            if let Some(id) = self.window_id {
-                                self.hidden_to_tray = true;
-                                return iced::window::change_mode(id, iced::window::Mode::Hidden);
-                            }
-                        }
-                        "connect" if self.is_running || !self.worker_active => {
-                            return self.update(Message::ToggleTunnel);
-                        }
-                        "exit" => {
-                            if let Some(id) = self.window_id {
-                                self.hidden_to_tray = false;
-                                self.close_confirmation = Some(id);
-                                return iced::window::change_mode(id, iced::window::Mode::Windowed)
-                                    .chain(iced::window::minimize(id, false))
-                                    .chain(iced::window::gain_focus(id));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
                 if self.hidden_to_tray {
                     Task::none()
                 } else if let Some(id) = self.window_id {
@@ -2935,8 +2908,26 @@ impl NetrayApp {
             iced::stream::channel(100, |mut output| async move {
                 let (tx, mut rx) = mpsc::channel::<LogEntry>(256);
                 let _ = output.send(Message::LoggerReady(tx)).await;
-                while let Some(log_entry) = rx.recv().await {
-                    let _ = output.send(Message::NewLog(log_entry)).await;
+                while let Some(entry) = rx.recv().await {
+                    if entry.source != "Xray" || !matches!(entry.level, LogLevel::Info) {
+                        if output.send(Message::NewLog(entry)).await.is_err() { break; }
+                        continue;
+                    }
+                    let delay = if log_activity::detailed() { 200 } else { 1000 };
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(delay);
+                    let mut batch = vec![entry];
+                    let mut urgent = None;
+                    while batch.len() < 128 {
+                        match tokio::time::timeout_at(deadline, rx.recv()).await {
+                            Ok(Some(entry)) if entry.source == "Xray" && matches!(entry.level, LogLevel::Info) => batch.push(entry),
+                            Ok(Some(entry)) => { urgent = Some(entry); break; }
+                            _ => break,
+                        }
+                    }
+                    if output.send(Message::LogBatch(batch)).await.is_err() { break; }
+                    if let Some(entry) = urgent {
+                        if output.send(Message::NewLog(entry)).await.is_err() { break; }
+                    }
                 }
             })
         });
@@ -2944,9 +2935,44 @@ impl NetrayApp {
             logs,
             iced::window::close_requests().map(Message::CloseRequested),
             iced::window::open_events().map(Message::WindowOpened),
-            iced::time::every(Duration::from_secs(1)).map(|_| Message::WindowTick),
+            Subscription::run(|| {
+                iced::stream::channel(16, |mut output| async move {
+                    let (tx, mut rx) = iced::futures::channel::mpsc::unbounded();
+                    let clicks = tx.clone();
+                    TrayIconEvent::set_event_handler(Some(move |event| {
+                        if matches!(
+                            event,
+                            TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                ..
+                            } | TrayIconEvent::DoubleClick { .. }
+                        ) {
+                            let _ = clicks.unbounded_send(Message::TrayShow);
+                        }
+                    }));
+                    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+                        let message = match event.id().as_ref() {
+                            "show" => Message::TrayShow,
+                            "hide" => Message::MinimizeToTray,
+                            "connect" => Message::ToggleTunnel,
+                            "exit" => Message::TrayExit,
+                            _ => return,
+                        };
+                        let _ = tx.unbounded_send(message);
+                    }));
+                    while let Some(message) = rx.next().await {
+                        if output.send(message).await.is_err() {
+                            break;
+                        }
+                    }
+                })
+            }),
+
         ];
-        if self.is_running && self.view_mode == ViewMode::Profiles {
+        if !self.hidden_to_tray {
+            subscriptions.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::WindowTick));
+        }
+        if !self.hidden_to_tray && self.is_running && self.view_mode == ViewMode::Profiles {
             subscriptions
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::UptimeTick));
         }
@@ -5859,21 +5885,35 @@ mod performance_tests {
     }
 
     #[test]
+    fn log_batch_preserves_entry_order() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.logs.clear();
+        let entries = vec![LogEntry::new("Xray", "first", LogLevel::Info), LogEntry::new("Xray", "second", LogLevel::Info)];
+        let _ = app.update_message(Message::LogBatch(entries));
+        assert_eq!(app.logs.len(), 2);
+        assert_eq!(app.logs[0].message, "first");
+        assert_eq!(app.logs[1].message, "second");
+    }
+
+    #[test]
     fn uptime_only_subscribes_when_visible_and_running() {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
         let subscriptions =
             |app: &NetrayApp| iced::advanced::subscription::into_recipes(app.subscription()).len();
-        assert_eq!(subscriptions(&app), 4);
+        let visible_idle = subscriptions(&app);
         app.is_running = true;
-        assert_eq!(subscriptions(&app), 5);
+        assert_eq!(subscriptions(&app), visible_idle + 1);
         for view in [ViewMode::Logs, ViewMode::EditNode, ViewMode::SshSettings] {
             app.view_mode = view;
-            assert_eq!(subscriptions(&app), 4);
+            assert_eq!(subscriptions(&app), visible_idle);
         }
         app.view_mode = ViewMode::Profiles;
-        assert_eq!(subscriptions(&app), 5);
+        assert_eq!(subscriptions(&app), visible_idle + 1);
+        app.hidden_to_tray = true;
+        assert_eq!(subscriptions(&app), visible_idle - 1);
+        app.hidden_to_tray = false;
         app.is_running = false;
-        assert_eq!(subscriptions(&app), 4);
+        assert_eq!(subscriptions(&app), visible_idle);
     }
     #[tokio::test]
     async fn logging_waits_for_capacity_without_losing_entries() {

@@ -346,7 +346,11 @@ async fn handle_socks5_client(
     sock.read_exact(&mut buf[..2]).await?;
     let target_port = u16::from_be_bytes([buf[0], buf[1]]);
 
-    let app_name = crate::apps::resolve_socket_process_name(client_addr.port());
+    let app_name = if crate::log_activity::detailed() {
+        let port = client_addr.port();
+        tokio::task::spawn_blocking(move || crate::apps::resolve_socket_process_name(port))
+            .await.ok().flatten()
+    } else { None };
     let app_display = app_name.as_deref().unwrap_or("app");
 
     record_connection_start(false);
@@ -520,7 +524,7 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
             let lvl = classify_xray_log(&line);
             let cleaned = strip_xray_log_prefix(&line);
             if let Some(conn) = parse_xray_connection(cleaned) {
-                let app_name = if let Some(port) = conn.client_port {
+                let app_name = if let Some(port) = conn.client_port.filter(|_| crate::log_activity::detailed()) {
                     tokio::task::spawn_blocking(move || crate::apps::resolve_socket_process_name(port)).await.ok().flatten()
                 } else { None };
                 let is_direct = conn.route.eq_ignore_ascii_case("direct") || conn.route.eq_ignore_ascii_case("bypass");

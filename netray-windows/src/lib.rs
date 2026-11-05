@@ -11,3 +11,6 @@ pub mod sysproxy;
 pub mod theme;
 pub mod updater;
 pub mod v2ray;
+
+#[path = "../../src/log_activity.rs"]
+pub mod log_activity;
