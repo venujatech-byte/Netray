@@ -91,6 +91,7 @@ pub struct TunnelConfig {
     pub enable_sysproxy: bool,
     pub whitelist_apps: String,
     pub whitelist_urls: String,
+    pub allow_insecure_tls: bool,
 }
 
 // Minimal russh client handler (accepts server host keys)
@@ -585,6 +586,7 @@ async fn run_xray_engine(
     };
 
     let mut logging_config: serde_json::Value = serde_json::from_str(&config_json)?;
+    crate::v2ray::apply_tls_policy(&mut logging_config, cfg.allow_insecure_tls);
     logging_config["log"] = serde_json::json!({"loglevel": "info", "access": "", "error": ""});
     logging_config["stats"] = serde_json::json!({});
     if !logging_config["api"].is_object() {
