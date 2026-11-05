@@ -119,6 +119,8 @@ pub struct AppData {
     pub auto_reconnect: bool,
     #[serde(default = "default_true")]
     pub notify_connection_drops: bool,
+    #[serde(default)]
+    pub allow_insecure_tls: bool,
     #[serde(default = "default_true")]
     pub auto_check_updates: bool,
 }
@@ -158,6 +160,7 @@ impl Default for AppData {
             connect_at_startup: false,
             auto_reconnect: true,
             notify_connection_drops: true,
+            allow_insecure_tls: false,
             auto_check_updates: true,
         }
     }
@@ -239,6 +242,7 @@ pub struct AppDataRef<'a> {
     pub connect_at_startup: bool,
     pub auto_reconnect: bool,
     pub notify_connection_drops: bool,
+    pub allow_insecure_tls: bool,
     pub auto_check_updates: bool,
 }
 
@@ -269,6 +273,7 @@ impl AppData {
             connect_at_startup: self.connect_at_startup,
             auto_reconnect: self.auto_reconnect,
             notify_connection_drops: self.notify_connection_drops,
+            allow_insecure_tls: self.allow_insecure_tls,
             auto_check_updates: self.auto_check_updates,
         }
     }

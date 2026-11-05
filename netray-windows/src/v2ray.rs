@@ -548,7 +548,7 @@ pub async fn wait_for_http_proxy(port: u16) -> Result<u128, String> {
     latency::wait_for_http_proxy(port).await
 }
 
-pub async fn ping_profile(raw: &str) -> Result<u128, String> {
+pub async fn ping_profile(raw: &str, allow_insecure_tls: bool) -> Result<u128, String> {
     let normalized = parse_and_generate_xray_config(raw, 10808, 10809, false)?;
     let mut config: Value =
         serde_json::from_str(&normalized).map_err(|e| format!("Invalid Xray config: {e}"))?;
@@ -557,6 +557,7 @@ pub async fn ping_profile(raw: &str) -> Result<u128, String> {
         "queryStrategy": "UseIPv4",
         "hosts": {}
     });
+    apply_tls_policy(&mut config, allow_insecure_tls);
     pin_proxy_dns(&mut config).await?;
     latency::measure(&find_xray_binary()?, config).await
 }
@@ -2369,3 +2370,35 @@ mod tests {
     }
 }
 
+
+/// Apply the saved TLS policy to generated and imported JSON alike; Reality is unchanged.
+pub fn apply_tls_policy(config: &mut serde_json::Value, allow_insecure: bool) {
+    if let Some(outbounds) = config["outbounds"].as_array_mut() {
+        for outbound in outbounds {
+            let Some(stream) = outbound.get_mut("streamSettings") else { continue; };
+            if stream["security"].as_str() != Some("tls") { continue; }
+            if !stream["tlsSettings"].is_object() {
+                stream["tlsSettings"] = serde_json::json!({});
+            }
+            stream["tlsSettings"]["allowInsecure"] = serde_json::json!(allow_insecure);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tls_policy_tests {
+    #[test]
+    fn tls_policy_preserves_sni_and_reality_and_can_be_disabled() {
+        let mut config = serde_json::json!({"outbounds": [
+            {"streamSettings": {"security":"tls", "tlsSettings":{"serverName":"sni.example", "verifyPeerCertByName":"server.example"}}},
+            {"streamSettings": {"security":"reality", "realitySettings":{"serverName":"reality.example"}}}
+        ]});
+        super::apply_tls_policy(&mut config, true);
+        assert_eq!(config["outbounds"][0]["streamSettings"]["tlsSettings"]["allowInsecure"], true);
+        assert_eq!(config["outbounds"][0]["streamSettings"]["tlsSettings"]["serverName"], "sni.example");
+        assert!(config["outbounds"][1]["streamSettings"].get("tlsSettings").is_none());
+        super::apply_tls_policy(&mut config, false);
+        assert_eq!(config["outbounds"][0]["streamSettings"]["tlsSettings"]["allowInsecure"], false);
+        assert_eq!(config["outbounds"][0]["streamSettings"]["tlsSettings"]["verifyPeerCertByName"], "server.example");
+    }
+}

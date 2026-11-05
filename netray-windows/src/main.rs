@@ -829,6 +829,7 @@ pub struct NetrayApp {
     pub connect_at_startup: bool,
     pub auto_reconnect: bool,
     pub notify_connection_drops: bool,
+    pub allow_insecure_tls: bool,
     pub user_stopped: bool,
     pub reconnect_attempts: u32,
     pub error_notification: Option<ErrorNotification>,
@@ -973,6 +974,7 @@ pub enum Message {
     DismissNotification,
     ToggleAutoReconnect(bool),
     ToggleConnectionDropNotifications(bool),
+    ToggleAllowInsecureTls(bool),
 
     CheckForUpdates,
     UpdateCheckFinished(Result<Option<updater::ReleaseInfo>, String>),
@@ -1075,6 +1077,7 @@ impl NetrayApp {
             connect_at_startup: saved.connect_at_startup,
             auto_reconnect: saved.auto_reconnect,
             notify_connection_drops: saved.notify_connection_drops,
+            allow_insecure_tls: saved.allow_insecure_tls,
             user_stopped: false,
             reconnect_attempts: 0,
             error_notification: None,
@@ -1246,6 +1249,7 @@ impl NetrayApp {
             connect_at_startup: self.connect_at_startup,
             auto_reconnect: self.auto_reconnect,
             notify_connection_drops: self.notify_connection_drops,
+            allow_insecure_tls: self.allow_insecure_tls,
             auto_check_updates: self.auto_check_updates,
         };
         storage::save_state_ref(&app_ref)
@@ -1567,12 +1571,13 @@ impl NetrayApp {
                                 .unwrap_or(10808)
                                 .saturating_add(1)
                         });
+                    let allow_insecure_tls = self.allow_insecure_tls;
                     Task::perform(
                         async move {
                             if let Some(port) = local_proxy {
                                 v2ray::ping_local_http_proxy(port).await
                             } else {
-                                v2ray::ping_profile(&config).await
+                                v2ray::ping_profile(&config, allow_insecure_tls).await
                             }
                         },
                         move |result| Message::PingFinished(id.clone(), result),
@@ -2533,6 +2538,12 @@ impl NetrayApp {
                 let _ = self.save_current_state();
                 Task::none()
             }
+            Message::ToggleAllowInsecureTls(enabled) => {
+                if self.is_running || self.worker_active { return Task::none(); }
+                self.allow_insecure_tls = enabled;
+                let _ = self.save_current_state();
+                Task::none()
+            }
             Message::ToggleConnectionDropNotifications(enabled) => {
                 self.notify_connection_drops = enabled;
                 self.push_log(
@@ -2762,6 +2773,7 @@ impl NetrayApp {
                         enable_sysproxy: self.enable_sysproxy,
                         whitelist_apps: self.whitelist_apps.clone(),
                         whitelist_urls: self.whitelist_urls.clone(),
+                        allow_insecure_tls: self.allow_insecure_tls,
                     };
 
                     let log_tx_opt = self.log_sender.clone();
@@ -5218,6 +5230,11 @@ impl NetrayApp {
                     self.auto_reconnect,
                 )
                 .on_toggle(Message::ToggleAutoReconnect),
+                Space::with_height(2),
+                checkbox("Allow insecure (TLS)", self.allow_insecure_tls)
+                    .on_toggle_maybe((!self.is_running && !self.worker_active).then_some(Message::ToggleAllowInsecureTls)),
+                text("Skips server certificate verification. Applies on the next connection; disabled while connected.")
+                    .size(11),
                 Space::with_height(2),
                 checkbox(
                     "Connection drop desktop notifications (drop and reconnect alerts)",
