@@ -31,6 +31,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.3"
+          cache: false
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -165,7 +170,7 @@ jobs:
           - **Linux 64-bit Portable**: \`netray-linux-linux-64-$VERSION.tar.gz\` (bundled with Xray-core)
 
           ### 🔒 Integrity & Security
-          - Bundled with unmodified, official Xray-core v26.10.21.
+          - Bundled with Netray-patched Xray-core a4a3dff5b20c; modified source included.
           - Built on GitHub CI from commit \`${GITHUB_SHA}\`.
           EOF
 

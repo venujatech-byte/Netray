@@ -44,4 +44,4 @@ cargo run --release
 ```bat
 scripts\build.bat
 ```
-This builds `dist\netray-windows-0.1.0.zip`, a portable package containing Netray and the official Xray-core release. The build downloads the pinned Xray release from GitHub and verifies its SHA-256 checksum. GitHub Actions publishes a versioned package on each push to `main` or `master`.
+This builds `dist\netray-windows-0.1.0.zip`, a portable package containing Netray and a Netray-patched Xray-core build. Packaging verifies the official asset checksum, builds the pinned core with the TLS compatibility patch, and includes its modified source. Python 3 and Go 1.27.3 are required. GitHub Actions publishes a versioned package on each push to `main` or `master`.
