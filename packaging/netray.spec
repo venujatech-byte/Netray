@@ -7,7 +7,7 @@ URL:            https://github.com/venujatech-byte/Netray
 Source0:        netray-payload.tar.gz
 BuildArch:      %{_arch}
 %global debug_package %{nil}
-# Keep the verified upstream Xray binary byte-for-byte intact.
+# Preserve the bundled Xray binary without RPM post-processing.
 %global __os_install_post %{nil}
 
 %description
@@ -32,6 +32,9 @@ cp -a payload/. %{buildroot}/
 /opt/netray/geoip.dat
 /opt/netray/geosite.dat
 %license /opt/netray/LICENSE
+%license /opt/netray/LICENSE-Xray
 %license /usr/share/licenses/netray/LICENSE-Netray.txt
 %doc /opt/netray/README.md
 %doc /opt/netray/THIRD-PARTY-NOTICES.txt
+%doc /opt/netray/XRAY-SOURCE.tar.gz
+%doc /opt/netray/patch-xray-tls.py
