@@ -19,7 +19,8 @@ with tempfile.TemporaryDirectory(prefix='netray-xray-') as work:
     subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', COMMIT], check=True)
     subprocess.run([sys.executable, str(Path(__file__).with_name('patch-xray-tls.py')), str(source)], check=True)
     shutil.copy2(Path(__file__).with_name('test-xray-tls.go'), source / 'transport/internet/tls/netray_insecure_test.go')
-    go_env = dict(os.environ, GOTOOLCHAIN='go1.27.3')
+    # Build a portable x86-64 core, including for older CPUs than the CI runner.
+    go_env = dict(os.environ, GOTOOLCHAIN='go1.27.3', GOAMD64='v1')
     subprocess.run(['go', 'test', './transport/internet/tls', '-run', '^TestNetrayAllowInsecure$', '-count=1'], cwd=source, env=go_env, check=True)
     subprocess.run(['go', 'build', '-buildvcs=false', '-trimpath', '-ldflags=-s -w -buildid=', '-o', str(output), './main'], cwd=source, env=go_env, check=True)
     with tarfile.open(output.parent / 'XRAY-SOURCE.tar.gz', 'w:gz') as archive:

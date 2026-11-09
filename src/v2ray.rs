@@ -1588,7 +1588,12 @@ pub async fn test_xray_config(xray_bin: &Path, config_json: &str) -> Result<(), 
                     .filter(|l| l.contains("failed") || l.contains("error") || l.contains("Error"))
                     .collect();
                 if error_lines.is_empty() {
-                    Err(combined.trim().to_string())
+                    let output = combined.trim();
+                    if output.is_empty() {
+                        Err(format!("Xray config validation exited with {} and produced no output", out.status))
+                    } else {
+                        Err(output.to_string())
+                    }
                 } else {
                     Err(error_lines.join("\n"))
                 }
