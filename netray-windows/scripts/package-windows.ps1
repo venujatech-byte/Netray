@@ -6,38 +6,40 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use MAJOR.MINOR.
 $xrayVersion = "v26.10.21"
 $asset = "Xray-windows-64.zip"
 $releaseUrl = "https://github.com/XTLS/Xray-core/releases/download/$xrayVersion"
+$mirrorUrl = "https://sourceforge.net/projects/xray-core.mirror/files/$xrayVersion"
+$expectedArchiveSha256 = "fc58c39ee2f2717b4c54d28d374362389e5319b20ae44aea76ea45a5243ec827"
 $work = Join-Path ([IO.Path]::GetTempPath()) ("netray-xray-" + [guid]::NewGuid())
 $package = Join-Path $PSScriptRoot "..\dist\netray-windows"
 $exe = Join-Path $PSScriptRoot "..\target\release\netray-windows.exe"
 
-function Get-ReleaseAsset([string]$Url, [string]$Path) {
-    for ($attempt = 1; $attempt -le 5; $attempt++) {
-        try {
-            Invoke-WebRequest -Uri $Url -OutFile $Path -TimeoutSec 180
-            return
-        } catch {
-            Remove-Item $Path -Force -ErrorAction SilentlyContinue
-            if ($attempt -eq 5) { throw }
-            Write-Warning "Download failed (attempt $attempt/5); retrying: $($_.Exception.Message)"
-            Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 10))
+function Get-ReleaseAsset([string]$PrimaryUrl, [string]$FallbackUrl, [string]$Path) {
+    foreach ($source in @($PrimaryUrl, $FallbackUrl)) {
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Invoke-WebRequest -Uri $source -OutFile $Path -TimeoutSec 180
+                return
+            } catch {
+                Remove-Item $Path -Force -ErrorAction SilentlyContinue
+                if ($attempt -eq 3) {
+                    Write-Warning "Download failed from ${source}: $($_.Exception.Message)"
+                } else {
+                    Write-Warning "Download failed (attempt $attempt/3); retrying: $($_.Exception.Message)"
+                    Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 10))
+                }
+            }
         }
     }
+    throw "Could not download the Xray release asset from GitHub or SourceForge."
 }
 
 try {
     if (-not (Test-Path $exe -PathType Leaf)) { throw "Netray executable not found: $exe" }
     New-Item -ItemType Directory -Path $work, $package -Force | Out-Null
     $zip = Join-Path $work $asset
-    $dgst = Join-Path $work "$asset.dgst"
-    Get-ReleaseAsset "$releaseUrl/$asset" $zip
-    Get-ReleaseAsset "$releaseUrl/$asset.dgst" $dgst
+    Get-ReleaseAsset "$mirrorUrl/$asset/download" "$releaseUrl/$asset" $zip
 
-    $checksumText = Get-Content $dgst -Raw
-    $match = [regex]::Match($checksumText, '(?im)^\s*sha(?:2-)?256\s*=\s*([0-9a-f]{64})\s*$|^\s*SHA(?:2-)?256\s+\([^)]*\)\s*=\s*([0-9a-f]{64})\s*$')
-    if (-not $match.Success) { throw "Xray release checksum is missing or invalid." }
-    $expected = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
-    if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expected.ToUpperInvariant()) {
-        throw "Xray release checksum does not match."
+    if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expectedArchiveSha256.ToUpperInvariant()) {
+        throw "Xray release SHA-256 checksum does not match the pinned v$xrayVersion archive."
     }
 
     $extract = Join-Path $work "extract"

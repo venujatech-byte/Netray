@@ -16,21 +16,34 @@ esac
 
 asset="Xray-$asset_arch.zip"
 base_url="https://github.com/XTLS/Xray-core/releases/download/$version"
+mirror_url="https://sourceforge.net/projects/xray-core.mirror/files/$version"
+case "$asset_arch" in
+    linux-64) expected="0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978" ;;
+    linux-arm64-v8a) expected="d1304946c486d98e6b886e9b931eaaaebb23835b30e217638037b7f2721d4e9c" ;;
+esac
 work=$(mktemp -d)
 package="$work/netray-linux-$asset_arch"
 trap 'rm -rf "$work"' EXIT
 
 download_release_asset() {
-    curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
-        --retry-delay 2 --connect-timeout 20 --max-time 180 "$1" -o "$2"
+    local output=$1
+    shift
+    for url in "$@"; do
+        if curl --fail --location --silent --show-error --retry 2 --retry-all-errors \
+            --retry-delay 2 --connect-timeout 20 --max-time 180 "$url" -o "$output"; then
+            return 0
+        fi
+        rm -f "$output"
+        echo "Download failed; trying the next Xray mirror." >&2
+    done
+    echo "Could not download $asset from GitHub or SourceForge." >&2
+    return 1
 }
 
 cargo build --release
 mkdir -p "$package" dist
-download_release_asset "$base_url/$asset" "$work/$asset"
-download_release_asset "$base_url/$asset.dgst" "$work/$asset.dgst"
+download_release_asset "$work/$asset" "$mirror_url/$asset/download" "$base_url/$asset"
 
-expected=$(awk 'tolower($1) ~ /^sha(2-)?256=/ { sub(/^[^=]*=/, "", $1); if ($1 == "") $1 = $2; print $1; exit } ($1 == "SHA256" || $1 == "SHA2-256") && $3 == "=" { print $4; exit }' "$work/$asset.dgst")
 actual=$(sha256sum "$work/$asset" | awk '{ print $1 }')
 if [[ -z "$expected" || "${actual,,}" != "${expected,,}" ]]; then
     echo "Xray release SHA-256 checksum is missing or does not match." >&2
