@@ -170,7 +170,7 @@ jobs:
           - **Linux 64-bit Portable**: \`netray-linux-linux-64-$VERSION.tar.gz\` (bundled with Xray-core)
 
           ### 🔒 Integrity & Security
-          - Bundled with Netray-patched Xray-core a4a3dff5b20c; modified source included.
+          - Bundled with Netray-patched Xray-core v26.10.21 (1b1647cd9ddf); modified source included.
           - Built on GitHub CI from commit \`${GITHUB_SHA}\`.
           EOF
 

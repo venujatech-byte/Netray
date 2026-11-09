@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Netray compatibility patch for Xray-core a4a3dff5b20c (MPL-2.0)."""
+"""Netray compatibility patch for Xray-core v26.10.21 (MPL-2.0)."""
 from pathlib import Path
 import sys
 

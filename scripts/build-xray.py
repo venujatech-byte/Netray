@@ -8,7 +8,8 @@ import sys
 import tarfile
 import tempfile
 
-COMMIT = 'a4a3dff5b20c2faae567b742c172c7b95e75c083'
+# Keep the patched source aligned with the release assets and geo data.
+COMMIT = '1b1647cd9ddf0abc34b981d4611fc03bcac1ca74'
 output = Path(sys.argv[1]).resolve()
 output.parent.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='netray-xray-') as work:
@@ -23,6 +24,7 @@ with tempfile.TemporaryDirectory(prefix='netray-xray-') as work:
     go_env = dict(os.environ, GOTOOLCHAIN='go1.27.3', GOAMD64='v1')
     subprocess.run(['go', 'test', './transport/internet/tls', '-run', '^TestNetrayAllowInsecure$', '-count=1'], cwd=source, env=go_env, check=True)
     subprocess.run(['go', 'build', '-buildvcs=false', '-trimpath', '-ldflags=-s -w -buildid=', '-o', str(output), './main'], cwd=source, env=go_env, check=True)
+    subprocess.run([str(output), 'version'], env=go_env, stdout=subprocess.DEVNULL, check=True)
     with tarfile.open(output.parent / 'XRAY-SOURCE.tar.gz', 'w:gz') as archive:
         for entry in source.iterdir():
             if entry.name != '.git':
