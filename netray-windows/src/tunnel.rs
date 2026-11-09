@@ -348,6 +348,10 @@ fn spawn_xray_log_pipe<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     tokio::spawn(async move {
         let mut reader = BufReader::new(stream).lines();
         while let Ok(Some(line)) = reader.next_line().await {
+            if !crate::log_activity::enabled()
+                && !line.contains("[Error]")
+                && !line.contains("proxy/vless/outbound: tunneling request to")
+            { continue; }
             let lvl = classify_xray_log(&line);
             let cleaned = strip_xray_log_prefix(&line);
             if let Some(conn) = parse_xray_connection(cleaned) {
@@ -401,7 +405,7 @@ async fn run_xray_engine(
 
     let mut logging_config: serde_json::Value = serde_json::from_str(&config_json)?;
     crate::v2ray::apply_tls_policy(&mut logging_config, cfg.allow_insecure_tls);
-    logging_config["log"] = serde_json::json!({"loglevel": "info", "access": "", "error": ""});
+    logging_config["log"] = serde_json::json!({"loglevel": if crate::log_activity::enabled() { "info" } else { "error" }, "access": "", "error": ""});
     logging_config["stats"] = serde_json::json!({});
     if !logging_config["api"].is_object() {
         logging_config["api"] = serde_json::json!({});

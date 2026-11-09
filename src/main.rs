@@ -867,11 +867,15 @@ impl LogEntry {
 
 pub async fn send_log(
     tx: &mpsc::Sender<LogEntry>,
-    source: impl Into<String>,
-    msg: impl Into<String>,
+    source: impl AsRef<str>,
+    msg: impl AsRef<str>,
     level: LogLevel,
 ) {
-    let _ = tx.send(LogEntry::new(source, msg, level)).await;
+    let source = source.as_ref();
+    let msg = msg.as_ref();
+    if log_activity::should_forward(log_activity::enabled(), source, msg, level == LogLevel::Error) {
+        let _ = tx.send(LogEntry::new(source, msg, level)).await;
+    }
 }
 
 pub async fn send_connection_log(
@@ -884,6 +888,7 @@ pub async fn send_connection_log(
     app_name: Option<String>,
     route: Option<String>,
 ) {
+    if !log_activity::enabled() { return; }
     let entry = LogEntry::new(source, msg, level)
         .with_connection(target_host, target_port, app_name, route);
     let _ = tx.send(entry).await;
@@ -1016,6 +1021,7 @@ pub struct NetrayApp {
     pub qr_scan_modal: QrScanModalState,
     pub update_state: updater::UpdateState,
     pub auto_check_updates: bool,
+    pub logs_enabled: bool,
 
     // TUN & System Routing Mode
     pub enable_tun: bool,
@@ -1145,6 +1151,7 @@ pub enum Message {
     DismissNotification,
     ToggleAutoReconnect(bool),
     ToggleConnectionDropNotifications(bool),
+    ToggleLogsEnabled(bool),
     ToggleAllowInsecureTls(bool),
 
     CheckForUpdates,
@@ -1204,6 +1211,7 @@ impl NetrayApp {
 
     fn from_saved(saved: storage::AppData) -> (Self, Task<Message>) {
         updater::cleanup_stale_update_files();
+        log_activity::set_enabled(saved.logs_enabled);
         let tunnel_mode = match saved.tunnel_mode.as_str() {
             "SshPayload" => TunnelMode::SshPayload,
             "SshSslSni" => TunnelMode::SshSslSni,
@@ -1291,6 +1299,7 @@ impl NetrayApp {
             qr_scan_modal: QrScanModalState::default(),
             update_state: updater::UpdateState::Idle,
             auto_check_updates: saved.auto_check_updates,
+            logs_enabled: saved.logs_enabled,
 
             enable_tun: saved.enable_tun,
             enable_sysproxy: saved.enable_sysproxy,
@@ -1307,7 +1316,7 @@ impl NetrayApp {
             status_badge_text: "DISCONNECTED".to_string(),
             profile_count_label: format!("{} profiles", profile_count),
 
-            logs: vec![LogEntry::new("Netray", "Ready to connect.", LogLevel::Info)],
+            logs: if saved.logs_enabled { vec![LogEntry::new("Netray", "Ready to connect.", LogLevel::Info)] } else { Vec::new() },
             logs_filter: String::new(),
             logs_preset: LogsFilterPreset::All,
             auto_scroll_logs: true,
@@ -1471,11 +1480,15 @@ impl NetrayApp {
             notify_connection_drops: self.notify_connection_drops,
             allow_insecure_tls: self.allow_insecure_tls,
             auto_check_updates: self.auto_check_updates,
+            logs_enabled: self.logs_enabled,
         };
         storage::save_state_ref(&app_ref)
     }
 
     fn push_log(&mut self, source: &str, message: impl Into<String>, level: LogLevel) {
+        if !self.logs_enabled && !matches!(source, "Supervisor" | "SSH" | "Connection") { return; }
+        let message = message.into();
+        if !log_activity::should_store(self.logs_enabled, source, &message) { return; }
         self.logs.push(LogEntry::new(source, message, level));
         if self.logs.len() > 150 {
             self.logs.drain(0..30);
@@ -2618,9 +2631,11 @@ impl NetrayApp {
                     Task::none()
                 };
 
-                self.logs.push(entry);
-                if self.logs.len() > 150 {
-                    self.logs.drain(0..30);
+                if log_activity::should_store(self.logs_enabled, &entry.source, &entry.message) {
+                    self.logs.push(entry);
+                    if self.logs.len() > 150 {
+                        self.logs.drain(0..30);
+                    }
                 }
                 if stopped && self.exit_after_stop {
                     self.exit_after_stop = false;
@@ -2812,6 +2827,18 @@ impl NetrayApp {
                     },
                     LogLevel::Info,
                 );
+                let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::ToggleLogsEnabled(enabled) => {
+                self.logs_enabled = enabled;
+                log_activity::set_enabled(enabled);
+                if !enabled {
+                    self.logs.clear();
+                    if self.is_running {
+                        self.push_log("Connection", "Tunnel connected.", LogLevel::Success);
+                    }
+                }
                 let _ = self.save_current_state();
                 Task::none()
             }
@@ -5783,6 +5810,19 @@ impl NetrayApp {
                 })
                 .size(11)
                 .color(if self.notify_connection_drops { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
+                Space::with_height(6),
+                toggler(self.logs_enabled)
+                    .label("Enable detailed logs")
+                    .size(18)
+                    .on_toggle(Message::ToggleLogsEnabled),
+                Space::with_height(2),
+                text(if self.logs_enabled {
+                    "Shows all tunnel and app logs."
+                } else {
+                    "Shows only connected and disconnected events; detailed Xray logs are disabled on the next connection."
+                })
+                .size(11)
+                .color(if self.logs_enabled { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
                 Space::with_height(6),
                 row![
                     toggler(self.auto_check_updates)
