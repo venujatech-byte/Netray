@@ -54,7 +54,6 @@ pub async fn query_xray_traffic() -> Result<(u64, u64), String> {
     let server = format!("127.0.0.1:{}", xray_stats_port());
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
     let output = command

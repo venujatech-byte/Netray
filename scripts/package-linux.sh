@@ -20,10 +20,15 @@ work=$(mktemp -d)
 package="$work/netray-linux-$asset_arch"
 trap 'rm -rf "$work"' EXIT
 
+download_release_asset() {
+    curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
+        --retry-delay 2 --connect-timeout 20 --max-time 180 "$1" -o "$2"
+}
+
 cargo build --release
 mkdir -p "$package" dist
-curl --fail --location --silent --show-error "$base_url/$asset" -o "$work/$asset"
-curl --fail --location --silent --show-error "$base_url/$asset.dgst" -o "$work/$asset.dgst"
+download_release_asset "$base_url/$asset" "$work/$asset"
+download_release_asset "$base_url/$asset.dgst" "$work/$asset.dgst"
 
 expected=$(awk 'tolower($1) ~ /^sha(2-)?256=/ { sub(/^[^=]*=/, "", $1); if ($1 == "") $1 = $2; print $1; exit } ($1 == "SHA256" || $1 == "SHA2-256") && $3 == "=" { print $4; exit }' "$work/$asset.dgst")
 actual=$(sha256sum "$work/$asset" | awk '{ print $1 }')

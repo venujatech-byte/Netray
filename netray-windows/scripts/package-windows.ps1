@@ -10,13 +10,27 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ("netray-xray-" + [guid]::NewGuid()
 $package = Join-Path $PSScriptRoot "..\dist\netray-windows"
 $exe = Join-Path $PSScriptRoot "..\target\release\netray-windows.exe"
 
+function Get-ReleaseAsset([string]$Url, [string]$Path) {
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $Path -TimeoutSec 180
+            return
+        } catch {
+            Remove-Item $Path -Force -ErrorAction SilentlyContinue
+            if ($attempt -eq 5) { throw }
+            Write-Warning "Download failed (attempt $attempt/5); retrying: $($_.Exception.Message)"
+            Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 10))
+        }
+    }
+}
+
 try {
     if (-not (Test-Path $exe -PathType Leaf)) { throw "Netray executable not found: $exe" }
     New-Item -ItemType Directory -Path $work, $package -Force | Out-Null
     $zip = Join-Path $work $asset
     $dgst = Join-Path $work "$asset.dgst"
-    Invoke-WebRequest "$releaseUrl/$asset" -OutFile $zip
-    Invoke-WebRequest "$releaseUrl/$asset.dgst" -OutFile $dgst
+    Get-ReleaseAsset "$releaseUrl/$asset" $zip
+    Get-ReleaseAsset "$releaseUrl/$asset.dgst" $dgst
 
     $checksumText = Get-Content $dgst -Raw
     $match = [regex]::Match($checksumText, '(?im)^\s*sha(?:2-)?256\s*=\s*([0-9a-f]{64})\s*$|^\s*SHA(?:2-)?256\s+\([^)]*\)\s*=\s*([0-9a-f]{64})\s*$')
