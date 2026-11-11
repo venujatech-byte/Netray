@@ -3207,9 +3207,16 @@ impl NetrayApp {
                 )
                     .padding([0, 10])
                     .center_y(32)
-                    .width(Length::Fill)
+                    .width(Length::Shrink)
             )
             .on_press(Message::DragWindow),
+            if self.view_mode == ViewMode::Logs {
+                Element::from(toggler(self.auto_scroll_logs).label("Auto-scroll").size(18).text_size(13).on_toggle(Message::AutoScrollLogs))
+            } else {
+                Element::from(Space::with_width(0))
+            },
+            iced::widget::mouse_area(Space::with_width(Length::Fill).height(32))
+                .on_press(Message::DragWindow),
             window_control(
                 icons::MINIMIZE,
                 "Minimize to tray",
@@ -5224,7 +5231,7 @@ impl NetrayApp {
                     .align_x(Alignment::Center),
             )
             .width(Length::Fill)
-            .padding([8, 6])
+            .padding([6, 8])
             .style(move |_, status| button::Style {
                 background: Some(
                     if selected {
@@ -5259,8 +5266,9 @@ impl NetrayApp {
             preset(LogsFilterPreset::Bypass, "Bypass"),
             preset(LogsFilterPreset::Apps, "Apps"),
             preset(LogsFilterPreset::Errors, "Errors"),
+            text(format!("{} / {} entries", filtered_logs.len(), self.logs.len())).size(12).color(muted),
         ]
-        .spacing(4);
+        .spacing(2);
         let mut search =
             row![
                 modern_text_input("Search app, host, or message", &self.logs_filter, is_dark)
@@ -5283,22 +5291,7 @@ impl NetrayApp {
         let controls = column![
             presets,
             search,
-            row![
-                toggler(self.auto_scroll_logs)
-                    .label("Auto-scroll")
-                    .size(18)
-                    .text_size(13)
-                    .on_toggle(Message::AutoScrollLogs),
-                Space::with_width(Length::Fill),
-                text(format!(
-                    "{} / {} entries",
-                    filtered_logs.len(),
-                    self.logs.len()
-                ))
-                .size(12)
-                .color(muted),
-            ]
-            .align_y(Alignment::Center),
+
         ]
         .spacing(10);
         column![

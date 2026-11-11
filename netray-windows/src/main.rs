@@ -4600,6 +4600,7 @@ impl NetrayApp {
                 .style(rounded_icon_btn_style(is_dark, true))
                 .on_press(Message::SetViewMode(ViewMode::Profiles)),
             text("Logs").size(22).color(self.text_primary()),
+            toggler(self.auto_scroll_logs).label("Auto-scroll").size(18).text_size(13).on_toggle(Message::AutoScrollLogs),
             Space::with_width(Length::Fill),
             button(
                 row![
@@ -4802,7 +4803,7 @@ impl NetrayApp {
                     .align_x(Alignment::Center),
             )
             .width(Length::Fill)
-            .padding([8, 6])
+            .padding([6, 8])
             .style(move |_, status| button::Style {
                 background: Some(
                     if selected {
@@ -4837,8 +4838,9 @@ impl NetrayApp {
             preset(LogsFilterPreset::Bypass, "Bypass"),
             preset(LogsFilterPreset::Apps, "Apps"),
             preset(LogsFilterPreset::Errors, "Errors"),
+            text(format!("{} / {} entries", filtered_logs.len(), self.logs.len())).size(12).color(muted),
         ]
-        .spacing(4);
+        .spacing(2);
         let mut search =
             row![
                 modern_text_input("Search app, host, or message", &self.logs_filter, is_dark)
@@ -4861,22 +4863,7 @@ impl NetrayApp {
         let controls = column![
             presets,
             search,
-            row![
-                toggler(self.auto_scroll_logs)
-                    .label("Auto-scroll")
-                    .size(18)
-                    .text_size(13)
-                    .on_toggle(Message::AutoScrollLogs),
-                Space::with_width(Length::Fill),
-                text(format!(
-                    "{} / {} entries",
-                    filtered_logs.len(),
-                    self.logs.len()
-                ))
-                .size(12)
-                .color(muted),
-            ]
-            .align_y(Alignment::Center),
+
         ]
         .spacing(10);
         column![
