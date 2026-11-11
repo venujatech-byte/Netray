@@ -39,11 +39,11 @@ python3 scripts/build-xray.py "$package/xray"
 cp target/release/netray "$package/netray"
 chmod +x "$package/netray" "$package/xray"
 cat > "$package/THIRD-PARTY-NOTICES.txt" <<EOF
-Netray bundles Xray-core a4a3dff5b20c with a Netray TLS compatibility modification.
+Netray bundles Xray-core 1b1647cd9ddf with a Netray TLS compatibility modification.
 License: Mozilla Public License 2.0; see the accompanying LICENSE file.
 Corresponding modified source: XRAY-SOURCE.tar.gz; patch: patch-xray-tls.py
-Upstream source: https://github.com/XTLS/Xray-core/tree/a4a3dff5b20c
-Dependency list: https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c/go.mod
+Upstream source: https://github.com/XTLS/Xray-core/tree/1b1647cd9ddf
+Dependency list: https://github.com/XTLS/Xray-core/blob/1b1647cd9ddf/go.mod
 EOF
 
 archive="dist/netray-linux-$asset_arch-$app_version.tar.gz"

@@ -35,11 +35,11 @@ try {
     Remove-Item (Join-Path $package "config.json") -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $package "netray_data") -Recurse -Force -ErrorAction SilentlyContinue
     Set-Content (Join-Path $package "THIRD-PARTY-NOTICES.txt") @"
-Netray bundles Xray-core a4a3dff5b20c with a Netray TLS compatibility modification.
+Netray bundles Xray-core 1b1647cd9ddf with a Netray TLS compatibility modification.
 License: Mozilla Public License 2.0; see the accompanying LICENSE file.
 Corresponding modified source: XRAY-SOURCE.tar.gz; patch: patch-xray-tls.py
-Upstream source: https://github.com/XTLS/Xray-core/tree/a4a3dff5b20c
-Upstream dependency list: https://github.com/XTLS/Xray-core/blob/a4a3dff5b20c/go.mod
+Upstream source: https://github.com/XTLS/Xray-core/tree/1b1647cd9ddf
+Upstream dependency list: https://github.com/XTLS/Xray-core/blob/1b1647cd9ddf/go.mod
 "@
 
     $archive = Join-Path (Split-Path $package -Parent) "netray-windows-$Version.zip"
