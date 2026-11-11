@@ -124,6 +124,8 @@ pub struct AppData {
     pub allow_insecure_tls: bool,
     #[serde(default = "default_true")]
     pub ipv6_enabled: bool,
+    #[serde(default)]
+    pub bypass_lan: bool,
     #[serde(default = "default_true")]
     pub auto_check_updates: bool,
     #[serde(default = "default_true")]
@@ -167,6 +169,7 @@ impl Default for AppData {
             notify_connection_drops: true,
             allow_insecure_tls: false,
             ipv6_enabled: true,
+            bypass_lan: false,
             auto_check_updates: true,
             logs_enabled: true,
         }
@@ -251,6 +254,7 @@ pub struct AppDataRef<'a> {
     pub notify_connection_drops: bool,
     pub allow_insecure_tls: bool,
     pub ipv6_enabled: bool,
+    pub bypass_lan: bool,
     pub auto_check_updates: bool,
     pub logs_enabled: bool,
 }
@@ -284,6 +288,7 @@ impl AppData {
             notify_connection_drops: self.notify_connection_drops,
             allow_insecure_tls: self.allow_insecure_tls,
             ipv6_enabled: self.ipv6_enabled,
+            bypass_lan: self.bypass_lan,
             auto_check_updates: self.auto_check_updates,
             logs_enabled: self.logs_enabled,
         }

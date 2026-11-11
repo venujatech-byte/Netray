@@ -1015,6 +1015,7 @@ pub struct NetrayApp {
     pub notify_connection_drops: bool,
     pub allow_insecure_tls: bool,
     pub ipv6_enabled: bool,
+    pub bypass_lan: bool,
     pub user_stopped: bool,
     pub reconnect_attempts: u32,
     pub error_notification: Option<ErrorNotification>,
@@ -1155,6 +1156,7 @@ pub enum Message {
     ToggleLogsEnabled(bool),
     ToggleAllowInsecureTls(bool),
     ToggleIpv6(bool),
+    ToggleBypassLan(bool),
 
     CheckForUpdates,
     UpdateCheckFinished(Result<Option<updater::ReleaseInfo>, String>),
@@ -1295,6 +1297,7 @@ impl NetrayApp {
             notify_connection_drops: saved.notify_connection_drops,
             allow_insecure_tls: saved.allow_insecure_tls,
             ipv6_enabled: saved.ipv6_enabled,
+            bypass_lan: saved.bypass_lan,
             user_stopped: false,
             reconnect_attempts: 0,
             error_notification: None,
@@ -1483,6 +1486,7 @@ impl NetrayApp {
             notify_connection_drops: self.notify_connection_drops,
             allow_insecure_tls: self.allow_insecure_tls,
             ipv6_enabled: self.ipv6_enabled,
+            bypass_lan: self.bypass_lan,
             auto_check_updates: self.auto_check_updates,
             logs_enabled: self.logs_enabled,
         };
@@ -2814,6 +2818,12 @@ impl NetrayApp {
                 let _ = self.save_current_state();
                 Task::none()
             }
+            Message::ToggleBypassLan(enabled) => {
+                if self.config_locked() { return Task::none(); }
+                self.bypass_lan = enabled;
+                let _ = self.save_current_state();
+                Task::none()
+            }
             Message::ToggleIpv6(enabled) => {
                 if self.config_locked() { return Task::none(); }
                 self.ipv6_enabled = enabled;
@@ -3087,6 +3097,7 @@ impl NetrayApp {
                             whitelist_urls: self.whitelist_urls.clone(),
                             allow_insecure_tls: self.allow_insecure_tls,
             ipv6_enabled: self.ipv6_enabled,
+            bypass_lan: self.bypass_lan,
                         };
 
                         tokio::spawn(async move {
@@ -5800,6 +5811,8 @@ impl NetrayApp {
                 .size(11)
                 .color(if self.auto_reconnect { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
                 Space::with_height(6),
+                checkbox("Bypass local network", self.bypass_lan)
+                    .on_toggle_maybe((!self.config_locked()).then_some(Message::ToggleBypassLan)),
                 checkbox("Enable IPv6 (disabled blocks IPv6 traffic)", self.ipv6_enabled)
                     .on_toggle_maybe((!self.config_locked()).then_some(Message::ToggleIpv6)),
                 toggler(self.allow_insecure_tls)
