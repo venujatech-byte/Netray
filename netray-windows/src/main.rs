@@ -4209,10 +4209,10 @@ impl NetrayApp {
         let muted = settings_ui::secondary(is_dark);
         let accent = settings_ui::accent(is_dark);
         let inactive_color = theme::icon_color_for_state(is_dark, false);
-        let top_icon_btn = |icon, label: &'static str, on_press: Option<Message>| {
+        let top_icon_btn = |icon, size: u16, label: &'static str, on_press: Option<Message>| {
             let active = on_press.is_some();
             iced::widget::tooltip(
-                button(container(icons::lucide_icon(icon, 20, if active { self.text_primary() } else { inactive_color }))
+                button(container(icons::lucide_icon(icon, size, if active { self.text_primary() } else { inactive_color }))
                     .center_x(Length::Fill).center_y(Length::Fill))
                     .width(36).height(36).padding(0)
                     .style(rounded_icon_btn_style(is_dark, active))
@@ -4222,14 +4222,14 @@ impl NetrayApp {
             )
         };
         let top_bar = row![
-            top_icon_btn(icons::MENU, "Settings", Some(Message::SetViewMode(ViewMode::SshSettings))),
+            top_icon_btn(icons::MENU, 20, "Settings", Some(Message::SetViewMode(ViewMode::SshSettings))),
             text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
-            top_icon_btn(icons::PLUS, "Add profile", (!config_locked).then_some(Message::OpenAddMenu)),
-            top_icon_btn(icons::SCAN_LINE, "Scan QR code", (!config_locked).then_some(Message::OpenQrScanModal)),
-            top_icon_btn(icons::CLIPBOARD_PASTE, "Import from clipboard", (!config_locked).then_some(Message::RequestClipboardImport)),
-            top_icon_btn(icons::FILE_TEXT, "Import file", (!config_locked).then_some(Message::RequestFileImport)),
-            top_icon_btn(icons::MORE_VERTICAL, "More options", Some(Message::ToggleOverflowMenu)),
+            top_icon_btn(icons::PLUS, 16, "Add profile", (!config_locked).then_some(Message::OpenAddMenu)),
+            top_icon_btn(icons::SCAN_LINE, 16, "Scan QR code", (!config_locked).then_some(Message::OpenQrScanModal)),
+            top_icon_btn(icons::CLIPBOARD_PASTE, 16, "Import from clipboard", (!config_locked).then_some(Message::RequestClipboardImport)),
+            top_icon_btn(icons::FILE_TEXT, 16, "Import file", (!config_locked).then_some(Message::RequestFileImport)),
+            top_icon_btn(icons::MORE_VERTICAL, 20, "More options", Some(Message::ToggleOverflowMenu)),
         ].spacing(4).align_y(Alignment::Center).padding([12, 16]);
 
         let overflow_menu = container(column![
