@@ -533,7 +533,7 @@ pub fn main() -> iced::Result {
 
 fn window_settings() -> iced::window::Settings {
     let mut window = iced::window::Settings {
-        size: (460.0, 600.0).into(),
+        size: (460.0, 640.0).into(),
         icon: create_window_icon(),
         decorations: false,
         exit_on_close_request: false,

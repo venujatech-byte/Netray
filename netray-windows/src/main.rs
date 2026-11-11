@@ -401,7 +401,7 @@ const TUNNEL_MODES: [TunnelMode; 4] = [
 
 pub fn main() -> iced::Result {
     let window = iced::window::Settings {
-        size: (460.0, 600.0).into(),
+        size: (460.0, 640.0).into(),
         icon: create_window_icon(),
         exit_on_close_request: false,
         ..Default::default()
