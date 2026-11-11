@@ -3486,136 +3486,93 @@ impl NetrayApp {
     }
 
     fn view_update_toast(&self) -> Element<'_, Message> {
-        match &self.update_state {
-            updater::UpdateState::Available(info) => {
-                let badge = container(text(format!("v{}", info.version)).size(10).color(SUCCESS_GREEN))
-                    .padding(iced::Padding { top: 1.0, bottom: 1.0, left: 6.0, right: 6.0 })
-                    .style(toast_attempt_pill);
-
-                let toast = container(
-                    row![
-                        icons::lucide_icon(icons::DOWNLOAD, 16, SUCCESS_GREEN),
-                        Space::with_width(10),
-                        column![
-                            row![
-                                text("New Version Available").size(12).color(Color::WHITE),
-                                Space::with_width(8),
-                                badge,
-                            ]
-                            .align_y(Alignment::Center),
-                            row![
-                                text(format!("Netray v{} released via GitHub CI (Current: v{}).", info.version, APP_VERSION))
-                                    .size(11)
-                                    .color(TEXT_MUTED),
-                            ]
-                            .align_y(Alignment::Center),
-                        ]
-                        .spacing(2)
-                        .width(Length::Fill),
-                        Space::with_width(8),
+        let is_dark = self.is_dark();
+        let muted = settings_ui::secondary(is_dark);
+        let accent = settings_ui::accent(is_dark);
+        let (title, detail, actions): (String, String, Option<Element<'_, Message>>) =
+            match &self.update_state {
+                updater::UpdateState::Available(info) => (
+                    format!("Netray v{} is available", info.version),
+                    format!("Installed version: v{APP_VERSION}"),
+                    Some(
                         row![
-                            button(text("Upgrade Now").size(11).color(Color::WHITE))
-                                .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                            Space::with_width(Length::Fill),
+                            button(text("Later").size(13).color(self.text_primary()))
+                                .padding([8, 14])
+                                .style(rounded_icon_btn_style(is_dark, true))
+                                .on_press(Message::DismissUpdateToast),
+                            button(text("Upgrade now").size(13))
+                                .padding([8, 16])
                                 .style(primary_action_btn)
                                 .on_press(Message::StartInAppUpgrade),
-                            Space::with_width(6),
-                            button(text("Later").size(11).color(Color::from_rgb(0.85, 0.85, 0.85)))
-                                .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 8.0, right: 8.0 })
-                                .style(toast_cancel_btn)
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .into(),
+                    ),
+                ),
+                updater::UpdateState::Downloading { version, status } => (
+                    format!("Updating to Netray v{version}"),
+                    status.clone(),
+                    None,
+                ),
+                updater::UpdateState::ReadyToRestart { version } => (
+                    "Update installed".into(),
+                    format!("Restart to open Netray v{version}."),
+                    Some(
+                        row![
+                            Space::with_width(Length::Fill),
+                            button(text("Restart now").size(13))
+                                .padding([8, 16])
+                                .style(primary_action_btn)
+                                .on_press(Message::ApplyUpdateAndRestart),
+                        ]
+                        .into(),
+                    ),
+                ),
+                updater::UpdateState::Error(error) => (
+                    "Couldn't check for updates".into(),
+                    error.clone(),
+                    Some(
+                        row![
+                            Space::with_width(Length::Fill),
+                            button(text("Dismiss").size(13).color(self.text_primary()))
+                                .padding([8, 14])
+                                .style(rounded_icon_btn_style(is_dark, true))
                                 .on_press(Message::DismissUpdateToast),
                         ]
-                        .align_y(Alignment::Center),
-                    ]
-                    .align_y(Alignment::Center)
-                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 12.0, right: 10.0 })
-                )
-                .style(toast_container_style)
-                .width(Length::Fill);
-
-                container(toast)
-                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
-                    .width(Length::Fill)
-                    .into()
-            }
-            updater::UpdateState::Downloading { version, status } => {
-                let toast = container(
-                    row![
-                        icons::lucide_icon(icons::REFRESH_CW, 16, ACCENT_BLUE_LIGHT),
-                        Space::with_width(10),
-                        column![
-                            text(format!("Upgrading to Netray v{version}...")).size(12).color(Color::WHITE),
-                            text(status).size(11).color(ACCENT_BLUE_LIGHT),
-                        ]
-                        .spacing(2)
-                        .width(Length::Fill),
-                    ]
-                    .align_y(Alignment::Center)
-                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 12.0, right: 10.0 })
-                )
-                .style(toast_container_style)
-                .width(Length::Fill);
-
-                container(toast)
-                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
-                    .width(Length::Fill)
-                    .into()
-            }
-            updater::UpdateState::ReadyToRestart { version } => {
-                let toast = container(
-                    row![
-                        icons::lucide_icon(icons::CHECK, 16, SUCCESS_GREEN),
-                        Space::with_width(10),
-                        column![
-                            text(format!("Netray v{version} ready to launch!")).size(12).color(Color::WHITE),
-                            text("Restart now to complete the upgrade.").size(11).color(SUCCESS_GREEN),
-                        ]
-                        .spacing(2)
-                        .width(Length::Fill),
-                        button(text("Restart Now").size(11).color(Color::WHITE))
-                            .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
-                            .style(primary_action_btn)
-                            .on_press(Message::ApplyUpdateAndRestart),
-                    ]
-                    .align_y(Alignment::Center)
-                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 12.0, right: 10.0 })
-                )
-                .style(toast_container_style)
-                .width(Length::Fill);
-
-                container(toast)
-                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
-                    .width(Length::Fill)
-                    .into()
-            }
-            updater::UpdateState::Error(err) => {
-                let toast = container(
-                    row![
-                        icons::lucide_icon(icons::INFO, 16, FAILURE_RED),
-                        Space::with_width(10),
-                        column![
-                            text("Update Check Failed").size(12).color(Color::WHITE),
-                            text(err).size(11).color(FAILURE_RED),
-                        ]
-                        .spacing(2)
-                        .width(Length::Fill),
-                        button(text("Dismiss").size(11).color(Color::from_rgb(0.85, 0.85, 0.85)))
-                            .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 8.0, right: 8.0 })
-                            .style(toast_cancel_btn)
-                            .on_press(Message::DismissUpdateToast),
-                    ]
-                    .align_y(Alignment::Center)
-                    .padding(iced::Padding { top: 6.0, bottom: 6.0, left: 12.0, right: 10.0 })
-                )
-                .style(toast_container_style)
-                .width(Length::Fill);
-
-                container(toast)
-                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
-                    .width(Length::Fill)
-                    .into()
-            }
-            _ => Space::with_width(0).into(),
+                        .into(),
+                    ),
+                ),
+                _ => return Space::with_width(0).into(),
+            };
+        let mut content = column![
+            row![
+                icons::lucide_icon(icons::DOWNLOAD, 18, accent),
+                text(title).size(15).color(self.text_primary())
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+            text(detail).size(13).color(muted).width(Length::Fill),
+        ]
+        .spacing(10);
+        if let Some(actions) = actions {
+            content = content.push(actions);
         }
+        container(
+            container(content)
+                .padding(16)
+                .width(Length::Fill)
+                .style(settings_ui::surface),
+        )
+        .padding(iced::Padding {
+            top: 4.0,
+            bottom: 8.0,
+            left: 16.0,
+            right: 16.0,
+        })
+        .width(Length::Fill)
+        .into()
     }
 
     fn view_add_profile_modal(&self) -> Element<'_, Message> {
