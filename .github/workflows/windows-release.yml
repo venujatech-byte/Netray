@@ -20,7 +20,7 @@ jobs:
       - name: Calculate release version
         shell: bash
         run: |
-          OFFSET=29
+          OFFSET=0
           BUILD_NUM=$(( ${{ github.run_number }} - OFFSET ))
           if [ "$BUILD_NUM" -lt 4 ]; then
             BUILD_NUM=4
@@ -139,7 +139,7 @@ jobs:
       - name: Calculate release version
         shell: bash
         run: |
-          OFFSET=29
+          OFFSET=0
           BUILD_NUM=$(( ${{ github.run_number }} - OFFSET ))
           if [ "$BUILD_NUM" -lt 4 ]; then
             BUILD_NUM=4
