@@ -3326,19 +3326,28 @@ impl NetrayApp {
         let base_content = if let Some(id) = &self.delete_confirmation {
             let name = self.v2ray_profiles.iter().find(|profile| &profile.id == id)
                 .map(|profile| profile.name.as_str()).unwrap_or("this profile");
-            let dialog = container(
-                column![
-                    text("Delete V2Ray profile?").size(20),
-                    text(format!("Delete “{name}”? This cannot be undone.")).size(14),
-                    row![
-                        button("Cancel").on_press(Message::CancelDeleteProfile),
-                        button("Delete").style(button::danger).on_press(Message::ConfirmDeleteProfile),
-                    ].spacing(10),
-                ].spacing(16).padding(20),
-            ).style(form_card_style).width(Length::Fixed(340.0));
+            let is_dark = self.is_dark();
+            let dialog = container(column![
+                text("Delete profile?").size(20).color(self.text_primary()),
+                text(format!("Delete “{name}”? This cannot be undone."))
+                    .size(14).color(settings_ui::secondary(is_dark)),
+                row![
+                    Space::with_width(Length::Fill),
+                    button(text("Cancel").size(14).color(self.text_primary())).padding([10, 16])
+                        .style(rounded_icon_btn_style(is_dark, true)).on_press(Message::CancelDeleteProfile),
+                    button(text("Delete").size(14).color(Color::WHITE)).padding([10, 16])
+                        .style(|_, status| button::Style {
+                            background: Some(if matches!(status, button::Status::Hovered) { Color::from_rgb8(179, 59, 77) } else { Color::from_rgb8(164, 45, 62) }.into()),
+                            text_color: Color::WHITE,
+                            border: iced::Border { radius: 999.0.into(), ..Default::default() },
+                            ..Default::default()
+                        }).on_press(Message::ConfirmDeleteProfile),
+                ].spacing(8).align_y(Alignment::Center),
+            ].spacing(20)).padding(24).width(Length::Fill).max_width(360).style(settings_ui::menu_surface);
             iced::widget::stack![
                 base_content,
                 iced::widget::opaque(container(dialog)
+                    .padding(16)
                     .width(Length::Fill).height(Length::Fill)
                     .center_x(Length::Fill).center_y(Length::Fill)
                     .style(|_| container::Style {
