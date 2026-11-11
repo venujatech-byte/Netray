@@ -2628,6 +2628,7 @@ dependencies = [
  "tokio-rustls",
  "tray-icon",
  "url",
+ "zbus",
 ]
 
 [[package]]

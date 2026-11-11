@@ -3,6 +3,10 @@
 //! Provides image parsing, grayscale transformation, grid detection,
 //! and payload decoding from byte buffers, image files, and raw buffers.
 
+#[cfg(target_os = "linux")]
+#[path = "desktop_capture.rs"]
+mod desktop_capture;
+
 use rqrr::PreparedImage;
 use std::path::Path;
 
@@ -76,8 +80,14 @@ pub fn decode_qr_from_luma(width: usize, height: usize, luma_data: Vec<u8>) -> R
     Err("QR code pattern detected but payload could not be decoded".to_string())
 }
 
-/// Captures a full desktop screenshot and returns the raw PNG/JPEG image bytes.
+/// Blocking desktop capture. Call from a worker thread in an async UI.
 pub fn capture_desktop_screenshot() -> Result<Vec<u8>, String> {
+    #[cfg(target_os = "linux")]
+    let portal_error = match desktop_capture::screenshot() {
+        Ok(bytes) => return Ok(bytes),
+        Err(desktop_capture::PortalError::Unavailable(error)) => error,
+        Err(desktop_capture::PortalError::Failed(error)) => return Err(error),
+    };
     let temp_dir = std::env::temp_dir();
     let file_name = format!(
         "netray_qr_screen_{}_{}.png",
@@ -103,42 +113,29 @@ pub fn capture_desktop_screenshot() -> Result<Vec<u8>, String> {
         ];
 
         let mut success = false;
-        let mut last_error = String::new();
+        let mut errors = vec![portal_error];
 
+        let wayland = std::env::var("XDG_SESSION_TYPE").is_ok_and(|value| value == "wayland")
+            || std::env::var_os("WAYLAND_DISPLAY").is_some();
         for (cmd, args) in &commands {
+            if wayland && matches!(*cmd, "import" | "maim" | "scrot") { continue; }
             match std::process::Command::new(cmd).args(args).output() {
                 Ok(output) if output.status.success() && temp_path.exists() => {
                     success = true;
                     break;
                 }
                 Ok(output) => {
-                    last_error = format!("{} exited with {}: {}", cmd, output.status, String::from_utf8_lossy(&output.stderr));
+                    errors.push(format!("{} exited with {}: {}", cmd, output.status, String::from_utf8_lossy(&output.stderr).trim()));
                 }
                 Err(e) => {
-                    last_error = format!("Failed to spawn {}: {}", cmd, e);
-                }
-            }
-        }
-
-        // If CLI tools failed, try D-Bus GNOME screenshot portal if available
-        if !success {
-            let dbus_args = vec![
-                "call", "--session",
-                "--dest", "org.gnome.Shell.Screenshot",
-                "--object-path", "/org/gnome/Shell/Screenshot",
-                "--method", "org.gnome.Shell.Screenshot.Screenshot",
-                "true", "false", path_str.as_str(),
-            ];
-            if let Ok(output) = std::process::Command::new("gdbus").args(&dbus_args).output() {
-                if output.status.success() && temp_path.exists() {
-                    success = true;
+                    if e.kind() != std::io::ErrorKind::NotFound { errors.push(format!("Could not start {cmd}: {e}")); }
                 }
             }
         }
 
         if !success || !temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
-            return Err(format!("Unable to capture desktop screenshot. Please ensure ImageMagick ('import'), 'grim', or 'gnome-screenshot' is installed on your system. ({last_error})"));
+            return Err(format!("Desktop capture is unavailable. Check that your desktop screenshot portal is installed, or upload a saved screenshot. {}", errors.join("; ")));
         }
     }
 

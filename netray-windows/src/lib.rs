@@ -5,6 +5,7 @@ pub mod icons;
 pub mod notifications;
 pub mod protocols;
 pub mod qr;
+#[path = "../../src/qr_scanner.rs"]
 pub mod qr_scanner;
 pub mod storage;
 pub mod sysproxy;

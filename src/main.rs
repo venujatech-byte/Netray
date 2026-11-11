@@ -39,7 +39,6 @@ const TEXT_MUTED: Color = Color::from_rgb(0.55, 0.60, 0.68);
 const SUCCESS_GREEN: Color = Color::from_rgb(0.22, 0.78, 0.49);
 const FAILURE_RED: Color = Color::from_rgb(0.95, 0.35, 0.40);
 const WARNING_AMBER: Color = Color::from_rgb(0.96, 0.62, 0.22);
-const CORAL_ACCENT: Color = Color::from_rgb(0.98, 0.52, 0.48); // #FA857A
 const APP_VERSION: &str = match option_env!("NETRAY_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
@@ -2973,40 +2972,23 @@ impl NetrayApp {
                 Task::none()
             }
             Message::TriggerQrScan(source) => {
+                if matches!(self.qr_scan_modal.status, QrScanStatus::Scanning(_)) { return Task::none(); }
                 self.qr_scan_modal.status = QrScanStatus::Scanning(source);
-                match source {
-                    QrScanSource::DesktopScreenshot => {
-                        Task::perform(
-                            async {
-                                tokio::time::sleep(Duration::from_millis(150)).await;
-                                qr_scanner::scan_qr_from_desktop()
-                            },
-                            Message::QrScanFinished,
-                        )
-                    }
-                    QrScanSource::Webcam => {
-                        Task::perform(
-                            async {
-                                qr_scanner::scan_qr_from_webcam()
-                            },
-                            Message::QrScanFinished,
-                        )
-                    }
-                    QrScanSource::PhotoUpload => {
-                        Task::perform(
-                            async {
-                                match qr_scanner::scan_qr_from_picked_file() {
-                                    Ok(Some(content)) => Ok(content),
-                                    Ok(None) => Err("File selection was cancelled".to_string()),
-                                    Err(e) => Err(e),
-                                }
-                            },
-                            Message::QrScanFinished,
-                        )
-                    }
-                }
+                Task::perform(async move {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    tokio::task::spawn_blocking(move || match source {
+                        QrScanSource::DesktopScreenshot => qr_scanner::scan_qr_from_desktop(),
+                        QrScanSource::Webcam => qr_scanner::scan_qr_from_webcam(),
+                        QrScanSource::PhotoUpload => match qr_scanner::scan_qr_from_picked_file() {
+                            Ok(Some(content)) => Ok(content),
+                            Ok(None) => Err("File selection was cancelled".into()),
+                            Err(error) => Err(error),
+                        },
+                    }).await.map_err(|error| format!("QR scan task failed: {error}"))?
+                }, Message::QrScanFinished)
             }
             Message::QrScanFinished(result) => {
+                if !self.qr_scan_modal.is_open { return Task::none(); }
                 match result {
                     Ok(scanned_content) => {
                         let trimmed = scanned_content.trim();
@@ -3080,7 +3062,7 @@ impl NetrayApp {
                         }
                     }
                     Err(e) => {
-                        if e == "File selection was cancelled" {
+                        if matches!(e.as_str(), "File selection was cancelled" | "Screenshot cancelled.") {
                             self.qr_scan_modal.status = QrScanStatus::Idle;
                         } else {
                             self.push_log("Scanner", format!("QR Code scan error: {e}"), LogLevel::Warn);
@@ -4056,237 +4038,136 @@ impl NetrayApp {
 
     fn view_qr_scan_modal(&self) -> Element<'_, Message> {
         let is_dark = self.is_dark();
-        let modal_bg = if is_dark {
-            Color::from_rgb(0.12, 0.14, 0.18)
-        } else {
-            Color::from_rgb(0.96, 0.97, 0.99)
-        };
-        let card_border = if is_dark {
-            Color::from_rgb(0.22, 0.25, 0.32)
-        } else {
-            Color::from_rgb(0.85, 0.88, 0.92)
-        };
-        let text_main = if is_dark { Color::WHITE } else { Color::from_rgb(0.1, 0.1, 0.1) };
-
-        // Header
+        let muted = settings_ui::secondary(is_dark);
+        let accent = settings_ui::accent(is_dark);
+        let busy = matches!(self.qr_scan_modal.status, QrScanStatus::Scanning(_));
         let header = row![
-            icons::lucide_icon(icons::QR_CODE, 20, ACCENT_BLUE_LIGHT),
             column![
-                text("QR Code Scanner").size(15).color(text_main),
-                text("Scan or upload a V2Ray / Xray configuration QR").size(11).color(TEXT_MUTED),
+                text("Scan QR code").size(20).color(self.text_primary()),
+                text("Import a profile from your screen, camera, or an image.")
+                    .size(13)
+                    .color(muted)
             ]
-            .spacing(2)
+            .spacing(6)
             .width(Length::Fill),
-            button(icons::lucide_icon(icons::CLOSE, 16, TEXT_MUTED))
-                .padding([6, 8])
-                .style(|_, status| button::Style {
-                    background: match status {
-                        button::Status::Hovered => Some(Color::from_rgba(1.0, 1.0, 1.0, 0.08).into()),
-                        _ => None,
-                    },
-                    border: iced::Border {
-                        radius: 8.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
+            button(icons::lucide_icon(icons::CLOSE, 18, self.text_primary()))
+                .padding(8)
+                .style(rounded_icon_btn_style(is_dark, true))
                 .on_press(Message::CloseQrScanModal),
         ]
-        .spacing(10)
+        .spacing(12)
         .align_y(Alignment::Center);
-
-        // Helper to construct scan option button
-        let option_button = |icon: &'static [u8], icon_color: Color, title: &'static str, desc: &'static str, source: QrScanSource| {
-            let is_scanning_this = matches!(self.qr_scan_modal.status, QrScanStatus::Scanning(s) if s == source);
-            let btn_content = row![
-                container(icons::lucide_icon(icon, 20, icon_color))
-                    .padding(10)
-                    .style(move |_| container::Style {
-                        background: Some(Color::from_rgba(icon_color.r, icon_color.g, icon_color.b, 0.15).into()),
-                        border: iced::Border {
-                            radius: 10.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
-                column![
-                    text(title).size(13).color(text_main),
-                    text(desc).size(11).color(TEXT_MUTED),
+        let option = |icon: &'static [u8],
+                      title: &'static str,
+                      detail: &'static str,
+                      source: QrScanSource|
+         -> Element<'_, Message> {
+            button(
+                row![
+                    icons::lucide_icon(icon, 20, if busy { muted } else { accent }),
+                    column![
+                        text(title).size(14).color(self.text_primary()),
+                        text(detail).size(12).color(muted)
+                    ]
+                    .spacing(6)
+                    .width(Length::Fill),
                 ]
-                .spacing(2)
-                .width(Length::Fill),
-                if is_scanning_this {
-                    text("Scanning...").size(11).color(ACCENT_BLUE_LIGHT)
-                } else {
-                    text("Scan").size(11).color(TEXT_MUTED)
-                }
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center);
-
-            button(btn_content)
-                .width(Length::Fill)
-                .padding(10)
-                .style(move |_, status| button::Style {
-                    background: match status {
-                        button::Status::Hovered | button::Status::Pressed => {
-                            Some(Color::from_rgba(0.24, 0.58, 1.0, 0.12).into())
-                        }
-                        _ => Some(if is_dark {
-                            Color::from_rgb(0.15, 0.17, 0.22).into()
-                        } else {
-                            Color::from_rgb(0.92, 0.94, 0.98).into()
-                        }),
-                    },
-                    border: iced::Border {
-                        radius: 12.0.into(),
-                        width: 1.0,
-                        color: if is_scanning_this {
-                            ACCENT_BLUE_LIGHT
-                        } else {
-                            card_border
-                        },
-                    },
-                    ..Default::default()
-                })
-                .on_press(Message::TriggerQrScan(source))
-        };
-
-        let opt_screenshot = option_button(
-            icons::MONITOR,
-            ACCENT_BLUE_LIGHT,
-            "Desktop Screenshot",
-            "Scan full screen or active window for QR codes",
-            QrScanSource::DesktopScreenshot,
-        );
-
-        let opt_webcam = option_button(
-            icons::CAMERA,
-            CORAL_ACCENT,
-            "Camera / PC Webcam",
-            "Capture single frame from connected webcam",
-            QrScanSource::Webcam,
-        );
-
-        let opt_photo = option_button(
-            icons::IMAGE,
-            SUCCESS_GREEN,
-            "Upload Image File",
-            "Select PNG, JPG, or JPEG image from your PC",
-            QrScanSource::PhotoUpload,
-        );
-
-        // Status banner
-        let status_box: Element<'_, Message> = match &self.qr_scan_modal.status {
-            QrScanStatus::Idle => {
-                container(
-                    row![
-                        icons::lucide_icon(icons::INFO, 14, TEXT_MUTED),
-                        text("Select any method above to detect & import QR node.")
-                            .size(11)
-                            .color(TEXT_MUTED),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                )
-                .padding([8, 12])
-                .into()
-            }
-            QrScanStatus::Scanning(source) => {
-                let label = match source {
-                    QrScanSource::DesktopScreenshot => "Capturing desktop and analyzing display...",
-                    QrScanSource::Webcam => "Reading camera frame and scanning for QR...",
-                    QrScanSource::PhotoUpload => "Processing selected image...",
-                };
-                container(
-                    row![
-                        icons::lucide_icon(icons::ACTIVITY, 14, ACCENT_BLUE_LIGHT),
-                        text(label).size(12).color(ACCENT_BLUE_LIGHT),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                )
-                .padding([10, 14])
-                .style(|_| container::Style {
-                    background: Some(Color::from_rgba(0.24, 0.58, 1.0, 0.12).into()),
-                    border: iced::Border {
-                        radius: 10.0.into(),
-                        width: 1.0,
-                        color: ACCENT_BLUE_LIGHT,
-                    },
-                    ..Default::default()
-                })
-                .into()
-            }
-            QrScanStatus::Success(summary) => {
-                container(
-                    row![
-                        icons::lucide_icon(icons::CHECK, 16, SUCCESS_GREEN),
-                        text(summary).size(12).color(SUCCESS_GREEN),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                )
-                .padding([10, 14])
-                .style(|_| container::Style {
-                    background: Some(Color::from_rgba(0.22, 0.78, 0.49, 0.12).into()),
-                    border: iced::Border {
-                        radius: 10.0.into(),
-                        width: 1.0,
-                        color: SUCCESS_GREEN,
-                    },
-                    ..Default::default()
-                })
-                .into()
-            }
-            QrScanStatus::Error(err) => {
-                container(
-                    row![
-                        icons::lucide_icon(icons::INFO, 16, FAILURE_RED),
-                        text(err).size(11).color(FAILURE_RED),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                )
-                .padding([10, 14])
-                .style(|_| container::Style {
-                    background: Some(Color::from_rgba(0.95, 0.35, 0.40, 0.12).into()),
-                    border: iced::Border {
-                        radius: 10.0.into(),
-                        width: 1.0,
-                        color: FAILURE_RED,
-                    },
-                    ..Default::default()
-                })
-                .into()
-            }
-        };
-
-        let dialog = container(
-            column![
-                header,
-                opt_screenshot,
-                opt_webcam,
-                opt_photo,
-                status_box,
-            ]
-            .spacing(12)
-            .padding(18),
-        )
-        .style(move |_| container::Style {
-            background: Some(modal_bg.into()),
-            border: iced::Border {
-                radius: 18.0.into(),
-                width: 1.0,
-                color: card_border,
-            },
-            ..Default::default()
-        })
-        .width(Length::Fixed(390.0));
-
-        container(dialog)
+                .spacing(14)
+                .align_y(Alignment::Center),
+            )
+            .padding(16)
             .width(Length::Fill)
-            .height(Length::Fill)
+            .style(move |_, status| button::Style {
+                background: Some(
+                    if matches!(status, button::Status::Hovered) {
+                        if is_dark {
+                            Color::from_rgb8(44, 66, 98)
+                        } else {
+                            Color::from_rgb8(210, 227, 253)
+                        }
+                    } else if is_dark {
+                        Color::from_rgb8(35, 42, 54)
+                    } else {
+                        Color::from_rgb8(233, 238, 246)
+                    }
+                    .into(),
+                ),
+                border: iced::Border {
+                    radius: 16.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .on_press_maybe((!busy).then_some(Message::TriggerQrScan(source)))
+            .into()
+        };
+        let (title, detail, color) = match &self.qr_scan_modal.status {
+            QrScanStatus::Idle => (
+                "Ready to scan",
+                "Choose a source to detect and import a profile.",
+                muted,
+            ),
+            QrScanStatus::Scanning(source) => (
+                "Scanning…",
+                match source {
+                    QrScanSource::DesktopScreenshot => {
+                        "Choose a screen or area in the system capture dialog."
+                    }
+                    QrScanSource::Webcam => "Reading a frame from your camera.",
+                    QrScanSource::PhotoUpload => "Choose an image containing a QR code.",
+                },
+                accent,
+            ),
+            QrScanStatus::Success(summary) => ("Profile imported", summary.as_str(), accent),
+            QrScanStatus::Error(error) => (
+                "Could not scan",
+                error.as_str(),
+                if is_dark {
+                    Color::from_rgb8(255, 163, 164)
+                } else {
+                    Color::from_rgb8(170, 40, 52)
+                },
+            ),
+        };
+        let content = column![
+            option(
+                icons::MONITOR,
+                "Desktop screenshot",
+                "Select the screen, window, or area with your QR code.",
+                QrScanSource::DesktopScreenshot
+            ),
+            option(
+                icons::CAMERA,
+                "Camera",
+                "Scan a code with a connected webcam.",
+                QrScanSource::Webcam
+            ),
+            option(
+                icons::IMAGE,
+                "Upload image",
+                "Choose a PNG or JPEG file.",
+                QrScanSource::PhotoUpload
+            ),
+            container(
+                column![
+                    text(title).size(14).color(color),
+                    text(detail).size(12).color(muted).width(Length::Fill)
+                ]
+                .spacing(6)
+            )
+            .padding([10, 0]),
+        ]
+        .spacing(12);
+        let dialog =
+            container(column![header, scrollable(content).height(Length::Fill)].spacing(20))
+                .padding(20)
+                .width(Length::Fill)
+                .max_width(400)
+                .height(Length::Fill)
+                .max_height(500)
+                .style(settings_ui::menu_surface);
+        container(dialog)
+            .padding(16)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .style(|_| container::Style {
@@ -6626,6 +6507,11 @@ trojan://secretpass@server2.com:443?type=ws#NodeB
         );
         drop(app.view(window_id));
 
+        let _ = app.update(Message::TriggerQrScan(QrScanSource::Webcam));
+        assert_eq!(app.qr_scan_modal.status, QrScanStatus::Scanning(QrScanSource::DesktopScreenshot));
+        let _ = app.update(Message::QrScanFinished(Err("Screenshot cancelled.".into())));
+        assert_eq!(app.qr_scan_modal.status, QrScanStatus::Idle);
+
         // 4. Trigger Webcam scan
         let _ = app.update(Message::TriggerQrScan(QrScanSource::Webcam));
         assert_eq!(
@@ -6633,6 +6519,8 @@ trojan://secretpass@server2.com:443?type=ws#NodeB
             QrScanStatus::Scanning(QrScanSource::Webcam)
         );
         drop(app.view(window_id));
+
+        let _ = app.update(Message::QrScanFinished(Err("File selection was cancelled".into())));
 
         // 5. Trigger Photo Upload scan
         let _ = app.update(Message::TriggerQrScan(QrScanSource::PhotoUpload));
@@ -6673,6 +6561,11 @@ trojan://secretpass@server2.com:443?type=ws#NodeB
         let _ = app.update(Message::CloseQrScanModal);
         assert!(!app.qr_scan_modal.is_open);
         drop(app.view(window_id));
+        let count = app.v2ray_profiles.len();
+        let _ = app.update(Message::QrScanFinished(Ok("vless://00000000-0000-0000-0000-000000000000@late.example:443?security=tls#Late".into())));
+        assert_eq!(app.v2ray_profiles.len(), count);
+        assert_eq!(app.qr_scan_modal.status, QrScanStatus::Idle);
+
     }
 
     #[test]
