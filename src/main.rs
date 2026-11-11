@@ -4634,6 +4634,7 @@ impl NetrayApp {
             icons::logo(30),
             text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
+            top_icon_btn(icons::PLUS, "Add profile", (!config_locked).then_some(Message::OpenAddMenu)),
             top_icon_btn(icons::SCAN_LINE, "Scan QR code", (!config_locked).then_some(Message::OpenQrScanModal)),
             top_icon_btn(icons::CLIPBOARD_PASTE, "Import from clipboard", (!config_locked).then_some(Message::RequestClipboardImport)),
             top_icon_btn(icons::FILE_TEXT, "Import file", (!config_locked).then_some(Message::RequestFileImport)),
@@ -4652,15 +4653,6 @@ impl NetrayApp {
 
         let is_reconnecting = self.error_notification.as_ref()
             .map_or(false, |n| n.countdown_secs.is_some() || n.is_reconnecting);
-        let sub_bar = row![
-            text("Profiles").size(18).color(self.text_primary()),
-            text(self.v2ray_profiles.len().to_string()).size(13).color(muted),
-            Space::with_width(Length::Fill),
-            button(row![icons::lucide_icon(icons::PLUS, 16, if config_locked { muted } else { accent }), text("Add profile").size(13).color(if config_locked { muted } else { accent })]
-                .spacing(6).align_y(Alignment::Center))
-                .padding([8, 12]).style(rounded_icon_btn_style(is_dark, !config_locked))
-                .on_press_maybe((!config_locked).then_some(Message::OpenAddMenu)),
-        ].spacing(8).align_y(Alignment::Center).padding([0, 16]);
         let route_option = |label: &'static str, selected: bool, message: Message| {
             let indicator: Element<'_, Message> = if selected {
                 icons::lucide_icon(icons::CHECK, 14, accent).into()
@@ -4892,7 +4884,6 @@ impl NetrayApp {
         });
 
         let profile_column = column![top_bar]
-            .push(sub_bar)
             .push(route_bar)
             .push(list_content)
             .push(fab_row)
