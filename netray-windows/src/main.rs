@@ -340,17 +340,6 @@ fn toast_container_style(_: &Theme) -> container::Style {
 
 
 
-fn log_terminal_style(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgb(0.06, 0.07, 0.09).into()),
-        border: iced::Border {
-            radius: 6.0.into(),
-            width: 1.0,
-            color: Color::from_rgb(0.18, 0.20, 0.25),
-        },
-        ..Default::default()
-    }
-}
 
 fn bg_window_style(theme: &Theme) -> container::Style {
     let is_dark = !matches!(theme, Theme::Light);
@@ -602,113 +591,17 @@ pub async fn send_connection_log(
         .await;
 }
 
-fn log_status_active(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgba(0.2, 0.9, 0.4, 0.12).into()),
-        border: iced::Border {
-            radius: 4.0.into(),
-            width: 1.0,
-            color: Color::from_rgba(0.2, 0.9, 0.4, 0.3),
-        },
-        ..Default::default()
-    }
-}
-
-fn log_status_stopped(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgba(0.5, 0.5, 0.5, 0.12).into()),
-        border: iced::Border {
-            radius: 4.0.into(),
-            width: 1.0,
-            color: Color::from_rgba(0.5, 0.5, 0.5, 0.25),
-        },
-        ..Default::default()
-    }
-}
-
-fn log_status_bar_style(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(theme::CARD_BG_DARK.into()),
-        ..Default::default()
-    }
-}
-
-fn log_chip_app_style(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgba(0.0, 0.60, 1.0, 0.14).into()),
-        border: iced::Border {
-            radius: 999.0.into(),
-            width: 1.0,
-            color: Color::from_rgba(0.0, 0.60, 1.0, 0.35),
-        },
-        ..Default::default()
-    }
-}
-
-fn log_chip_endpoint_style(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgba(0.50, 0.55, 0.65, 0.18).into()),
-        border: iced::Border {
-            radius: 999.0.into(),
-            width: 1.0,
-            color: Color::from_rgba(0.50, 0.55, 0.65, 0.35),
-        },
-        ..Default::default()
-    }
-}
-
-fn log_chip_bypass_style(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgba(1.0, 0.75, 0.20, 0.14).into()),
-        border: iced::Border {
-            radius: 999.0.into(),
-            width: 1.0,
-            color: Color::from_rgba(1.0, 0.75, 0.20, 0.35),
-        },
-        ..Default::default()
-    }
-}
-
-fn log_chip_proxy_style(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgba(0.25, 0.95, 0.45, 0.14).into()),
-        border: iced::Border {
-            radius: 999.0.into(),
-            width: 1.0,
-            color: Color::from_rgba(0.25, 0.95, 0.45, 0.35),
-        },
-        ..Default::default()
-    }
-}
 
 
 
-fn log_chip_app(app: &str) -> Element<'_, Message> {
-    container(text(format!("App: {}", app)).size(10).color(Color::from_rgb(0.40, 0.85, 1.0)))
-        .padding(iced::Padding { top: 2.0, bottom: 2.0, left: 6.0, right: 6.0 })
-        .style(log_chip_app_style)
-        .into()
-}
 
-fn log_chip_endpoint(host: &str, port: u16) -> Element<'_, Message> {
-    container(text(format!("{}:{}", host, port)).size(10).color(Color::WHITE))
-        .padding(iced::Padding { top: 2.0, bottom: 2.0, left: 6.0, right: 6.0 })
-        .style(log_chip_endpoint_style)
-        .into()
-}
 
-fn log_chip_route(route: &str) -> Element<'_, Message> {
-    let is_bypass = route.eq_ignore_ascii_case("bypass") || route.eq_ignore_ascii_case("direct");
-    let (t_col, style_fn): (Color, fn(&Theme) -> container::Style) = if is_bypass {
-        (Color::from_rgb(1.0, 0.75, 0.20), log_chip_bypass_style)
-    } else {
-        (Color::from_rgb(0.25, 0.95, 0.45), log_chip_proxy_style)
-    };
-    container(text(if is_bypass { "BYPASS" } else { "PROXY" }).size(9).color(t_col))
-        .padding(iced::Padding { top: 2.0, bottom: 2.0, left: 5.0, right: 5.0 })
-        .style(style_fn)
-        .into()
-}
+
+
+
+
+
+
 
 #[derive(Debug, Clone)]
 pub struct ShareModalState {
@@ -4848,106 +4741,71 @@ impl NetrayApp {
 
     fn view_logs_screen(&self) -> Element<'_, Message> {
         let is_dark = self.is_dark();
+        let muted = settings_ui::secondary(is_dark);
+        let accent = settings_ui::accent(is_dark);
+        let error = if is_dark {
+            Color::from_rgb8(255, 163, 164)
+        } else {
+            Color::from_rgb8(170, 40, 52)
+        };
         let top_bar = row![
-            button(
-                container(icons::lucide_icon(icons::BACK, 20, Color::WHITE))
-                    .center_x(Length::Fill)
-                    .center_y(Length::Fill),
-            )
-            .width(36)
-            .height(36)
-            .padding(0)
-            .style(rounded_icon_btn_style(is_dark, true))
-            .on_press(Message::SetViewMode(ViewMode::Profiles)),
-            Space::with_width(12),
-            text("Tunnel Logs & Status").size(20).color(Color::WHITE),
-            Space::with_width(Length::Fill),
-            button(text("Copy").size(13))
-                .padding(iced::Padding {
-                    top: 6.0,
-                    bottom: 6.0,
-                    left: 14.0,
-                    right: 14.0,
-                })
+            button(icons::lucide_icon(icons::BACK, 20, self.text_primary()))
+                .padding(8)
                 .style(rounded_icon_btn_style(is_dark, true))
-                .on_press(Message::CopyLogs),
-            Space::with_width(8),
-            button(text("Clear").size(13))
-                .padding(iced::Padding {
-                    top: 6.0,
-                    bottom: 6.0,
-                    left: 14.0,
-                    right: 14.0,
-                })
-                .style(primary_action_btn)
+                .on_press(Message::SetViewMode(ViewMode::Profiles)),
+            text("Logs").size(22).color(self.text_primary()),
+            Space::with_width(Length::Fill),
+            button(
+                row![
+                    icons::lucide_icon(icons::COPY, 16, accent),
+                    text("Copy").size(13).color(accent)
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+            )
+            .padding([8, 12])
+            .style(rounded_icon_btn_style(is_dark, true))
+            .on_press(Message::CopyLogs),
+            button(text("Clear").size(13).color(error))
+                .padding([8, 12])
+                .style(rounded_icon_btn_style(is_dark, true))
                 .on_press(Message::ClearLogs),
         ]
+        .spacing(8)
         .align_y(Alignment::Center)
-        .padding(iced::Padding {
-            top: 10.0,
-            bottom: 10.0,
-            left: 12.0,
-            right: 12.0,
-        });
-
+        .padding([10, 12]);
         let http_port = self
             .local_socks_port
             .parse::<u16>()
             .unwrap_or(10808)
             .saturating_add(1);
-
         let (active_conns, proxied_total, bypassed_total) = crate::tunnel::get_tunnel_metrics();
-
-        let status_pill = container(
-            text(if self.is_running { "ACTIVE" } else { "STOPPED" })
-                .size(10)
-                .color(if self.is_running {
-                    Color::from_rgb(0.2, 0.9, 0.4)
-                } else {
-                    TEXT_MUTED
-                }),
-        )
-        .padding(iced::Padding {
-            top: 2.0,
-            bottom: 2.0,
-            left: 7.0,
-            right: 7.0,
-        })
-        .style(if self.is_running { log_status_active } else { log_status_stopped });
-
         let status_bar = container(
-            row![
-                text(format!("SOCKS :{}", self.local_socks_port))
-                    .size(11)
-                    .color(ACCENT_BLUE_LIGHT),
-                Space::with_width(10),
-                text(format!("HTTP :{}", http_port))
-                    .size(11)
-                    .color(ACCENT_BLUE_LIGHT),
-                Space::with_width(10),
-                text(format!("Act: {}", active_conns))
-                    .size(11)
-                    .color(if active_conns > 0 { SUCCESS_GREEN } else { TEXT_MUTED }),
-                Space::with_width(10),
-                text(format!("Prox: {}", proxied_total))
-                    .size(11)
-                    .color(Color::from_rgb(0.40, 0.85, 1.0)),
-                Space::with_width(10),
-                text(format!("Byp: {}", bypassed_total))
-                    .size(11)
-                    .color(Color::from_rgb(1.0, 0.75, 0.20)),
-                Space::with_width(Length::Fill),
-                status_pill,
+            column![
+                row![
+                    text(format!("SOCKS :{}", self.local_socks_port))
+                        .size(12)
+                        .color(muted),
+                    text(format!("HTTP :{http_port}")).size(12).color(muted),
+                    Space::with_width(Length::Fill),
+                    text(if self.is_running { "Active" } else { "Stopped" })
+                        .size(12)
+                        .color(accent),
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center),
+                row![
+                    text(format!("Active {active_conns}")).size(12),
+                    text(format!("Proxied {proxied_total}")).size(12),
+                    text(format!("Bypassed {bypassed_total}")).size(12),
+                ]
+                .spacing(20),
             ]
-            .align_y(Alignment::Center),
+            .spacing(10),
         )
-        .padding(iced::Padding {
-            top: 6.0,
-            bottom: 6.0,
-            left: 14.0,
-            right: 14.0,
-        })
-        .style(log_status_bar_style);
+        .padding(14)
+        .width(Length::Fill)
+        .style(settings_ui::surface);
 
         let query = self.logs_filter.trim().to_lowercase();
         let filtered_logs: Vec<&LogEntry> = self
@@ -4956,16 +4814,16 @@ impl NetrayApp {
             .filter(|entry| {
                 let matches_preset = match self.logs_preset {
                     LogsFilterPreset::All => true,
-                    LogsFilterPreset::Tunnel => entry
-                        .route
-                        .as_deref()
-                        .is_some_and(|r| !r.eq_ignore_ascii_case("bypass") && !r.eq_ignore_ascii_case("direct")),
-                    LogsFilterPreset::Bypass => entry
-                        .route
-                        .as_deref()
-                        .is_some_and(|r| r.eq_ignore_ascii_case("bypass") || r.eq_ignore_ascii_case("direct")),
+                    LogsFilterPreset::Tunnel => entry.route.as_deref().is_some_and(|r| {
+                        !r.eq_ignore_ascii_case("bypass") && !r.eq_ignore_ascii_case("direct")
+                    }),
+                    LogsFilterPreset::Bypass => entry.route.as_deref().is_some_and(|r| {
+                        r.eq_ignore_ascii_case("bypass") || r.eq_ignore_ascii_case("direct")
+                    }),
                     LogsFilterPreset::Apps => entry.app_name.is_some(),
-                    LogsFilterPreset::Errors => matches!(entry.level, LogLevel::Error | LogLevel::Warn),
+                    LogsFilterPreset::Errors => {
+                        matches!(entry.level, LogLevel::Error | LogLevel::Warn)
+                    }
                 };
                 if !matches_preset {
                     return false;
@@ -4998,167 +4856,195 @@ impl NetrayApp {
             .rev()
             .map(|&entry| {
                 let color = match entry.level {
-                    LogLevel::Info => Color::from_rgb(0.75, 0.82, 0.9),
-                    LogLevel::Success => Color::from_rgb(0.25, 0.9, 0.45),
-                    LogLevel::Warn => Color::from_rgb(0.95, 0.75, 0.25),
-                    LogLevel::Error => Color::from_rgb(0.95, 0.35, 0.35),
+                    LogLevel::Info => self.text_primary(),
+                    LogLevel::Success => {
+                        if is_dark {
+                            Color::from_rgb8(145, 221, 176)
+                        } else {
+                            Color::from_rgb8(28, 111, 64)
+                        }
+                    }
+                    LogLevel::Warn => {
+                        if is_dark {
+                            Color::from_rgb8(242, 194, 104)
+                        } else {
+                            Color::from_rgb8(135, 73, 0)
+                        }
+                    }
+                    LogLevel::Error => error,
                 };
-
-                let mut row_items = row![
-                    text(format!("[{}]", entry.timestamp))
-                        .size(11)
-                        .color(Color::from_rgb(0.5, 0.5, 0.5)),
-                    text(format!("[{}]", entry.source))
-                        .size(11)
-                        .color(ACCENT_BLUE_LIGHT),
+                let mut details = Vec::new();
+                if let Some(app) = &entry.app_name {
+                    details.push(format!("App: {app}"));
+                }
+                if let (Some(host), Some(port)) = (&entry.target_host, entry.target_port) {
+                    details.push(format!("{host}:{port}"));
+                }
+                if let Some(route) = &entry.route {
+                    details.push(route.clone());
+                }
+                let mut content = column![
+                    row![
+                        text(&entry.timestamp).size(12).color(muted),
+                        text(&entry.source).size(12).color(accent)
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+                    text(&entry.message)
+                        .size(13)
+                        .color(color)
+                        .width(Length::Fill),
                 ]
-                .spacing(6)
-                .align_y(Alignment::Center);
-
-                if let Some(ref app) = entry.app_name {
-                    row_items = row_items.push(log_chip_app(app));
+                .spacing(4)
+                .width(Length::Fill);
+                if !details.is_empty() {
+                    content = content.push(
+                        text(details.join(" · "))
+                            .size(12)
+                            .color(muted)
+                            .width(Length::Fill),
+                    );
                 }
-
-                if let (Some(ref host), Some(port)) = (&entry.target_host, entry.target_port) {
-                    row_items = row_items.push(log_chip_endpoint(host, port));
-                }
-
-                if let Some(ref route) = entry.route {
-                    row_items = row_items.push(log_chip_route(route));
-                }
-
-                row_items.push(text(&entry.message).size(12).color(color)).into()
+                container(content)
+                    .padding([8, 0])
+                    .width(Length::Fill)
+                    .into()
             })
             .collect();
-
-        let terminal = container(
-            scrollable(column(log_rows).spacing(6))
+        let log_body: Element<'_, Message> = if filtered_logs.is_empty() {
+            container(
+                column![
+                    text(if self.logs.is_empty() {
+                        "No logs yet"
+                    } else {
+                        "No matching logs"
+                    })
+                    .size(16)
+                    .color(self.text_primary()),
+                    text(if self.logs.is_empty() {
+                        "Connection events will appear here."
+                    } else {
+                        "Try another filter or search."
+                    })
+                    .size(13)
+                    .color(muted),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Center),
+            )
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
+        } else {
+            scrollable(column(log_rows).spacing(4))
                 .id(scrollable::Id::new("logs"))
-                .height(Length::Fill),
-        )
-        .padding(12)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(log_terminal_style);
-
-        let make_preset_btn = |preset: LogsFilterPreset, label: &'static str| -> Element<'_, Message> {
-            let is_selected = self.logs_preset == preset;
-            let (bg_col, text_col, border_col) = if is_selected {
-                (
-                    Color::from_rgba(0.0, 0.48, 1.0, 0.28),
-                    Color::from_rgb(0.55, 0.85, 1.0),
-                    Color::from_rgba(0.0, 0.48, 1.0, 0.70),
-                )
-            } else {
-                (
-                    Color::from_rgba(0.12, 0.14, 0.18, 0.60),
-                    Color::from_rgb(0.70, 0.73, 0.80),
-                    Color::from_rgba(0.24, 0.26, 0.32, 0.45),
-                )
-            };
-
-            button(text(label).size(11).color(text_col))
-                .padding(iced::Padding {
-                    top: 3.0,
-                    bottom: 3.0,
-                    left: 9.0,
-                    right: 9.0,
-                })
-                .style(move |_, _| button::Style {
-                    background: Some(bg_col.into()),
-                    border: iced::Border {
-                        radius: 999.0.into(),
-                        width: 1.0,
-                        color: border_col,
-                    },
-                    ..Default::default()
-                })
-                .on_press(Message::LogsPresetChanged(preset))
+                .width(Length::Fill)
+                .height(Length::Fill)
                 .into()
         };
-
-        let presets_row = row![
-            text("View:").size(11).color(TEXT_MUTED),
-            make_preset_btn(LogsFilterPreset::All, "All"),
-            make_preset_btn(LogsFilterPreset::Tunnel, "Tunnel"),
-            make_preset_btn(LogsFilterPreset::Bypass, "Bypass"),
-            make_preset_btn(LogsFilterPreset::Apps, "Apps"),
-            make_preset_btn(LogsFilterPreset::Errors, "Errors"),
+        let terminal = container(log_body)
+            .padding(16)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(settings_ui::surface);
+        let preset = |value: LogsFilterPreset, label: &'static str| -> Element<'_, Message> {
+            let selected = self.logs_preset == value;
+            button(
+                text(label)
+                    .size(12)
+                    .color(if selected { accent } else { muted })
+                    .align_x(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .padding([8, 6])
+            .style(move |_, status| button::Style {
+                background: Some(
+                    if selected {
+                        if is_dark {
+                            Color::from_rgb8(44, 66, 98)
+                        } else {
+                            Color::from_rgb8(210, 227, 253)
+                        }
+                    } else if matches!(status, button::Status::Hovered) {
+                        if is_dark {
+                            Color::from_rgb8(35, 42, 54)
+                        } else {
+                            Color::from_rgb8(233, 238, 246)
+                        }
+                    } else {
+                        Color::TRANSPARENT
+                    }
+                    .into(),
+                ),
+                border: iced::Border {
+                    radius: 999.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .on_press(Message::LogsPresetChanged(value))
+            .into()
+        };
+        let presets = row![
+            preset(LogsFilterPreset::All, "All"),
+            preset(LogsFilterPreset::Tunnel, "Tunnel"),
+            preset(LogsFilterPreset::Bypass, "Bypass"),
+            preset(LogsFilterPreset::Apps, "Apps"),
+            preset(LogsFilterPreset::Errors, "Errors"),
         ]
-        .spacing(4)
-        .align_y(Alignment::Center);
-
-        let auto_scroll_check = checkbox("Auto-scroll", self.auto_scroll_logs)
-            .size(13)
-            .on_toggle(Message::AutoScrollLogs);
-
-        let top_controls = row![
-            auto_scroll_check,
-            Space::with_width(Length::Fill),
-            presets_row,
-        ]
-        .align_y(Alignment::Center);
-
-        let search_input = modern_text_input(
-            "Filter logs by app, website, or keyword...",
-            &self.logs_filter,
-            is_dark,
-        )
-        .on_input(Message::LogsFilterChanged)
-        .width(Length::Fill);
-
-        let mut search_row = row![search_input]
-            .spacing(6)
+        .spacing(4);
+        let mut search =
+            row![
+                modern_text_input("Search app, host, or message", &self.logs_filter, is_dark)
+                    .padding([10, 12])
+                    .size(14)
+                    .style(move |_, status| settings_ui::input(is_dark, status))
+                    .on_input(Message::LogsFilterChanged)
+                    .width(Length::Fill)
+            ]
+            .spacing(8)
             .align_y(Alignment::Center);
-
         if !self.logs_filter.is_empty() {
-            search_row = search_row.push(
-                button(text("Clear").size(11))
-                    .padding(iced::Padding {
-                        top: 5.0,
-                        bottom: 5.0,
-                        left: 8.0,
-                        right: 8.0,
-                    })
+            search = search.push(
+                button(text("Clear").size(12).color(muted))
+                    .padding(8)
                     .style(rounded_icon_btn_style(is_dark, true))
                     .on_press(Message::LogsFilterChanged(String::new())),
             );
         }
-
-        let count_badge = container(
-            text(format!("{}/{} logs", filtered_logs.len(), self.logs.len()))
-                .size(10)
-                .color(TEXT_MUTED),
-        )
-        .padding(iced::Padding {
-            top: 4.0,
-            bottom: 4.0,
-            left: 6.0,
-            right: 6.0,
-        });
-
-        search_row = search_row.push(count_badge);
-
-        let controls_toolbar = column![
-            top_controls,
-            search_row,
+        let controls = column![
+            presets,
+            search,
+            row![
+                toggler(self.auto_scroll_logs)
+                    .label("Auto-scroll")
+                    .size(18)
+                    .text_size(13)
+                    .on_toggle(Message::AutoScrollLogs),
+                Space::with_width(Length::Fill),
+                text(format!(
+                    "{} / {} entries",
+                    filtered_logs.len(),
+                    self.logs.len()
+                ))
+                .size(12)
+                .color(muted),
+            ]
+            .align_y(Alignment::Center),
         ]
-        .spacing(6);
-
+        .spacing(10);
         column![
             top_bar,
-            status_bar,
-            container(controls_toolbar).padding([4, 12]),
-            container(terminal)
+            container(column![status_bar, controls, terminal].spacing(12))
                 .padding(iced::Padding {
-                    top: 4.0,
-                    bottom: 12.0,
-                    left: 12.0,
-                    right: 12.0,
+                    top: 0.0,
+                    bottom: 16.0,
+                    left: 16.0,
+                    right: 16.0
                 })
+                .width(Length::Fill)
                 .height(Length::Fill),
         ]
-        .spacing(4)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
