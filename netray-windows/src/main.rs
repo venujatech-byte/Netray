@@ -4223,7 +4223,6 @@ impl NetrayApp {
         };
         let top_bar = row![
             top_icon_btn(icons::MENU, "Settings", Some(Message::SetViewMode(ViewMode::SshSettings))),
-            icons::logo(30),
             text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
             top_icon_btn(icons::PLUS, "Add profile", (!config_locked).then_some(Message::OpenAddMenu)),
