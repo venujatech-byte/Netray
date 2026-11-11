@@ -835,6 +835,7 @@ pub struct NetrayApp {
     pub auto_reconnect: bool,
     pub notify_connection_drops: bool,
     pub allow_insecure_tls: bool,
+    pub ipv6_enabled: bool,
     pub user_stopped: bool,
     pub reconnect_attempts: u32,
     pub error_notification: Option<ErrorNotification>,
@@ -982,6 +983,7 @@ pub enum Message {
     ToggleConnectionDropNotifications(bool),
     ToggleLogsEnabled(bool),
     ToggleAllowInsecureTls(bool),
+    ToggleIpv6(bool),
 
     CheckForUpdates,
     UpdateCheckFinished(Result<Option<updater::ReleaseInfo>, String>),
@@ -1089,6 +1091,7 @@ impl NetrayApp {
             auto_reconnect: saved.auto_reconnect,
             notify_connection_drops: saved.notify_connection_drops,
             allow_insecure_tls: saved.allow_insecure_tls,
+            ipv6_enabled: saved.ipv6_enabled,
             user_stopped: false,
             reconnect_attempts: 0,
             error_notification: None,
@@ -1262,6 +1265,7 @@ impl NetrayApp {
             auto_reconnect: self.auto_reconnect,
             notify_connection_drops: self.notify_connection_drops,
             allow_insecure_tls: self.allow_insecure_tls,
+            ipv6_enabled: self.ipv6_enabled,
             auto_check_updates: self.auto_check_updates,
             logs_enabled: self.logs_enabled,
         };
@@ -2524,6 +2528,12 @@ impl NetrayApp {
                 let _ = self.save_current_state();
                 Task::none()
             }
+            Message::ToggleIpv6(enabled) => {
+                if self.config_locked() { return Task::none(); }
+                self.ipv6_enabled = enabled;
+                let _ = self.save_current_state();
+                Task::none()
+            }
             Message::ToggleAllowInsecureTls(enabled) => {
                 if self.is_running || self.worker_active { return Task::none(); }
                 self.allow_insecure_tls = enabled;
@@ -2772,6 +2782,7 @@ impl NetrayApp {
                         whitelist_apps: self.whitelist_apps.clone(),
                         whitelist_urls: self.whitelist_urls.clone(),
                         allow_insecure_tls: self.allow_insecure_tls,
+            ipv6_enabled: self.ipv6_enabled,
                     };
 
                     let log_tx_opt = self.log_sender.clone();
@@ -5282,6 +5293,8 @@ impl NetrayApp {
                 )
                 .on_toggle(Message::ToggleAutoReconnect),
                 Space::with_height(2),
+                checkbox("Enable IPv6 (disabled blocks IPv6 traffic)", self.ipv6_enabled)
+                    .on_toggle_maybe((!self.config_locked()).then_some(Message::ToggleIpv6)),
                 checkbox("Allow insecure (TLS)", self.allow_insecure_tls)
                     .on_toggle_maybe((!self.is_running && !self.worker_active).then_some(Message::ToggleAllowInsecureTls)),
                 text("Skips server certificate verification. Applies on the next connection; disabled while connected.")

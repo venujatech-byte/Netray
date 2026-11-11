@@ -83,6 +83,7 @@ pub struct TunnelConfig {
     pub whitelist_apps: String,
     pub whitelist_urls: String,
     pub allow_insecure_tls: bool,
+    pub ipv6_enabled: bool,
 }
 
 struct SshClientHandler;
@@ -405,6 +406,7 @@ async fn run_xray_engine(
 
     let mut logging_config: serde_json::Value = serde_json::from_str(&config_json)?;
     crate::v2ray::apply_tls_policy(&mut logging_config, cfg.allow_insecure_tls);
+    crate::v2ray::apply_ipv6_policy(&mut logging_config, cfg.ipv6_enabled);
     logging_config["log"] = serde_json::json!({"loglevel": if crate::log_activity::enabled() { "info" } else { "error" }, "access": "", "error": ""});
     logging_config["stats"] = serde_json::json!({});
     if !logging_config["api"].is_object() {
