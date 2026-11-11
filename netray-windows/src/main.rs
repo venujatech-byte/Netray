@@ -4297,6 +4297,7 @@ impl NetrayApp {
                             && is_active
                             && self.tunnel_mode == TunnelMode::V2RayXray)))
                     .then_some(Message::PingProfileIndex(idx));
+                let ping_active = ping_press.is_some() || pinging;
                 let ping_result = if pinging {
                     "Testing…"
                 } else {
@@ -4305,6 +4306,12 @@ impl NetrayApp {
                         .map(String::as_str)
                         .unwrap_or_default()
                 };
+                let ping_color = if ping_result == "Failed" {
+                    FAILURE_RED
+                } else {
+                    SUCCESS_GREEN
+                };
+
                 container(
                     row![
                         icons::lucide_icon(icons::SERVER, 20, if is_active { accent } else { muted }),
@@ -4332,18 +4339,12 @@ impl NetrayApp {
                             ),
                             text(proto_tag).size(12).color(accent),
                             row![
+                                text(ping_result).size(12).color(ping_color),
                                 Space::with_width(Length::Fill),
-                                {
-                                    let ping_active = ping_press.is_some() || pinging;
-                                    let ink = if ping_active { Color::WHITE } else { inactive_color };
-                                    button(row![
-                                        icons::lucide_icon(icons::ACTIVITY, 16, ink),
-                                        text(if ping_result.is_empty() { "Ping" } else { ping_result.strip_prefix("HTTP · ").unwrap_or(ping_result) }).size(12).color(ink),
-                                    ].spacing(6).align_y(Alignment::Center))
-                                        .width(96).height(32).padding([6, 10])
-                                        .style(ping_btn_style(is_dark, ping_active, pinging))
-                                        .on_press_maybe(ping_press)
-                                },
+                                button(icons::lucide_icon(icons::ACTIVITY, 18, if ping_active { Color::WHITE } else { inactive_color }))
+                                    .padding(10)
+                                    .style(ping_btn_style(is_dark, ping_active, pinging))
+                                    .on_press_maybe(ping_press),
                                 button(icons::lucide_icon(icons::SHARE, 16, muted))
                                     .padding(6)
                                     .style(transparent_muted_btn)
