@@ -4714,12 +4714,6 @@ impl NetrayApp {
                         .map(String::as_str)
                         .unwrap_or_default()
                 };
-                let ping_color = if ping_result == "Failed" {
-                    FAILURE_RED
-                } else {
-                    SUCCESS_GREEN
-                };
-
                 container(
                     row![
                         icons::lucide_icon(icons::SERVER, 20, if is_active { accent } else { muted }),
@@ -4747,19 +4741,15 @@ impl NetrayApp {
                             ),
                             text(proto_tag).size(12).color(accent),
                             row![
-                                text(ping_result).size(12).color(ping_color),
                                 Space::with_width(Length::Fill),
                                 {
                                     let ping_active = ping_press.is_some() || pinging;
-                                    let ping_icon_color = if ping_active {
-                                        Color::WHITE
-                                    } else {
-                                        self.icon_inactive()
-                                    };
-                                    button(icons::lucide_icon(icons::ACTIVITY, 16, ping_icon_color))
-                                        .width(32)
-                                        .height(32)
-                                        .padding(8)
+                                    let ink = if ping_active { Color::WHITE } else { inactive_color };
+                                    button(row![
+                                        icons::lucide_icon(icons::ACTIVITY, 16, ink),
+                                        text(if ping_result.is_empty() { "Ping" } else { ping_result.strip_prefix("HTTP · ").unwrap_or(ping_result) }).size(12).color(ink),
+                                    ].spacing(6).align_y(Alignment::Center))
+                                        .width(96).height(32).padding([6, 10])
                                         .style(ping_btn_style(is_dark, ping_active, pinging))
                                         .on_press_maybe(ping_press)
                                 },
@@ -4797,11 +4787,11 @@ impl NetrayApp {
                             .spacing(4)
                             .align_y(Alignment::Center),
                         ]
-                        .spacing(10)
+                        .spacing(4)
                         .width(Length::Fill),
                     ]
                     .align_y(Alignment::Start)
-                    .padding(18),
+                    .padding(12),
                 )
                 .width(Length::Fill)
                 .style(move |theme| {
