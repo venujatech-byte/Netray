@@ -4768,7 +4768,7 @@ impl NetrayApp {
                     .color(if selected { accent } else { muted })
                     .align_x(Alignment::Center),
             )
-            .width(Length::Fill)
+            .width(Length::Shrink)
             .padding([6, 8])
             .style(move |_, status| button::Style {
                 background: Some(
