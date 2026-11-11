@@ -58,6 +58,25 @@ pub fn input(is_dark: bool, status: text_input::Status) -> text_input::Style {
     style
 }
 
+pub fn menu_surface(theme: &Theme) -> container::Style {
+    let light = matches!(theme, Theme::Light);
+    let mut style = surface(theme);
+    style.background = Some(
+        if light {
+            Color::WHITE
+        } else {
+            Color::from_rgb8(55, 63, 77)
+        }
+        .into(),
+    );
+    style.shadow = iced::Shadow {
+        color: Color::from_rgba(0.0, 0.0, 0.0, if light { 0.18 } else { 0.4 }),
+        offset: iced::Vector::new(0.0, 6.0),
+        blur_radius: 20.0,
+    };
+    style
+}
+
 pub fn select(is_dark: bool, status: pick_list::Status) -> pick_list::Style {
     let mut style = crate::theme::pick_list_style(is_dark, status);
     style.border.width = 0.0;
@@ -136,13 +155,15 @@ mod tests {
             0.2126 * r + 0.7152 * g + 0.0722 * b
         }
         for (dark, theme) in [(false, Theme::Light), (true, Theme::Dark)] {
-            let iced::Background::Color(background) = surface(&theme).background.unwrap() else {
-                panic!("Settings surfaces must use a solid color");
-            };
-            for foreground in [secondary(dark), accent(dark)] {
-                let a = luminance(foreground);
-                let b = luminance(background);
-                assert!((a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5);
+            for style in [surface(&theme), menu_surface(&theme)] {
+                let iced::Background::Color(background) = style.background.unwrap() else {
+                    panic!("Settings surfaces must use a solid color");
+                };
+                for foreground in [secondary(dark), accent(dark)] {
+                    let a = luminance(foreground);
+                    let b = luminance(background);
+                    assert!((a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5);
+                }
             }
         }
     }

@@ -4240,7 +4240,7 @@ impl NetrayApp {
                 .padding(8).text_size(13).width(Length::Fill)
                 .style(move |_, status| settings_ui::select(is_dark, status))
                 .menu_style(move |_| theme::pick_list_menu_style(is_dark)),
-        ].spacing(8)).padding(16).style(settings_ui::surface).width(210);
+        ].spacing(8)).padding(16).style(settings_ui::menu_surface).width(210);
 
         let is_reconnecting = self.error_notification.as_ref()
             .map_or(false, |n| n.countdown_secs.is_some() || n.is_reconnecting);
