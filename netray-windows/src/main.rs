@@ -4489,6 +4489,10 @@ impl NetrayApp {
     }
 
     fn view_edit_screen(&self) -> Element<'_, Message> {
+        let is_dark = self.is_dark();
+        let muted = settings_ui::secondary(is_dark);
+        let accent = settings_ui::accent(is_dark);
+
         let proto_name = match self.node_edit_state.protocol.to_lowercase().as_str() {
             "vless" => "VLess",
             "vmess" => "VMess",
@@ -4508,15 +4512,30 @@ impl NetrayApp {
         };
 
         let top_bar = row![
-            button(icons::lucide_icon(icons::CLOSE, 22, Color::WHITE))
-                .padding(6)
-                .on_press(Message::CancelEditNode),
-            Space::with_width(16),
-            text(screen_title).size(20).color(Color::WHITE),
+            button(
+                container(icons::lucide_icon(icons::CLOSE, 20, self.text_primary()))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
+            )
+            .width(36)
+            .height(36)
+            .padding(0)
+            .style(rounded_icon_btn_style(is_dark, true))
+            .on_press(Message::CancelEditNode),
+            Space::with_width(14),
+            text(screen_title).size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
-            button(icons::lucide_icon(icons::CHECK, 24, ACCENT_BLUE_LIGHT))
-                .padding(6)
-                .on_press(Message::SaveEditedNode),
+            button(
+                row![
+                    icons::lucide_icon(icons::CHECK, 18, Color::WHITE),
+                    text("Save").size(14)
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+            )
+            .padding([10, 16])
+            .style(primary_action_btn)
+            .on_press(Message::SaveEditedNode),
         ]
         .align_y(Alignment::Center)
         .padding(iced::Padding {
@@ -4528,247 +4547,294 @@ impl NetrayApp {
 
         let remarks_card = container(
             column![
-                text("Remarks").size(11).color(TEXT_MUTED),
-                text_input("Remarks", &self.node_edit_state.remarks)
-                    .on_input(Message::EditRemarksChanged)
-                    .padding(6),
+                text("Profile name").size(13).color(muted),
+                modern_text_input("Remarks", &self.node_edit_state.remarks, is_dark)
+                    .padding([10, 12])
+                    .size(14)
+                    .style(move |_, status| settings_ui::input(is_dark, status))
+                    .on_input(Message::EditRemarksChanged),
             ]
-            .spacing(4),
+            .spacing(8),
         )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
+        .padding(0)
+        .width(Length::Fill);
 
         let addr_port_card = row![
             container(
                 column![
-                    text("Address").size(11).color(TEXT_MUTED),
-                    text_input("example.com", &self.node_edit_state.address)
-                        .on_input(Message::EditAddressChanged)
-                        .padding(6),
+                    text("Address").size(13).color(muted),
+                    modern_text_input("example.com", &self.node_edit_state.address, is_dark)
+                        .padding([10, 12])
+                        .size(14)
+                        .style(move |_, status| settings_ui::input(is_dark, status))
+                        .on_input(Message::EditAddressChanged),
                 ]
-                .spacing(4)
+                .spacing(8)
             )
-            .padding(10)
-            .width(Length::FillPortion(3))
-            .style(form_card_style),
+            .padding(0)
+            .width(Length::FillPortion(3)),
             Space::with_width(10),
             container(
                 column![
-                    text("Port").size(11).color(TEXT_MUTED),
-                    text_input("443", &self.node_edit_state.port)
-                        .on_input(Message::EditPortChanged)
-                        .padding(6),
+                    text("Port").size(13).color(muted),
+                    modern_text_input("443", &self.node_edit_state.port, is_dark)
+                        .padding([10, 12])
+                        .size(14)
+                        .style(move |_, status| settings_ui::input(is_dark, status))
+                        .on_input(Message::EditPortChanged),
                 ]
-                .spacing(4)
+                .spacing(8)
             )
-            .padding(10)
-            .width(Length::FillPortion(1))
-            .style(form_card_style),
+            .padding(0)
+            .width(Length::FillPortion(1)),
         ];
 
         let encrypt_card = container(
             column![
-                text("Encrypt method").size(11).color(TEXT_MUTED),
+                text("Encryption").size(13).color(muted),
                 pick_list(
                     ["none", "zero", "aes-128-gcm", "chacha20-poly1305"],
                     Some(self.node_edit_state.encrypt_method.as_str()),
-                    |s| Message::EditEncryptMethodChanged(s.to_string())
+                    |s| Message::EditEncryptMethodChanged(s.to_string()),
                 )
-                .width(Length::Fill),
+                .padding([10, 12])
+                .text_size(14)
+                .width(Length::Fill)
+                .style(move |_, status| settings_ui::select(is_dark, status))
+                .menu_style(move |_| theme::pick_list_menu_style(is_dark)),
             ]
-            .spacing(4),
+            .spacing(8),
         )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
+        .padding(0)
+        .width(Length::Fill);
 
         let flow_card = container(
             column![
-                text("Flow").size(11).color(TEXT_MUTED),
+                text("Flow").size(13).color(muted),
                 pick_list(
                     ["none", "xtls-rprx-vision", "xtls-rprx-vision-udp443"],
                     Some(self.node_edit_state.flow.as_str()),
-                    |s| Message::EditFlowChanged(s.to_string())
+                    |s| Message::EditFlowChanged(s.to_string()),
                 )
-                .width(Length::Fill),
+                .padding([10, 12])
+                .text_size(14)
+                .width(Length::Fill)
+                .style(move |_, status| settings_ui::select(is_dark, status))
+                .menu_style(move |_| theme::pick_list_menu_style(is_dark)),
             ]
-            .spacing(4),
+            .spacing(8),
         )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
+        .padding(0)
+        .width(Length::Fill);
 
         let uuid_card = container(
             column![
-                text("User ID").size(11).color(TEXT_MUTED),
-                text_input("User ID (UUID)", &self.node_edit_state.user_id)
-                    .on_input(Message::EditUserIdChanged)
-                    .padding(6),
+                text("User ID").size(13).color(muted),
+                modern_text_input("User ID (UUID)", &self.node_edit_state.user_id, is_dark)
+                    .padding([10, 12])
+                    .size(14)
+                    .style(move |_, status| settings_ui::input(is_dark, status))
+                    .on_input(Message::EditUserIdChanged),
             ]
-            .spacing(4),
+            .spacing(8),
         )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
+        .padding(0)
+        .width(Length::Fill);
 
         let transport_card = container(
             column![
-                text("Transfer protocol").size(11).color(TEXT_MUTED),
+                text("Transport").size(13).color(muted),
                 pick_list(
                     ["tcp", "ws", "grpc", "h2", "kcp"],
                     Some(self.node_edit_state.transport_protocol.as_str()),
-                    |s| Message::EditTransportChanged(s.to_string())
+                    |s| Message::EditTransportChanged(s.to_string()),
                 )
-                .width(Length::Fill),
+                .padding([10, 12])
+                .text_size(14)
+                .width(Length::Fill)
+                .style(move |_, status| settings_ui::select(is_dark, status))
+                .menu_style(move |_| theme::pick_list_menu_style(is_dark)),
             ]
-            .spacing(4),
+            .spacing(8),
         )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
+        .padding(0)
+        .width(Length::Fill);
 
         let header_card = container(
             column![
-                text("Header type").size(11).color(TEXT_MUTED),
+                text("Header type").size(13).color(muted),
                 pick_list(
                     ["none", "http"],
                     Some(self.node_edit_state.header_type.as_str()),
-                    |s| Message::EditHeaderTypeChanged(s.to_string())
+                    |s| Message::EditHeaderTypeChanged(s.to_string()),
                 )
-                .width(Length::Fill),
+                .padding([10, 12])
+                .text_size(14)
+                .width(Length::Fill)
+                .style(move |_, status| settings_ui::select(is_dark, status))
+                .menu_style(move |_| theme::pick_list_menu_style(is_dark)),
             ]
-            .spacing(4),
+            .spacing(8),
         )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
-
-        let path_card = container(
-            column![
-                text("Path / Service name").size(11).color(TEXT_MUTED),
-                text_input("/path (e.g. /ws)", &self.node_edit_state.path)
-                    .on_input(Message::EditPathChanged)
-                    .padding(6),
-            ]
-            .spacing(4),
-        )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
+        .padding(0)
+        .width(Length::Fill);
 
         let tls_card = container(
             column![
-                text("TLS type").size(11).color(TEXT_MUTED),
+                text("TLS type").size(13).color(muted),
                 pick_list(
                     ["tls", "reality", "none"],
                     Some(self.node_edit_state.tls_type.as_str()),
-                    |s| Message::EditTlsTypeChanged(s.to_string())
+                    |s| Message::EditTlsTypeChanged(s.to_string()),
                 )
-                .width(Length::Fill),
+                .padding([10, 12])
+                .text_size(14)
+                .width(Length::Fill)
+                .style(move |_, status| settings_ui::select(is_dark, status))
+                .menu_style(move |_| theme::pick_list_menu_style(is_dark)),
             ]
-            .spacing(4),
+            .spacing(8),
         )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
+        .padding(0)
+        .width(Length::Fill);
 
-        let mut form_items = vec![
-            remarks_card.into(),
-            addr_port_card.into(),
-            encrypt_card.into(),
-            flow_card.into(),
-            uuid_card.into(),
-            transport_card.into(),
-            header_card.into(),
-            path_card.into(),
-            tls_card.into(),
-        ];
+        let sni_card = container(
+            column![
+                text("Server name indication").size(13).color(muted),
+                modern_text_input("SNI (e.g. example.com)", &self.node_edit_state.sni, is_dark)
+                    .padding([10, 12])
+                    .size(14)
+                    .style(move |_, status| settings_ui::input(is_dark, status))
+                    .on_input(Message::EditSniChanged),
+            ]
+            .spacing(8),
+        )
+        .padding(0)
+        .width(Length::Fill);
+
+        let fp_card = container(
+            column![
+                text("Fingerprint").size(13).color(muted),
+                pick_list(
+                    ["chrome", "firefox", "safari", "ios", "android", "random"],
+                    Some(self.node_edit_state.fingerprint.as_str()),
+                    |s| Message::EditFingerprintChanged(s.to_string()),
+                )
+                .padding([10, 12])
+                .text_size(14)
+                .width(Length::Fill)
+                .style(move |_, status| settings_ui::select(is_dark, status))
+                .menu_style(move |_| theme::pick_list_menu_style(is_dark)),
+            ]
+            .spacing(8),
+        )
+        .padding(0)
+        .width(Length::Fill);
+
+        let alpn_card = container(
+            column![
+                text("ALPN").size(13).color(muted),
+                pick_list(
+                    ["none", "h2", "http/1.1", "h2,http/1.1"],
+                    Some(self.node_edit_state.alpn.as_str()),
+                    |s| Message::EditAlpnChanged(s.to_string()),
+                )
+                .padding([10, 12])
+                .text_size(14)
+                .width(Length::Fill)
+                .style(move |_, status| settings_ui::select(is_dark, status))
+                .menu_style(move |_| theme::pick_list_menu_style(is_dark)),
+            ]
+            .spacing(8),
+        )
+        .padding(0)
+        .width(Length::Fill);
+
+        let path_card = container(
+            column![
+                text("Path / Service name").size(13).color(muted),
+                modern_text_input("/path (e.g. /ws)", &self.node_edit_state.path, is_dark)
+                    .padding([10, 12])
+                    .size(14)
+                    .style(move |_, status| settings_ui::input(is_dark, status))
+                    .on_input(Message::EditPathChanged),
+            ]
+            .spacing(8),
+        )
+        .padding(0)
+        .width(Length::Fill);
+
+        let server_section = container(
+            column![
+                text("Server").size(16).color(accent),
+                remarks_card,
+                addr_port_card,
+                encrypt_card,
+                flow_card,
+                uuid_card,
+            ]
+            .spacing(16),
+        )
+        .padding(20)
+        .width(Length::Fill)
+        .style(settings_ui::surface);
+        let transport_section = container(
+            column![
+                text("Transport").size(16).color(accent),
+                transport_card,
+                header_card,
+                path_card,
+            ]
+            .spacing(16),
+        )
+        .padding(20)
+        .width(Length::Fill)
+        .style(settings_ui::surface);
+        let mut security_fields =
+            column![text("TLS & security").size(16).color(accent), tls_card,].spacing(16);
 
         if self.node_edit_state.tls_type == "reality" {
             let reality_row = row![
                 container(
                     column![
-                        text("Reality Public Key").size(11).color(TEXT_MUTED),
-                        text_input("PublicKey", &self.node_edit_state.public_key)
-                            .on_input(Message::EditPublicKeyChanged)
-                            .padding(6),
+                        text("Reality Public Key").size(13).color(muted),
+                        modern_text_input("PublicKey", &self.node_edit_state.public_key, is_dark)
+                            .padding([10, 12])
+                            .size(14)
+                            .style(move |_, status| settings_ui::input(is_dark, status))
+                            .on_input(Message::EditPublicKeyChanged),
                     ]
-                    .spacing(4)
+                    .spacing(8)
                 )
-                .padding(10)
-                .width(Length::FillPortion(2))
-                .style(form_card_style),
+                .padding(0)
+                .width(Length::FillPortion(2)),
                 Space::with_width(10),
                 container(
                     column![
-                        text("Short ID").size(11).color(TEXT_MUTED),
-                        text_input("ShortId", &self.node_edit_state.short_id)
-                            .on_input(Message::EditShortIdChanged)
-                            .padding(6),
+                        text("Short ID").size(13).color(muted),
+                        modern_text_input("ShortId", &self.node_edit_state.short_id, is_dark)
+                            .padding([10, 12])
+                            .size(14)
+                            .style(move |_, status| settings_ui::input(is_dark, status))
+                            .on_input(Message::EditShortIdChanged),
                     ]
-                    .spacing(4)
+                    .spacing(8)
                 )
-                .padding(10)
-                .width(Length::FillPortion(1))
-                .style(form_card_style),
+                .padding(0)
+                .width(Length::FillPortion(1)),
             ];
-            form_items.push(reality_row.into());
+            security_fields = security_fields.push(reality_row);
         }
 
-        let sni_card = container(
-            column![
-                text("Server name indication").size(11).color(TEXT_MUTED),
-                text_input("SNI (e.g. example.com)", &self.node_edit_state.sni)
-                    .on_input(Message::EditSniChanged)
-                    .padding(6),
-            ]
-            .spacing(4),
-        )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
-
-        let fp_card = container(
-            column![
-                text("Fingerprint").size(11).color(TEXT_MUTED),
-                pick_list(
-                    ["chrome", "firefox", "safari", "ios", "android", "random"],
-                    Some(self.node_edit_state.fingerprint.as_str()),
-                    |s| Message::EditFingerprintChanged(s.to_string())
-                )
-                .width(Length::Fill),
-            ]
-            .spacing(4),
-        )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
-
-        let alpn_card = container(
-            column![
-                text("Alpn").size(11).color(TEXT_MUTED),
-                pick_list(
-                    ["none", "h2", "http/1.1", "h2,http/1.1"],
-                    Some(self.node_edit_state.alpn.as_str()),
-                    |s| Message::EditAlpnChanged(s.to_string())
-                )
-                .width(Length::Fill),
-            ]
-            .spacing(4),
-        )
-        .padding(10)
-        .width(Length::Fill)
-        .style(form_card_style);
-
-        form_items.push(sni_card.into());
-        form_items.push(fp_card.into());
-        form_items.push(alpn_card.into());
-        form_items.push(Space::with_height(20).into());
+        security_fields = security_fields.push(sni_card).push(fp_card).push(alpn_card);
+        let security_section = container(security_fields)
+            .padding(20)
+            .width(Length::Fill)
+            .style(settings_ui::surface);
 
         let form_content = scrollable(
-            column(form_items)
-                .spacing(10)
+            column![server_section, transport_section, security_section]
+                .spacing(16)
                 .padding(iced::Padding {
                     top: 0.0,
                     bottom: 20.0,
@@ -4776,6 +4842,7 @@ impl NetrayApp {
                     right: 16.0,
                 }),
         )
+        .id(scrollable::Id::new("editor_scroll"))
         .height(Length::Fill);
 
         column![top_bar, form_content,]
@@ -4784,6 +4851,10 @@ impl NetrayApp {
             .height(Length::Fill)
             .into()
     }
+
+    // ========================================================================
+    // SCREEN 3: REAL-TIME LOGS & DIAGNOSTICS
+    // ========================================================================
 
     fn view_logs_screen(&self) -> Element<'_, Message> {
         let is_dark = self.is_dark();
