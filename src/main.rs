@@ -4435,7 +4435,7 @@ impl NetrayApp {
                     SUCCESS_GREEN
                 };
 
-                container(
+                let card = container(
                     row![
                         icons::lucide_icon(icons::SERVER, 20, if is_active { accent } else { muted }),
                         Space::with_width(12),
@@ -4471,20 +4471,20 @@ impl NetrayApp {
                                     } else {
                                         self.icon_inactive()
                                     };
-                                    button(icons::lucide_icon(icons::ACTIVITY, 16, ping_icon_color))
+                                    iced::widget::opaque(button(icons::lucide_icon(icons::ACTIVITY, 16, ping_icon_color))
                                         .width(32)
                                         .height(32)
                                         .padding(8)
                                         .style(ping_btn_style(is_dark, ping_active, pinging))
-                                        .on_press_maybe(ping_press)
+                                        .on_press_maybe(ping_press))
                                 },
-                                button(icons::lucide_icon(icons::SHARE, 16, muted))
+                                iced::widget::opaque(button(icons::lucide_icon(icons::SHARE, 16, muted))
                                 .width(30)
                                 .height(30)
                                 .padding(7)
                                 .style(transparent_muted_btn)
-                                .on_press(Message::ShareProfileIndex(idx)),
-                                button(icons::lucide_icon(
+                                .on_press(Message::ShareProfileIndex(idx))),
+                                iced::widget::opaque(button(icons::lucide_icon(
                                     icons::PENCIL,
                                     16,
                                     if !config_locked { muted } else { self.icon_inactive() },
@@ -4495,8 +4495,8 @@ impl NetrayApp {
                                 .style(rounded_icon_btn_style(is_dark, !config_locked))
                                 .on_press_maybe(
                                     (!config_locked).then_some(Message::EditProfileIndex(idx))
-                                ),
-                                button(icons::lucide_icon(
+                                )),
+                                iced::widget::opaque(button(icons::lucide_icon(
                                     icons::TRASH,
                                     16,
                                     if !config_locked { muted } else { self.icon_inactive() },
@@ -4507,7 +4507,7 @@ impl NetrayApp {
                                 .style(if !config_locked { danger_rounded_btn } else { transparent_muted_btn })
                                 .on_press_maybe(
                                     (!config_locked).then_some(Message::DeleteProfileIndex(idx))
-                                ),
+                                )),
                             ]
                             .spacing(4)
                             .align_y(Alignment::Center),
@@ -4525,8 +4525,15 @@ impl NetrayApp {
                         style.background = Some(if is_dark { Color::from_rgb8(37, 50, 69) } else { Color::from_rgb8(223, 233, 249) }.into());
                     }
                     style
-                })
-                .into()
+                });
+                if config_locked {
+                    card.into()
+                } else {
+                    iced::widget::mouse_area(card)
+                        .on_press(Message::SelectProfileIndex(idx))
+                        .interaction(iced::mouse::Interaction::Pointer)
+                        .into()
+                }
             })
             .collect();
 
