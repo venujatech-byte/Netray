@@ -1,6 +1,6 @@
 #[path = "network_policy.rs"]
 mod network_policy;
-pub use network_policy::{apply_ipv6_policy, apply_lan_policy};
+pub use network_policy::{apply_ipv6_policy, apply_lan_policy, apply_dns_policy};
 #[path = "bootstrap_dns.rs"]
 mod bootstrap_dns;
 #[path = "latency.rs"]

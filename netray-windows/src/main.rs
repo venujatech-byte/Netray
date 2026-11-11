@@ -837,6 +837,7 @@ pub struct NetrayApp {
     pub allow_insecure_tls: bool,
     pub ipv6_enabled: bool,
     pub bypass_lan: bool,
+    pub dns_servers: String,
     pub user_stopped: bool,
     pub reconnect_attempts: u32,
     pub error_notification: Option<ErrorNotification>,
@@ -986,6 +987,7 @@ pub enum Message {
     ToggleAllowInsecureTls(bool),
     ToggleIpv6(bool),
     ToggleBypassLan(bool),
+    DnsServersChanged(String),
 
     CheckForUpdates,
     UpdateCheckFinished(Result<Option<updater::ReleaseInfo>, String>),
@@ -1095,6 +1097,7 @@ impl NetrayApp {
             allow_insecure_tls: saved.allow_insecure_tls,
             ipv6_enabled: saved.ipv6_enabled,
             bypass_lan: saved.bypass_lan,
+            dns_servers: saved.dns_servers,
             user_stopped: false,
             reconnect_attempts: 0,
             error_notification: None,
@@ -1270,6 +1273,7 @@ impl NetrayApp {
             allow_insecure_tls: self.allow_insecure_tls,
             ipv6_enabled: self.ipv6_enabled,
             bypass_lan: self.bypass_lan,
+            dns_servers: &self.dns_servers,
             auto_check_updates: self.auto_check_updates,
             logs_enabled: self.logs_enabled,
         };
@@ -2532,6 +2536,12 @@ impl NetrayApp {
                 let _ = self.save_current_state();
                 Task::none()
             }
+            Message::DnsServersChanged(value) => {
+                if self.config_locked() { return Task::none(); }
+                self.dns_servers = value;
+                let _ = self.save_current_state();
+                Task::none()
+            }
             Message::ToggleBypassLan(enabled) => {
                 if self.config_locked() { return Task::none(); }
                 self.bypass_lan = enabled;
@@ -2794,6 +2804,7 @@ impl NetrayApp {
                         allow_insecure_tls: self.allow_insecure_tls,
             ipv6_enabled: self.ipv6_enabled,
             bypass_lan: self.bypass_lan,
+                            dns_servers: self.dns_servers.clone(),
                     };
 
                     let log_tx_opt = self.log_sender.clone();
@@ -5304,6 +5315,9 @@ impl NetrayApp {
                 )
                 .on_toggle(Message::ToggleAutoReconnect),
                 Space::with_height(2),
+                text("DNS servers (comma-separated IP addresses)").size(12),
+                text_input("1.1.1.1, 8.8.8.8", &self.dns_servers)
+                    .on_input_maybe((!self.config_locked()).then_some(Message::DnsServersChanged)),
                 checkbox("Bypass local network", self.bypass_lan)
                     .on_toggle_maybe((!self.config_locked()).then_some(Message::ToggleBypassLan)),
                 checkbox("Enable IPv6 (disabled blocks IPv6 traffic)", self.ipv6_enabled)

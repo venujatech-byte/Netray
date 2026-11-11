@@ -126,6 +126,8 @@ pub struct AppData {
     pub ipv6_enabled: bool,
     #[serde(default)]
     pub bypass_lan: bool,
+    #[serde(default = "default_dns_servers")]
+    pub dns_servers: String,
     #[serde(default = "default_true")]
     pub auto_check_updates: bool,
     #[serde(default = "default_true")]
@@ -170,6 +172,7 @@ impl Default for AppData {
             allow_insecure_tls: false,
             ipv6_enabled: true,
             bypass_lan: false,
+            dns_servers: default_dns_servers(),
             auto_check_updates: true,
             logs_enabled: true,
         }
@@ -255,6 +258,7 @@ pub struct AppDataRef<'a> {
     pub allow_insecure_tls: bool,
     pub ipv6_enabled: bool,
     pub bypass_lan: bool,
+    pub dns_servers: &'a str,
     pub auto_check_updates: bool,
     pub logs_enabled: bool,
 }
@@ -289,6 +293,7 @@ impl AppData {
             allow_insecure_tls: self.allow_insecure_tls,
             ipv6_enabled: self.ipv6_enabled,
             bypass_lan: self.bypass_lan,
+            dns_servers: &self.dns_servers,
             auto_check_updates: self.auto_check_updates,
             logs_enabled: self.logs_enabled,
         }
@@ -458,3 +463,5 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }
+
+fn default_dns_servers() -> String { "1.1.1.1, 8.8.8.8".to_owned() }
