@@ -4138,114 +4138,78 @@ impl NetrayApp {
 
     fn view_add_profile_modal(&self) -> Element<'_, Message> {
         let is_dark = self.is_dark();
-        let mut list = column![].spacing(3);
-
+        let muted = settings_ui::secondary(is_dark);
+        let accent = settings_ui::accent(is_dark);
+        let mut list = column![].spacing(4);
         for proto in protocols::ProfileType::ALL {
-            let badge = proto.badge();
-            let badge_widget = container(
-                text(badge.text())
-                    .size(10)
-                    .color(badge.text_color())
-            )
-            .padding(iced::Padding {
-                top: 2.0,
-                bottom: 2.0,
-                left: 8.0,
-                right: 8.0,
-            })
-            .style(move |_| container::Style {
-                background: Some(badge.bg_color().into()),
-                border: iced::Border {
-                    radius: 999.0.into(),
+            let badge = container(text(proto.badge().text()).size(11).color(accent))
+                .padding([4, 8])
+                .style(move |_| container::Style {
+                    background: Some(
+                        if is_dark {
+                            Color::from_rgb8(44, 66, 98)
+                        } else {
+                            Color::from_rgb8(210, 227, 253)
+                        }
+                        .into(),
+                    ),
+                    border: iced::Border {
+                        radius: 8.0.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
-                },
-                ..Default::default()
-            });
-
-            let item_btn = button(
-                row![
-                    text(proto.title()).size(14).color(Color::WHITE),
-                    Space::with_width(Length::Fill),
-                    badge_widget,
-                ]
-                .align_y(Alignment::Center)
-                .padding(iced::Padding {
-                    top: 8.0,
-                    bottom: 8.0,
-                    left: 12.0,
-                    right: 12.0,
-                })
-            )
-            .width(Length::Fill)
-            .padding(0)
-            .style(|_, status| button::Style {
-                background: match status {
-                    button::Status::Hovered | button::Status::Pressed => {
-                        Some(Color::from_rgba(1.0, 1.0, 1.0, 0.10).into())
-                    }
-                    _ => None,
-                },
-                border: iced::Border {
-                    radius: 10.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .on_press(Message::CreateProfileWithType(proto));
-
-            list = list.push(item_btn);
-        }
-
-        let header = row![
-            text("Add Profile").size(15).color(Color::WHITE),
-            Space::with_width(Length::Fill),
-            button(
-                container(icons::lucide_icon(icons::CLOSE, 16, Color::WHITE))
-                    .center_x(Length::Fill)
-                    .center_y(Length::Fill)
-            )
-            .width(28)
-            .height(28)
-            .padding(0)
-            .style(rounded_icon_btn_style(is_dark, true))
-            .on_press(Message::CloseAddMenu),
-        ]
-        .align_y(Alignment::Center);
-
-        let modal_box = container(
-            column![
-                header,
-                Space::with_height(6),
-                scrollable(list).height(Length::Fixed(360.0)),
-            ]
-            .spacing(4)
-            .padding(14)
-        )
-        .width(Length::Fixed(300.0))
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.14, 0.16, 0.22).into()),
-            border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
-                width: 1.0,
-                radius: 18.0.into(),
-            },
-            ..Default::default()
-        });
-
-        iced::widget::mouse_area(
-            container(modal_box)
+                });
+            list = list.push(
+                button(
+                    row![
+                        text(proto.title()).size(14).color(self.text_primary()),
+                        Space::with_width(Length::Fill),
+                        badge,
+                    ]
+                    .spacing(12)
+                    .align_y(Alignment::Center),
+                )
+                .padding([10, 12])
                 .width(Length::Fill)
-                .height(Length::Fill)
+                .style(rounded_icon_btn_style(is_dark, true))
+                .on_press(Message::CreateProfileWithType(proto)),
+            );
+        }
+        let header = row![
+            column![
+                text("Add profile").size(20).color(self.text_primary()),
+                text("Choose a connection protocol.").size(13).color(muted)
+            ]
+            .spacing(6)
+            .width(Length::Fill),
+            button(icons::lucide_icon(icons::CLOSE, 18, self.text_primary()))
+                .padding(8)
+                .style(rounded_icon_btn_style(is_dark, true))
+                .on_press(Message::CloseAddMenu),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
+        let dialog = container(column![header, scrollable(list).height(Length::Fill)].spacing(16))
+            .padding(20)
+            .width(Length::Fill)
+            .max_width(360)
+            .height(Length::Fill)
+            .max_height(480)
+            .style(settings_ui::menu_surface);
+        iced::widget::mouse_area(
+            container(dialog)
+                .padding(16)
                 .center_x(Length::Fill)
                 .center_y(Length::Fill)
                 .style(|_| container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
                     ..Default::default()
-                })
+                }),
         )
         .on_press(Message::CloseAddMenu)
         .into()
     }
+
 
     fn view_qr_scan_modal(&self) -> Element<'_, Message> {
         let is_dark = self.is_dark();
