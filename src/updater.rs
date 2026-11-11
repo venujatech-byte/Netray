@@ -105,10 +105,31 @@ fn find_matching_asset(
             if name_lower.contains("windows") && name_lower.ends_with(".zip") {
                 return Ok((name.to_string(), url.to_string()));
             }
-        } else {
-            // Linux: e.g. netray-linux-linux-64-0.1.26.tar.gz
+        } else if !target_os.starts_with("linux") {
             if name_lower.contains("linux") && name_lower.ends_with(".tar.gz") {
                 return Ok((name.to_string(), url.to_string()));
+            }
+        }
+    }
+
+    if target_os.starts_with("linux-") {
+        let arch = match std::env::consts::ARCH { "x86_64" => "x86_64", "aarch64" => "aarch64", _ => "" };
+        let suffix = match target_os {
+            "linux-fedora" if !arch.is_empty() => format!(".{arch}.rpm"),
+            "linux-arch" if !arch.is_empty() => format!("-{arch}.pkg.tar.zst"),
+            "linux-debian" => match arch { "x86_64" => ".amd64.deb".to_string(), "aarch64" => ".arm64.deb".to_string(), _ => String::new() },
+            _ => String::new(),
+        };
+        if !suffix.is_empty() {
+            if let Some(asset) = assets.iter().find(|asset| {
+                let name = asset["name"].as_str().unwrap_or("").to_lowercase();
+                let url = asset["browser_download_url"].as_str().unwrap_or("");
+                name.starts_with("netray-") && name.ends_with(&suffix) && !url.is_empty()
+            }) {
+                return Ok((
+                    asset["name"].as_str().unwrap().to_string(),
+                    asset["browser_download_url"].as_str().unwrap().to_string(),
+                ));
             }
         }
     }
@@ -141,7 +162,7 @@ pub async fn check_for_updates(current_version: &str) -> Result<Option<ReleaseIn
             let target_os = if cfg!(target_os = "windows") {
                 "windows"
             } else {
-                "linux"
+                linux_package_target()
             };
 
             #[allow(unused_mut)]
@@ -217,6 +238,10 @@ pub async fn download_and_extract_update(info: ReleaseInfo) -> Result<PathBuf, S
 
         if !curl_status.success() || !archive_path.exists() {
             return Err("Failed to download release archive from GitHub.".to_string());
+        }
+
+        if is_linux_package(&archive_path) {
+            return Ok(archive_path);
         }
 
         // 2. Extract
@@ -466,6 +491,22 @@ pub fn apply_update_and_restart(
 
     #[cfg(not(target_os = "windows"))]
     {
+        if is_linux_package(staged_binary) {
+            let app_pid = std::process::id();
+            let helper_script = std::env::temp_dir().join(format!("netray_upgrade_{app_pid}.sh"));
+            let root_install_script = std::env::temp_dir().join(format!("netray_root_{app_pid}.sh"));
+            std::fs::write(&root_install_script, generate_package_install_script(staged_binary))
+                .map_err(|e| format!("Failed to prepare package install script: {e}"))?;
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&root_install_script, std::fs::Permissions::from_mode(0o755));
+            std::fs::write(&helper_script, generate_user_upgrade_helper(app_pid, &root_install_script, &current_exe))
+                .map_err(|e| format!("Failed to write update helper script: {e}"))?;
+            let _ = std::fs::set_permissions(&helper_script, std::fs::Permissions::from_mode(0o755));
+            std::process::Command::new("/bin/sh").arg(&helper_script).spawn()
+                .map_err(|e| format!("Failed to launch package upgrade helper: {e}"))?;
+            std::process::exit(0);
+        }
+
         let can_write_directly = is_path_writable(current_dir);
 
         if can_write_directly {
@@ -555,6 +596,32 @@ pub fn apply_update_and_restart(
     }
 }
 
+fn linux_package_target() -> &'static str {
+    let release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let values: Vec<String> = release.lines()
+        .filter_map(|line| line.split_once('=').map(|(key, value)| {
+            if key == "ID" || key == "ID_LIKE" { Some(value.trim_matches('"').to_ascii_lowercase()) } else { None }
+        }).flatten())
+        .collect();
+    if values.iter().any(|id| id == "fedora" || id == "rhel" || id == "centos" || id.split_whitespace().any(|like| like == "fedora" || like == "rhel")) { "linux-fedora" }
+    else if values.iter().any(|id| id == "arch" || id.split_whitespace().any(|like| like == "arch")) { "linux-arch" }
+    else if values.iter().any(|id| id == "debian" || id == "ubuntu" || id.split_whitespace().any(|like| like == "debian" || like == "ubuntu")) { "linux-debian" }
+    else { "linux" }
+}
+
+fn is_linux_package(path: &Path) -> bool {
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+    name.ends_with(".rpm") || name.ends_with(".deb") || name.ends_with(".pkg.tar.zst")
+}
+
+fn generate_package_install_script(package: &Path) -> String {
+    let package = package.to_string_lossy().replace('\'', "'\\''");
+    let install = if package.ends_with(".rpm") { format!("dnf install -y '{package}'") }
+        else if package.ends_with(".deb") { format!("apt-get install -y '{package}'") }
+        else { format!("pacman -U --noconfirm '{package}'") };
+    format!("#!/bin/sh\\nset -e\\n{install}\\n")
+}
+
 /// Generates the root script that executes with elevated privileges to copy binaries.
 pub fn generate_root_install_script(
     staged_binary: &Path,
@@ -603,11 +670,13 @@ while kill -0 "$PID" 2>/dev/null; do
     sleep 0.15
 done
 
-# Elevate using Polkit graphical prompt or sudo
+# Elevate using Polkit graphical prompt or sudo; never relaunch after a failed install.
 if command -v pkexec >/dev/null 2>&1; then
-    pkexec /bin/sh "$ROOT_SCRIPT"
+    pkexec /bin/sh "$ROOT_SCRIPT" || exit 1
 elif command -v sudo >/dev/null 2>&1; then
-    sudo /bin/sh "$ROOT_SCRIPT"
+    sudo /bin/sh "$ROOT_SCRIPT" || exit 1
+else
+    exit 1
 fi
 
 rm -f "$ROOT_SCRIPT"
@@ -707,6 +776,21 @@ mod tests {
         assert_eq!(rel.tag_name, "v0.1.26");
         assert_eq!(rel.asset_name, "netray-linux-linux-64-0.1.26.tar.gz");
         assert!(rel.download_url.contains("netray-linux-linux-64-0.1.26.tar.gz"));
+    }
+
+    #[test]
+    fn linux_updates_choose_the_matching_package_and_other_distros_use_portable() {
+        let assets = serde_json::json!([
+            {"name":"netray-1.0.18-1.x86_64.rpm","browser_download_url":"rpm"},
+            {"name":"netray-1.0.18-1-x86_64.pkg.tar.zst","browser_download_url":"arch"},
+            {"name":"netray-1.0.18-1.amd64.deb","browser_download_url":"deb"},
+            {"name":"netray-linux-linux-64-1.0.18.tar.gz","browser_download_url":"portable"}
+        ]);
+        let assets = assets.as_array().unwrap();
+        assert_eq!(find_matching_asset(assets, "linux-fedora").unwrap().1, "rpm");
+        assert_eq!(find_matching_asset(assets, "linux-arch").unwrap().1, "arch");
+        assert_eq!(find_matching_asset(assets, "linux-debian").unwrap().1, "deb");
+        assert_eq!(find_matching_asset(assets, "linux").unwrap().1, "portable");
     }
 
     #[test]
