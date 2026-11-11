@@ -11,6 +11,12 @@ macro_rules! lucide_svg {
     };
 }
 
+pub const SCAN_LINE: &[u8] = lucide_svg!(r#"<path d="M3,7V5a2,2 0,0 1,2 -2h2M17,3h2a2,2 0,0 1,2 2v2M21,17v2a2,2 0,0 1,-2 2h-2M7,21H5a2,2 0,0 1,-2 -2v-2M7,12h10"/>"#);
+
+pub const CLIPBOARD_PASTE: &[u8] = lucide_svg!(r#"<path d="M11,14h10M16,4h2a2,2 0,0 1,2 2v1.344M17,18l4,-4l-4,-4M8,4H6a2,2 0,0 0,-2 2v14a2,2 0,0 0,2 2h12a2,2 0,0 0,1.793 -1.113M9,2h6a1,1 0,0 1,1 1v2a1,1 0,0 1,-1 1H9a1,1 0,0 1,-1 -1V3a1,1 0,0 1,1 -1z"/>"#);
+
+pub const FILE_TEXT: &[u8] = lucide_svg!(r#"<path d="M15,2H6a2,2 0 0,0 -2,2v16a2,2 0 0,0 2,2h12a2,2 0 0,0 2,-2V7ZM14,2v4a2,2 0 0,0 2,2h4M10,9H8M16,13H8M16,17H8"/>"#);
+
 pub const MENU: &[u8] = lucide_svg!(r#"<line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/>"#);
 pub const FILE_PLUS: &[u8] = lucide_svg!(r#"<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 12v6"/>"#);
 pub const QR_CODE: &[u8] = lucide_svg!(r#"<rect width="5" height="5" x="3" y="3" rx="1.8" ry="1.8"/><rect width="5" height="5" x="16" y="3" rx="1.8" ry="1.8"/><rect width="5" height="5" x="3" y="16" rx="1.8" ry="1.8"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/>"#);
@@ -42,6 +48,10 @@ pub const SERVER: &[u8] = lucide_svg!(r#"<rect width="20" height="8" x="2" y="2"
 
 use std::sync::LazyLock;
 
+static HANDLE_SCAN_LINE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(SCAN_LINE));
+static HANDLE_CLIPBOARD_PASTE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(CLIPBOARD_PASTE));
+static HANDLE_FILE_TEXT: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(FILE_TEXT));
+static HANDLE_LOGO: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(include_bytes!("../packaging/netray.svg").as_slice()));
 static HANDLE_MENU: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(MENU));
 static HANDLE_FILE_PLUS: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(FILE_PLUS));
 static HANDLE_QR_CODE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(QR_CODE));
@@ -70,7 +80,13 @@ static HANDLE_IMAGE: LazyLock<Handle> = LazyLock::new(|| Handle::from_memory(IMA
 
 /// Returns a pre-cached `Handle` for known vector icons with zero heap allocation or byte hashing
 pub fn handle_for(svg_bytes: &'static [u8]) -> Handle {
-    if std::ptr::eq(svg_bytes, MENU) {
+    if std::ptr::eq(svg_bytes, SCAN_LINE) {
+        HANDLE_SCAN_LINE.clone()
+    } else if std::ptr::eq(svg_bytes, CLIPBOARD_PASTE) {
+        HANDLE_CLIPBOARD_PASTE.clone()
+    } else if std::ptr::eq(svg_bytes, FILE_TEXT) {
+        HANDLE_FILE_TEXT.clone()
+    } else if std::ptr::eq(svg_bytes, MENU) {
         HANDLE_MENU.clone()
     } else if std::ptr::eq(svg_bytes, FILE_PLUS) {
         HANDLE_FILE_PLUS.clone()
@@ -180,6 +196,11 @@ fn is_color(c: Color, r: f32, g: f32, b: f32) -> bool {
     approx_eq(c.r, r) && approx_eq(c.g, g) && approx_eq(c.b, b)
 }
 
+/// Reuse the Android artwork without hashing the embedded image on every frame.
+pub fn logo(size: u16) -> Svg<'static, Theme> {
+    Svg::new(HANDLE_LOGO.clone()).width(size).height(size)
+}
+
 /// Renders a Lucide vector icon with zero runtime string/memory allocations
 pub fn lucide_icon(svg_bytes: &'static [u8], size: u16, color: Color) -> Svg<'static, Theme> {
     let s = Svg::new(handle_for(svg_bytes)).width(size).height(size);
@@ -217,9 +238,9 @@ mod tests {
 
     #[test]
     fn test_handle_id_behavior() {
-        let h1 = handle_for(MENU);
-        let h2 = handle_for(MENU);
-        assert_eq!(h1.id(), h2.id());
+        for icon in [MENU, SCAN_LINE, CLIPBOARD_PASTE, FILE_TEXT] {
+            assert_eq!(handle_for(icon).id(), handle_for(icon).id());
+        }
     }
 
     #[test]

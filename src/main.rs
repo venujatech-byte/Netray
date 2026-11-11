@@ -1,4 +1,5 @@
 mod log_activity;
+mod settings_ui;
 pub mod apps;
 pub mod autostart;
 pub mod icons;
@@ -35,7 +36,6 @@ const ACCENT_BLUE: Color = Color::from_rgb(0.15, 0.48, 0.98); // #2563EB
 const ACCENT_BLUE_LIGHT: Color = Color::from_rgb(0.24, 0.58, 1.0); // #3B82F6
 const SURFACE_CARD: Color = Color::from_rgb(0.14, 0.16, 0.20);
 const TEXT_MUTED: Color = Color::from_rgb(0.55, 0.60, 0.68);
-const INACTIVE_STRIP: Color = Color::from_rgb(0.30, 0.33, 0.38);
 const SUCCESS_GREEN: Color = Color::from_rgb(0.22, 0.78, 0.49);
 const FAILURE_RED: Color = Color::from_rgb(0.95, 0.35, 0.40);
 const WARNING_AMBER: Color = Color::from_rgb(0.96, 0.62, 0.22);
@@ -166,28 +166,6 @@ fn form_card_style(theme: &Theme) -> container::Style {
             },
             ..Default::default()
         }
-    }
-}
-
-fn card_strip_active(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(ACCENT_BLUE.into()),
-        border: iced::Border {
-            radius: 2.0.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
-fn card_strip_inactive(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(INACTIVE_STRIP.into()),
-        border: iced::Border {
-            radius: 2.0.into(),
-            ..Default::default()
-        },
-        ..Default::default()
     }
 }
 
@@ -3359,11 +3337,7 @@ impl NetrayApp {
         let titlebar = row![
             iced::widget::mouse_area(
                 container(
-                    iced::widget::svg(iced::widget::svg::Handle::from_memory(
-                        include_bytes!("../packaging/netray.svg").as_slice(),
-                    ))
-                    .width(Length::Fixed(26.0))
-                    .height(Length::Fixed(26.0)),
+                    icons::logo(26),
                 )
                     .padding([0, 10])
                     .center_y(32)
@@ -4656,127 +4630,81 @@ impl NetrayApp {
     fn view_profiles_screen(&self) -> Element<'_, Message> {
         let is_dark = self.is_dark();
         let config_locked = self.config_locked();
-
-        let top_icon_btn = |icon, size: u16, on_press: Option<Message>| {
+        let muted = settings_ui::secondary(is_dark);
+        let accent = settings_ui::accent(is_dark);
+        let inactive_color = theme::icon_color_for_state(is_dark, false);
+        let top_icon_btn = |icon, label: &'static str, on_press: Option<Message>| {
             let active = on_press.is_some();
-            button(
-                container(icons::lucide_icon(
-                    icon,
-                    size,
-                    if active { self.text_primary() } else { self.icon_inactive() },
-                ))
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
+            iced::widget::tooltip(
+                button(container(icons::lucide_icon(icon, 20, if active { self.text_primary() } else { inactive_color }))
+                    .center_x(Length::Fill).center_y(Length::Fill))
+                    .width(36).height(36).padding(0)
+                    .style(rounded_icon_btn_style(is_dark, active))
+                    .on_press_maybe(on_press),
+                text(label).size(12),
+                iced::widget::tooltip::Position::Bottom,
             )
-            .width(36)
-            .height(36)
-            .padding(0)
-            .style(rounded_icon_btn_style(is_dark, active))
-            .on_press_maybe(on_press)
         };
-
-        // 1. Top App Bar
         let top_bar = row![
-            top_icon_btn(icons::MENU, 22, Some(Message::SetViewMode(ViewMode::SshSettings))),
-            Space::with_width(8),
+            top_icon_btn(icons::MENU, "Settings", Some(Message::SetViewMode(ViewMode::SshSettings))),
+            icons::logo(30),
             text("Netray").size(22).color(self.text_primary()),
             Space::with_width(Length::Fill),
-            top_icon_btn(icons::FILE_PLUS, 20, (!config_locked).then(|| Message::RequestFileImport)),
-            top_icon_btn(icons::QR_CODE, 20, (!config_locked).then(|| Message::OpenQrScanModal)),
-            top_icon_btn(icons::LINK, 20, (!config_locked).then(|| Message::RequestClipboardImport)),
-            top_icon_btn(icons::MORE_VERTICAL, 20, Some(Message::ToggleOverflowMenu)),
-        ]
-        .spacing(4)
-        .align_y(Alignment::Center)
-        .padding(iced::Padding {
-            top: 8.0,
-            bottom: 8.0,
-            left: 12.0,
-            right: 12.0,
-        });
+            top_icon_btn(icons::SCAN_LINE, "Scan QR code", (!config_locked).then_some(Message::OpenQrScanModal)),
+            top_icon_btn(icons::CLIPBOARD_PASTE, "Import from clipboard", (!config_locked).then_some(Message::RequestClipboardImport)),
+            top_icon_btn(icons::FILE_TEXT, "Import file", (!config_locked).then_some(Message::RequestFileImport)),
+            top_icon_btn(icons::MORE_VERTICAL, "More options", Some(Message::ToggleOverflowMenu)),
+        ].spacing(4).align_y(Alignment::Center).padding([12, 16]);
 
-        let overflow_menu = container(
-            column![
-                button("Logs")
-                    .width(Length::Fill)
-                    .on_press(Message::SetViewMode(ViewMode::Logs)),
-                text("Sort profiles by").size(11).color(TEXT_MUTED),
-                modern_pick_list(
-                    ProfileSort::ALL,
-                    Some(self.profile_sort),
-                    Message::ProfileSortChanged,
-                    self.is_dark(),
-                ),
-            ]
-            .spacing(8),
-        )
-        .padding(10)
-        .style(form_card_style)
-        .width(Length::Fixed(190.0));
+        let overflow_menu = container(column![
+            button(text("Logs").size(13).color(self.text_primary())).padding([10, 12]).style(rounded_icon_btn_style(is_dark, true)).width(Length::Fill).on_press(Message::SetViewMode(ViewMode::Logs)),
+            button(text("Hide to tray").size(13).color(self.text_primary())).padding([10, 12]).style(rounded_icon_btn_style(is_dark, true)).width(Length::Fill).on_press(Message::MinimizeToTray),
+            text("Sort profiles by").size(12).color(muted),
+            pick_list(ProfileSort::ALL, Some(self.profile_sort), Message::ProfileSortChanged)
+                .padding(8).text_size(13).width(Length::Fill)
+                .style(move |_, status| settings_ui::select(is_dark, status))
+                .menu_style(move |_| theme::pick_list_menu_style(is_dark)),
+        ].spacing(8)).padding(16).style(settings_ui::surface).width(210);
 
-        // 2. Category Sub-Bar
-        let add_btn_active = !config_locked;
-        let add_btn_icon_color = if add_btn_active {
-            Color::WHITE
-        } else {
-            self.icon_inactive()
-        };
-        let is_reconnecting = self
-            .error_notification
-            .as_ref()
+        let is_reconnecting = self.error_notification.as_ref()
             .map_or(false, |n| n.countdown_secs.is_some() || n.is_reconnecting);
-
         let sub_bar = row![
-            button(
-                container(icons::lucide_icon(
-                    icons::PLUS,
-                    18,
-                    add_btn_icon_color,
-                ))
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
-            )
-            .width(32)
-            .height(32)
-            .padding(0)
-            .style(add_btn_style(is_dark, add_btn_active))
-            .on_press_maybe((!config_locked).then(|| Message::OpenAddMenu)),
-            Space::with_width(12),
-            text(self.profile_count_label.as_str())
-                .size(13)
-                .color(TEXT_MUTED),
+            text("Profiles").size(18).color(self.text_primary()),
+            text(self.v2ray_profiles.len().to_string()).size(13).color(muted),
             Space::with_width(Length::Fill),
-            text(if self.connection_error && !self.user_stopped {
-                "Connecting"
-            } else if self.is_running || self.worker_active {
-                "Tunnel active"
+            button(row![icons::lucide_icon(icons::PLUS, 16, if config_locked { muted } else { accent }), text("Add profile").size(13).color(if config_locked { muted } else { accent })]
+                .spacing(6).align_y(Alignment::Center))
+                .padding([8, 12]).style(rounded_icon_btn_style(is_dark, !config_locked))
+                .on_press_maybe((!config_locked).then_some(Message::OpenAddMenu)),
+        ].spacing(8).align_y(Alignment::Center).padding([0, 16]);
+        let route_option = |label: &'static str, selected: bool, message: Message| {
+            let indicator: Element<'_, Message> = if selected {
+                icons::lucide_icon(icons::CHECK, 14, accent).into()
             } else {
-                "Offline"
+                Space::with_width(14).into()
+            };
+            button(row![
+                indicator,
+                text(label).size(13).color(if selected { accent } else { muted }),
+            ].spacing(6).align_y(Alignment::Center))
+            .padding([8, 12])
+            .style(move |_, status| {
+                let mut style = button::Style::default();
+                style.border.radius = 999.0.into();
+                if selected || matches!(status, button::Status::Hovered) {
+                    style.background = Some(if is_dark { Color::from_rgb8(44, 66, 98) } else { Color::from_rgb8(210, 227, 253) }.into());
+                }
+                style
             })
-            .size(12)
-            .color(if self.is_running || self.worker_active {
-                SUCCESS_GREEN
-            } else {
-                TEXT_MUTED
-            }),
-            Space::with_width(12),
-            checkbox("TUN", self.enable_tun)
-                .on_toggle_maybe((!self.is_running && !self.worker_active).then_some(Message::ToggleTunMode))
-                .size(13),
-            Space::with_width(8),
-            checkbox("Proxy", self.enable_sysproxy)
-                .on_toggle_maybe((!self.is_running && !self.worker_active).then_some(Message::ToggleSysProxy))
-                .size(13),
-        ]
-        .align_y(Alignment::Center)
-        .padding(iced::Padding {
-            top: 4.0,
-            bottom: 8.0,
-            left: 12.0,
-            right: 12.0,
-        });
+            .on_press_maybe((!config_locked).then_some(message))
+        };
+        let route_bar = row![
+            text("Routing").size(12).color(muted),
+            Space::with_width(Length::Fill),
+            route_option("TUN", self.enable_tun, Message::ToggleTunMode(!self.enable_tun)),
+            route_option("Proxy", self.enable_sysproxy, Message::ToggleSysProxy(!self.enable_sysproxy)),
+        ].spacing(8).align_y(Alignment::Center).padding([4, 16]);
 
-        // 3. Node Cards List
         let mut ordered_profiles: Vec<_> = self.v2ray_profiles.iter().enumerate().collect();
         ordered_profiles.sort_by(|(_, a), (_, b)| match self.profile_sort {
             ProfileSort::Name => a.name.cmp(&b.name),
@@ -4816,27 +4744,21 @@ impl NetrayApp {
                     SUCCESS_GREEN
                 };
 
-                let strip_style = if is_active {
-                    card_strip_active
-                } else {
-                    card_strip_inactive
-                };
-
                 container(
                     row![
-                        container(Space::with_width(2)).height(76).style(strip_style),
+                        icons::lucide_icon(icons::SERVER, 20, if is_active { accent } else { muted }),
                         Space::with_width(12),
                         column![
                             button(
                                 column![
                                     row![
-                                        text(p.name.as_str()).size(15).color(self.text_primary()),
+                                        text(p.name.as_str()).size(16).color(self.text_primary()),
                                         Space::with_width(Length::Fill),
-                                        text(if is_active { "SELECTED" } else { "" })
-                                            .size(9)
-                                            .color(SUCCESS_GREEN),
+                                        text(if is_active { "Selected" } else { "" })
+                                            .size(11)
+                                            .color(accent),
                                     ],
-                                    text(node_addr).size(12).color(TEXT_MUTED),
+                                    text(node_addr).size(12).color(muted),
                                 ]
                                 .spacing(4)
                                 .width(Length::Fill)
@@ -4847,9 +4769,9 @@ impl NetrayApp {
                             .on_press_maybe(
                                 (!config_locked).then_some(Message::SelectProfileIndex(idx))
                             ),
+                            text(proto_tag).size(12).color(accent),
                             row![
-                                text(proto_tag).size(10).color(ACCENT_BLUE_LIGHT),
-                                text(ping_result).size(11).color(ping_color),
+                                text(ping_result).size(12).color(ping_color),
                                 Space::with_width(Length::Fill),
                                 {
                                     let ping_active = ping_press.is_some() || pinging;
@@ -4865,7 +4787,7 @@ impl NetrayApp {
                                         .style(ping_btn_style(is_dark, ping_active, pinging))
                                         .on_press_maybe(ping_press)
                                 },
-                                button(icons::lucide_icon(icons::SHARE, 16, TEXT_MUTED))
+                                button(icons::lucide_icon(icons::SHARE, 16, muted))
                                 .width(30)
                                 .height(30)
                                 .padding(7)
@@ -4874,7 +4796,7 @@ impl NetrayApp {
                                 button(icons::lucide_icon(
                                     icons::PENCIL,
                                     16,
-                                    if !config_locked { TEXT_MUTED } else { self.icon_inactive() },
+                                    if !config_locked { muted } else { self.icon_inactive() },
                                 ))
                                 .width(30)
                                 .height(30)
@@ -4886,7 +4808,7 @@ impl NetrayApp {
                                 button(icons::lucide_icon(
                                     icons::TRASH,
                                     16,
-                                    if !config_locked { TEXT_MUTED } else { self.icon_inactive() },
+                                    if !config_locked { muted } else { self.icon_inactive() },
                                 ))
                                 .width(30)
                                 .height(30)
@@ -4902,11 +4824,17 @@ impl NetrayApp {
                         .spacing(10)
                         .width(Length::Fill),
                     ]
-                    .align_y(Alignment::Center)
-                    .padding(12),
+                    .align_y(Alignment::Start)
+                    .padding(18),
                 )
                 .width(Length::Fill)
-                .style(form_card_style)
+                .style(move |theme| {
+                    let mut style = settings_ui::surface(theme);
+                    if is_active {
+                        style.background = Some(if is_dark { Color::from_rgb8(37, 50, 69) } else { Color::from_rgb8(223, 233, 249) }.into());
+                    }
+                    style
+                })
                 .into()
             })
             .collect();
@@ -4914,20 +4842,22 @@ impl NetrayApp {
         let list_content: Element<'_, Message> = if cards.is_empty() {
             column![
                 Space::with_height(40),
-                text("No profiles added yet.").size(15).color(TEXT_MUTED),
+                text("Add your first profile").size(18).color(muted),
                 Space::with_height(10),
-                button("📋 Import from Clipboard")
+                text("Import a configuration or add a server to get started.").size(13).color(muted),
+                button("Import from clipboard").padding([10, 16]).style(primary_action_btn)
                     .on_press_maybe((!config_locked).then(|| Message::RequestClipboardImport)),
             ]
             .align_x(Alignment::Center)
             .width(Length::Fill)
+            .height(Length::Fill)
             .into()
         } else {
-            scrollable(column(cards).spacing(10).padding(iced::Padding {
+            scrollable(column(cards).spacing(12).padding(iced::Padding {
                 top: 0.0,
-                bottom: 80.0,
-                left: 12.0,
-                right: 12.0,
+                bottom: 16.0,
+                left: 16.0,
+                right: 16.0,
             }))
             .id(scrollable::Id::new("profiles_scroll"))
             .height(Length::Fill)
@@ -4979,9 +4909,10 @@ impl NetrayApp {
 
         let profile_column = column![top_bar]
             .push(sub_bar)
+            .push(route_bar)
             .push(list_content)
             .push(fab_row)
-            .spacing(4)
+            .spacing(8)
             .width(Length::Fill)
             .height(Length::Fill);
         if self.show_overflow_menu {
@@ -5649,6 +5580,10 @@ impl NetrayApp {
     fn view_ssh_screen(&self) -> Element<'_, Message> {
         let is_dark_active = self.is_dark();
         let locked = self.config_locked();
+        let muted = settings_ui::secondary(is_dark_active);
+        let accent = settings_ui::accent(is_dark_active);
+        let primary = self.text_primary();
+        let warning = if is_dark_active { WARNING_AMBER } else { Color::from_rgb8(135, 73, 0) };
         let top_bar = row![
             button(
                 container(icons::lucide_icon(icons::BACK, 20, self.text_primary()))
@@ -5661,7 +5596,7 @@ impl NetrayApp {
             .style(rounded_icon_btn_style(is_dark_active, true))
             .on_press(Message::SetViewMode(ViewMode::Profiles)),
             Space::with_width(12),
-            text("Settings & Routing").size(20).color(self.text_primary()),
+            text("Settings").size(24).color(self.text_primary()),
         ]
         .align_y(Alignment::Center)
         .padding(iced::Padding {
@@ -5671,57 +5606,24 @@ impl NetrayApp {
             right: 12.0,
         });
 
-        // Theme & Appearance Card
-        let is_dark_active = self.is_dark();
         let theme_button = |label: &'static str, icon_bytes: &'static [u8], pref: storage::ThemePreference| {
-            let is_selected = self.theme_preference == pref;
-            let (bg, border_color, text_color, icon_color) = if is_selected {
-                (
-                    Some(ACCENT_BLUE.into()),
-                    ACCENT_BLUE_LIGHT,
-                    Color::WHITE,
-                    Color::WHITE,
-                )
-            } else if is_dark_active {
-                (
-                    Some(Color::from_rgb(0.18, 0.20, 0.25).into()),
-                    Color::from_rgb(0.25, 0.28, 0.35),
-                    Color::from_rgb(0.85, 0.88, 0.93),
-                    Color::from_rgb(0.70, 0.75, 0.82),
-                )
-            } else {
-                (
-                    Some(Color::from_rgb(0.92, 0.94, 0.96).into()),
-                    Color::from_rgb(0.82, 0.85, 0.90),
-                    Color::from_rgb(0.15, 0.18, 0.24),
-                    Color::from_rgb(0.25, 0.30, 0.40),
-                )
-            };
-
+            let selected = self.theme_preference == pref;
+            let ink = if selected { accent } else { primary };
             button(
-                row![
-                    icons::lucide_icon(icon_bytes, 14, icon_color),
-                    Space::with_width(6),
-                    text(label).size(12).color(text_color),
-                ]
-                .align_y(Alignment::Center)
+                column![icons::lucide_icon(icon_bytes, 20, ink), text(label).size(12).color(ink)]
+                    .spacing(8).align_x(Alignment::Center).width(Length::Fill)
             )
-            .padding(iced::Padding {
-                top: 7.0,
-                bottom: 7.0,
-                left: 10.0,
-                right: 10.0,
-            })
+            .width(Length::Fill)
+            .padding([12, 8])
             .style(move |_, status| button::Style {
-                background: match status {
-                    button::Status::Hovered if !is_selected => Some(Color::from_rgba(0.24, 0.58, 1.0, 0.18).into()),
-                    _ => bg,
-                },
-                border: iced::Border {
-                    radius: 8.0.into(),
-                    width: 1.0,
-                    color: border_color,
-                },
+                background: Some(if selected {
+                    if is_dark_active { Color::from_rgb8(44, 66, 98) } else { Color::from_rgb8(210, 227, 253) }
+                } else if matches!(status, button::Status::Hovered) {
+                    if is_dark_active { Color::from_rgb8(48, 56, 70) } else { Color::from_rgb8(222, 229, 240) }
+                } else {
+                    Color::TRANSPARENT
+                }.into()),
+                border: iced::Border { radius: 16.0.into(), ..Default::default() },
                 ..Default::default()
             })
             .on_press(Message::ThemePreferenceChanged(pref))
@@ -5742,150 +5644,58 @@ impl NetrayApp {
         let theme_card = container(
             column![
                 row![
-                    icons::lucide_icon(icons::SUN, 16, ACCENT_BLUE_LIGHT),
+                    icons::lucide_icon(icons::SUN, 16, accent),
                     Space::with_width(6),
-                    text("Theme & Appearance").size(14).color(self.text_primary()),
+                    text("Appearance").size(16).color(accent),
                 ]
                 .align_y(Alignment::Center),
-                text("Select application theme: Light Mode, Dark Mode, or follow your System Theme.")
+                text("Choose how Netray looks on this device.")
                     .size(12)
-                    .color(TEXT_MUTED),
+                    .color(muted),
                 Space::with_height(6),
                 row![
-                    theme_button("Light Mode", icons::SUN, storage::ThemePreference::Light),
-                    theme_button("Dark Mode", icons::MOON, storage::ThemePreference::Dark),
-                    theme_button("System Theme", icons::MONITOR, storage::ThemePreference::System),
+                    theme_button("Light", icons::SUN, storage::ThemePreference::Light),
+                    theme_button("Dark", icons::MOON, storage::ThemePreference::Dark),
+                    theme_button("System", icons::MONITOR, storage::ThemePreference::System),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
                 Space::with_height(2),
                 text(active_theme_label)
                     .size(11)
-                    .color(ACCENT_BLUE_LIGHT),
+                    .color(accent),
             ]
             .spacing(4)
             .width(Length::Fill)
         )
-        .padding(12)
-        .style(form_card_style)
+        .padding(20)
+        .style(settings_ui::surface)
         .width(Length::Fill);
 
-        let startup_card = container(
-            column![
-                row![
-                    icons::lucide_icon(icons::MONITOR, 16, ACCENT_BLUE_LIGHT),
-                    Space::with_width(6),
-                    text("System & Startup").size(14).color(self.text_primary()),
-                ]
-                .align_y(Alignment::Center),
-                text("Configure automatic startup and connection behavior on system boot.")
-                    .size(12)
-                    .color(TEXT_MUTED),
-                Space::with_height(6),
-                row![
-                    toggler(self.run_at_startup)
-                        .label("Run at system startup")
-                        .size(18)
-                        .on_toggle(Message::ToggleRunAtStartup),
-                ]
-                .align_y(Alignment::Center),
-                Space::with_height(4),
-                row![
-                    toggler(self.connect_at_startup)
-                        .label("Connect at startup")
-                        .size(18)
-                        .on_toggle(Message::ToggleConnectAtStartup),
-                ]
-                .align_y(Alignment::Center),
-                Space::with_height(2),
-                text(if self.connect_at_startup {
-                    "Will ask: \"Do you want to connect to v2ray?\" on launch."
-                } else {
-                    "Startup prompt disabled."
-                })
-                .size(11)
-                .color(if self.connect_at_startup { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
-                Space::with_height(6),
-                row![
-                    toggler(self.auto_reconnect)
-                        .label("Automatic restart after tunnel exit")
-                        .size(18)
-                        .on_toggle(Message::ToggleAutoReconnect),
-                ]
-                .align_y(Alignment::Center),
-                Space::with_height(2),
-                text(if self.auto_reconnect {
-                    "Restarts an exited tunnel. Network request failures keep it running."
-                } else {
-                    "Automatic reconnect disabled."
-                })
-                .size(11)
-                .color(if self.auto_reconnect { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
-                Space::with_height(6),
-                text("DNS servers (comma-separated IP addresses)").size(12),
-                text_input("1.1.1.1, 8.8.8.8", &self.dns_servers)
-                    .on_input_maybe((!self.config_locked()).then_some(Message::DnsServersChanged)),
-                checkbox("Bypass local network", self.bypass_lan)
-                    .on_toggle_maybe((!self.config_locked()).then_some(Message::ToggleBypassLan)),
-                checkbox("Enable IPv6 (disabled blocks IPv6 traffic)", self.ipv6_enabled)
-                    .on_toggle_maybe((!self.config_locked()).then_some(Message::ToggleIpv6)),
-                toggler(self.allow_insecure_tls)
-                    .label("Allow insecure (TLS)")
-                    .on_toggle_maybe((!self.is_running && !self.worker_active).then_some(Message::ToggleAllowInsecureTls)),
-                text("Skips server certificate verification. Applies on the next connection; disabled while connected.")
-                    .size(11).color(TEXT_MUTED),
-                Space::with_height(6),
-                row![
-                    toggler(self.notify_connection_drops)
-                        .label("Connection drop desktop notifications")
-                        .size(18)
-                        .on_toggle(Message::ToggleConnectionDropNotifications),
-                ]
-                .align_y(Alignment::Center),
-                Space::with_height(2),
-                text(if self.notify_connection_drops {
-                    "Shows an alert when the tunnel drops or reconnects."
-                } else {
-                    "Connection drop and reconnect alerts are muted."
-                })
-                .size(11)
-                .color(if self.notify_connection_drops { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
-                Space::with_height(6),
-                toggler(self.logs_enabled)
-                    .label("Enable detailed logs")
-                    .size(18)
-                    .on_toggle(Message::ToggleLogsEnabled),
-                Space::with_height(2),
-                text(if self.logs_enabled {
-                    "Shows all tunnel and app logs."
-                } else {
-                    "Shows only connected and disconnected events; detailed Xray logs are disabled on the next connection."
-                })
-                .size(11)
-                .color(if self.logs_enabled { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
-                Space::with_height(6),
-                row![
-                    toggler(self.auto_check_updates)
-                        .label("Automatically check for updates on startup")
-                        .size(18)
-                        .on_toggle(Message::ToggleAutoCheckUpdates),
-                ]
-                .align_y(Alignment::Center),
-                Space::with_height(2),
-                text(if self.auto_check_updates {
-                    "Checks GitHub CI releases at startup and notifies if an update is available."
-                } else {
-                    "Automatic update checks disabled."
-                })
-                .size(11)
-                .color(if self.auto_check_updates { ACCENT_BLUE_LIGHT } else { TEXT_MUTED }),
-            ]
-            .spacing(4)
-            .width(Length::Fill)
-        )
-        .padding(12)
-        .style(form_card_style)
-        .width(Length::Fill);
+        let startup_card = container(column![
+            text("Startup & connection").size(16).color(accent),
+            settings_ui::switch_row("Run at startup", "Launch Netray when you sign in.", self.run_at_startup, true, Message::ToggleRunAtStartup, is_dark_active),
+            settings_ui::switch_row("Connect at startup", "Ask to connect when Netray opens.", self.connect_at_startup, true, Message::ToggleConnectAtStartup, is_dark_active),
+            settings_ui::switch_row("Automatic reconnect", "Restart the tunnel if its process exits.", self.auto_reconnect, true, Message::ToggleAutoReconnect, is_dark_active),
+        ].spacing(4)).padding(20).style(settings_ui::surface).width(Length::Fill);
+
+        let network_card = container(column![
+            text("Network & security").size(16).color(accent),
+            text("DNS servers").size(14),
+            text("Comma-separated IP addresses. Changes apply on the next connection.").size(12).color(muted),
+            modern_text_input("1.1.1.1, 8.8.8.8", &self.dns_servers, is_dark_active)
+                .style(move |_, status| settings_ui::input(is_dark_active, status))
+                .on_input_maybe((!locked).then_some(Message::DnsServersChanged)),
+            settings_ui::switch_row("Bypass local network", "Connect directly to devices on your local network.", self.bypass_lan, !locked, Message::ToggleBypassLan, is_dark_active),
+            settings_ui::switch_row("Enable IPv6", "When off, IPv6 traffic is blocked.", self.ipv6_enabled, !locked, Message::ToggleIpv6, is_dark_active),
+            settings_ui::switch_row("Allow insecure TLS", "Skip server certificate verification. This permits interception.", self.allow_insecure_tls, !self.is_running && !self.worker_active, Message::ToggleAllowInsecureTls, is_dark_active),
+        ].spacing(8)).padding(20).style(settings_ui::surface).width(Length::Fill);
+
+        let activity_card = container(column![
+            text("Notifications & logs").size(16).color(accent),
+            settings_ui::switch_row("Connection alerts", "Notify when the tunnel drops or reconnects.", self.notify_connection_drops, true, Message::ToggleConnectionDropNotifications, is_dark_active),
+            settings_ui::switch_row("Detailed logs", "When off, show only connection events. Core logging changes on reconnect.", self.logs_enabled, true, Message::ToggleLogsEnabled, is_dark_active),
+        ].spacing(4)).padding(20).style(settings_ui::surface).width(Length::Fill);
 
         let update_status_desc = match &self.update_state {
             updater::UpdateState::Checking => "Checking GitHub CI for new releases...".to_string(),
@@ -5934,14 +5744,12 @@ impl NetrayApp {
         let update_card = container(
             column![
                 row![
-                    icons::lucide_icon(icons::DOWNLOAD, 16, ACCENT_BLUE_LIGHT),
+                    icons::lucide_icon(icons::DOWNLOAD, 16, accent),
                     Space::with_width(6),
-                    text("App Updates & Releases").size(14).color(self.text_primary()),
+                    text("Updates").size(16).color(self.text_primary()),
                 ]
                 .align_y(Alignment::Center),
-                text("Netray releases are built and published automatically via GitHub CI.")
-                    .size(12)
-                    .color(TEXT_MUTED),
+                settings_ui::switch_row("Check automatically", "Look for new releases when Netray starts.", self.auto_check_updates, true, Message::ToggleAutoCheckUpdates, is_dark_active),
                 Space::with_height(6),
                 row![
                     container(text(update_status_desc).size(12).color(self.text_primary()))
@@ -5956,8 +5764,8 @@ impl NetrayApp {
             .spacing(6)
             .width(Length::Fill)
         )
-        .padding(12)
-        .style(form_card_style)
+        .padding(20)
+        .style(settings_ui::surface)
         .width(Length::Fill);
 
         let mut chips_col = column![].spacing(6);
@@ -6005,15 +5813,15 @@ impl NetrayApp {
             .handle(pick_list::Handle::Arrow {
                 size: Some(10.into()),
             })
-            .style(move |_, status| theme::pick_list_style(is_dark_active, status))
+            .style(move |_, status| settings_ui::select(is_dark_active, status))
             .menu_style(move |_| theme::pick_list_menu_style(is_dark_active)),
             Space::with_width(8),
             if locked {
                 button(
                     row![
-                        icons::lucide_icon(icons::LOCK, 15, TEXT_MUTED),
+                        icons::lucide_icon(icons::LOCK, 15, muted),
                         Space::with_width(4),
-                        text("Browse...").size(12).color(TEXT_MUTED),
+                        text("Browse...").size(12).color(muted),
                     ]
                     .align_y(Alignment::Center)
                 )
@@ -6050,15 +5858,15 @@ impl NetrayApp {
             container(
                 text(if self.whitelist_apps.is_empty() { "No application whitelist configured" } else { &self.whitelist_apps })
                     .size(13)
-                    .color(TEXT_MUTED)
+                    .color(muted)
             )
             .padding(iced::Padding { top: 8.0, bottom: 8.0, left: 10.0, right: 10.0 })
             .style(move |_| container::Style {
-                background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                background: Some(if is_dark_active { Color::from_rgb8(25, 31, 41) } else { Color::from_rgb8(248, 250, 254) }.into()),
                 border: iced::Border {
                     color: Color::from_rgba(1.0, 1.0, 1.0, 0.1),
-                    width: 1.0,
-                    radius: 6.0.into(),
+                    width: 0.0,
+                    radius: 12.0.into(),
                 },
                 ..Default::default()
             })
@@ -6066,6 +5874,7 @@ impl NetrayApp {
             .into()
         } else {
             modern_text_input("e.g. curl, firefox, chrome, discord", &self.whitelist_apps, is_dark_active)
+                .style(move |_, status| settings_ui::input(is_dark_active, status))
                 .on_input(Message::WhitelistAppsChanged)
                 .width(Length::Fill)
                 .into()
@@ -6075,15 +5884,15 @@ impl NetrayApp {
             container(
                 text(if self.whitelist_urls.is_empty() { "No domain whitelist configured" } else { &self.whitelist_urls })
                     .size(13)
-                    .color(TEXT_MUTED)
+                    .color(muted)
             )
             .padding(iced::Padding { top: 8.0, bottom: 8.0, left: 10.0, right: 10.0 })
             .style(move |_| container::Style {
-                background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                background: Some(if is_dark_active { Color::from_rgb8(25, 31, 41) } else { Color::from_rgb8(248, 250, 254) }.into()),
                 border: iced::Border {
                     color: Color::from_rgba(1.0, 1.0, 1.0, 0.1),
-                    width: 1.0,
-                    radius: 6.0.into(),
+                    width: 0.0,
+                    radius: 12.0.into(),
                 },
                 ..Default::default()
             })
@@ -6091,6 +5900,7 @@ impl NetrayApp {
             .into()
         } else {
             modern_text_input("e.g. *.internal.net, 10.0.0.0/8, https://work.com", &self.whitelist_urls, is_dark_active)
+                .style(move |_, status| settings_ui::input(is_dark_active, status))
                 .on_input(Message::WhitelistUrlsChanged)
                 .width(Length::Fill)
                 .into()
@@ -6099,10 +5909,10 @@ impl NetrayApp {
         let whitelist_card = container(
             column![
                 row![
-                    text("Bypass Whitelist (Split Tunneling)").size(15).color(Color::WHITE),
+                    text("Split tunneling").size(16).color(accent),
                     Space::with_width(Length::Fill),
                     if locked {
-                        text("Locked while active").size(11).color(WARNING_AMBER)
+                        text("Locked while active").size(11).color(warning)
                     } else {
                         text("")
                     },
@@ -6110,46 +5920,46 @@ impl NetrayApp {
                 .align_y(Alignment::Center),
                 text("Traffic from these applications and URLs/domains will bypass the proxy tunnel and connect directly. Active in both TUN and System Proxy modes.")
                     .size(12)
-                    .color(TEXT_MUTED),
+                    .color(muted),
                 Space::with_height(10),
-                text("Whitelist Applications:").size(13).color(ACCENT_BLUE_LIGHT),
+                text("Whitelist Applications:").size(13).color(accent),
                 app_picker_row,
                 chips_col,
                 whitelist_apps_input,
                 text("Select from catalog, browse executable, or enter comma/newline-separated names.")
                     .size(11)
-                    .color(TEXT_MUTED),
+                    .color(muted),
                 Space::with_height(8),
-                text("Whitelist URLs & Domains:").size(13).color(ACCENT_BLUE_LIGHT),
+                text("Whitelist URLs & Domains:").size(13).color(accent),
                 whitelist_urls_input,
                 text("Comma or newline-separated URLs, domains, wildcards (*.site.com), or IP CIDRs.")
                     .size(11)
-                    .color(TEXT_MUTED),
+                    .color(muted),
             ]
             .spacing(6)
             .width(Length::Fill)
         )
-        .padding(14)
-        .style(form_card_style)
+        .padding(20)
+        .style(settings_ui::surface)
         .width(Length::Fill);
 
         let ip_text = if self.is_checking_ip {
-            text("Checking ifconfig.me...").size(13).color(TEXT_MUTED)
+            text("Checking ifconfig.me...").size(13).color(muted)
         } else if let Some(ip) = &self.public_ip {
             let color = if ip.starts_with("Error") || ip.starts_with("Failed") || ip.starts_with("curl exited") {
                 FAILURE_RED
             } else {
-                SUCCESS_GREEN
+                if is_dark_active { SUCCESS_GREEN } else { Color::from_rgb8(27, 114, 69) }
             };
             text(ip.clone()).size(14).color(color)
         } else {
-            text("Click to check current public IP").size(13).color(TEXT_MUTED)
+            text("Click to check current public IP").size(13).color(muted)
         };
 
         let ip_card = container(
             row![
                 column![
-                    text("Public IP Address (Exit Node)").size(14).color(Color::WHITE),
+                    text("Public IP address").size(14).color(primary),
                     Space::with_height(2),
                     ip_text,
                 ]
@@ -6177,8 +5987,8 @@ impl NetrayApp {
             .align_y(Alignment::Center)
             .width(Length::Fill)
         )
-        .padding(12)
-        .style(form_card_style)
+        .padding(20)
+        .style(settings_ui::surface)
         .width(Length::Fill);
 
         let is_ssh_mode = matches!(self.tunnel_mode, TunnelMode::SshPayload | TunnelMode::SshSslSni);
@@ -6186,11 +5996,11 @@ impl NetrayApp {
         let mode_selector: Element<'_, Message> = if locked {
             container(
                 row![
-                    icons::lucide_icon(icons::LOCK, 14, WARNING_AMBER),
+                    icons::lucide_icon(icons::LOCK, 14, warning),
                     Space::with_width(8),
                     text(format!("{} (Locked while connected)", self.tunnel_mode))
                         .size(13)
-                        .color(TEXT_MUTED),
+                        .color(muted),
                 ]
                 .align_y(Alignment::Center)
             )
@@ -6201,11 +6011,11 @@ impl NetrayApp {
                 right: 8.0,
             })
             .style(move |_| container::Style {
-                background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
+                background: Some(if is_dark_active { Color::from_rgb8(25, 31, 41) } else { Color::from_rgb8(248, 250, 254) }.into()),
                 border: iced::Border {
                     color: Color::from_rgba(1.0, 1.0, 1.0, 0.1),
-                    width: 1.0,
-                    radius: 6.0.into(),
+                    width: 0.0,
+                    radius: 12.0.into(),
                 },
                 ..Default::default()
             })
@@ -6228,7 +6038,7 @@ impl NetrayApp {
             .handle(pick_list::Handle::Arrow {
                 size: Some(10.into()),
             })
-            .style(move |_, status| theme::pick_list_style(is_dark_active, status))
+            .style(move |_, status| settings_ui::select(is_dark_active, status))
             .menu_style(move |_| theme::pick_list_menu_style(is_dark_active))
             .into()
         };
@@ -6236,61 +6046,61 @@ impl NetrayApp {
         let ssh_card = if is_ssh_mode {
             let mut ssh_col = column![
                 row![
-                    icons::lucide_icon(icons::SERVER, 16, ACCENT_BLUE_LIGHT),
+                    icons::lucide_icon(icons::SERVER, 16, accent),
                     Space::with_width(6),
                     text("SSH Tunnel & Payload Configuration").size(14).color(self.text_primary()),
                 ]
                 .align_y(Alignment::Center),
                 text("Configure custom HTTP payload injection, Bug Host, TLS SNI, and remote SSH server credentials.")
                     .size(12)
-                    .color(TEXT_MUTED),
+                    .color(muted),
                 Space::with_height(10),
-                text("HTTP Payload Template:").size(13).color(ACCENT_BLUE_LIGHT),
+                text("HTTP Payload Template:").size(13).color(accent),
             ];
 
             if locked {
                 ssh_col = ssh_col.push(
-                    container(text(if self.payload_text.is_empty() { "No payload template set" } else { &self.payload_text }).size(12).color(TEXT_MUTED))
+                    container(text(if self.payload_text.is_empty() { "No payload template set" } else { &self.payload_text }).size(12).color(muted))
                         .padding(8)
                         .style(move |_| container::Style {
-                            background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
-                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 1.0, radius: 6.0.into() },
+                            background: Some(if is_dark_active { Color::from_rgb8(25, 31, 41) } else { Color::from_rgb8(248, 250, 254) }.into()),
+                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 0.0, radius: 12.0.into() },
                             ..Default::default()
                         })
                         .width(Length::Fill)
                 );
                 ssh_col = ssh_col.push(Space::with_height(8));
-                ssh_col = ssh_col.push(text("Bug Host / CDN Host:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(text("Bug Host / CDN Host:").size(13).color(accent));
                 ssh_col = ssh_col.push(
-                    container(text(if self.bug_host.is_empty() { "None" } else { &self.bug_host }).size(12).color(TEXT_MUTED))
+                    container(text(if self.bug_host.is_empty() { "None" } else { &self.bug_host }).size(12).color(muted))
                         .padding(8)
                         .style(move |_| container::Style {
-                            background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
-                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 1.0, radius: 6.0.into() },
+                            background: Some(if is_dark_active { Color::from_rgb8(25, 31, 41) } else { Color::from_rgb8(248, 250, 254) }.into()),
+                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 0.0, radius: 12.0.into() },
                             ..Default::default()
                         })
                         .width(Length::Fill)
                 );
                 ssh_col = ssh_col.push(Space::with_height(8));
-                ssh_col = ssh_col.push(text("TLS SNI Host:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(text("TLS SNI Host:").size(13).color(accent));
                 ssh_col = ssh_col.push(
-                    container(text(if self.sni_host.is_empty() { "None" } else { &self.sni_host }).size(12).color(TEXT_MUTED))
+                    container(text(if self.sni_host.is_empty() { "None" } else { &self.sni_host }).size(12).color(muted))
                         .padding(8)
                         .style(move |_| container::Style {
-                            background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
-                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 1.0, radius: 6.0.into() },
+                            background: Some(if is_dark_active { Color::from_rgb8(25, 31, 41) } else { Color::from_rgb8(248, 250, 254) }.into()),
+                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 0.0, radius: 12.0.into() },
                             ..Default::default()
                         })
                         .width(Length::Fill)
                 );
                 ssh_col = ssh_col.push(Space::with_height(8));
-                ssh_col = ssh_col.push(text("SSH Server Details:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(text("SSH Server Details:").size(13).color(accent));
                 ssh_col = ssh_col.push(
-                    container(text(format!("{}:{} (User: {})", self.ssh_host, self.ssh_port, self.ssh_user)).size(12).color(TEXT_MUTED))
+                    container(text(format!("{}:{} (User: {})", self.ssh_host, self.ssh_port, self.ssh_user)).size(12).color(muted))
                         .padding(8)
                         .style(move |_| container::Style {
-                            background: Some(Color::from_rgba(0.15, 0.15, 0.18, 0.5).into()),
-                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 1.0, radius: 6.0.into() },
+                            background: Some(if is_dark_active { Color::from_rgb8(25, 31, 41) } else { Color::from_rgb8(248, 250, 254) }.into()),
+                            border: iced::Border { color: Color::from_rgba(1.0, 1.0, 1.0, 0.1), width: 0.0, radius: 12.0.into() },
                             ..Default::default()
                         })
                         .width(Length::Fill)
@@ -6298,6 +6108,7 @@ impl NetrayApp {
             } else {
                 ssh_col = ssh_col.push(
                     modern_text_input("Enter HTTP payload...", &self.payload_text, is_dark_active)
+                        .style(move |_, status| settings_ui::input(is_dark_active, status))
                         .on_input(Message::PayloadChanged)
                 );
                 ssh_col = ssh_col.push(Space::with_height(6));
@@ -6310,28 +6121,32 @@ impl NetrayApp {
                     .spacing(15)
                 );
                 ssh_col = ssh_col.push(Space::with_height(6));
-                ssh_col = ssh_col.push(button("Generate Template Payload").on_press(Message::GeneratePayload));
+                ssh_col = ssh_col.push(button("Generate Template Payload").padding([8, 16]).style(primary_action_btn).on_press(Message::GeneratePayload));
                 ssh_col = ssh_col.push(Space::with_height(14));
-                ssh_col = ssh_col.push(text("Bug Host / CDN Host:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(text("Bug Host / CDN Host:").size(13).color(accent));
                 ssh_col = ssh_col.push(
                     modern_text_input("cdn.host.com", &self.bug_host, is_dark_active)
+                        .style(move |_, status| settings_ui::input(is_dark_active, status))
                         .on_input(Message::BugHostChanged)
                 );
                 ssh_col = ssh_col.push(Space::with_height(10));
-                ssh_col = ssh_col.push(text("TLS SNI Host:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(text("TLS SNI Host:").size(13).color(accent));
                 ssh_col = ssh_col.push(
                     modern_text_input("sni.host.com", &self.sni_host, is_dark_active)
+                        .style(move |_, status| settings_ui::input(is_dark_active, status))
                         .on_input(Message::SniChanged)
                 );
                 ssh_col = ssh_col.push(Space::with_height(14));
-                ssh_col = ssh_col.push(text("SSH Server Details:").size(13).color(ACCENT_BLUE_LIGHT));
+                ssh_col = ssh_col.push(text("SSH Server Details:").size(13).color(accent));
                 ssh_col = ssh_col.push(
                     row![
                         modern_text_input("Host", &self.ssh_host, is_dark_active)
+                        .style(move |_, status| settings_ui::input(is_dark_active, status))
                             .on_input(Message::SshHostChanged)
                             .width(Length::FillPortion(3)),
                         Space::with_width(8),
                         modern_text_input("Port", &self.ssh_port, is_dark_active)
+                        .style(move |_, status| settings_ui::input(is_dark_active, status))
                             .on_input(Message::SshPortChanged)
                             .width(Length::FillPortion(1)),
                     ]
@@ -6340,10 +6155,12 @@ impl NetrayApp {
                 ssh_col = ssh_col.push(
                     row![
                         modern_text_input("User", &self.ssh_user, is_dark_active)
+                        .style(move |_, status| settings_ui::input(is_dark_active, status))
                             .on_input(Message::SshUserChanged)
                             .width(Length::Fill),
                         Space::with_width(8),
                         modern_text_input("Pass", &self.ssh_pass, is_dark_active)
+                        .style(move |_, status| settings_ui::input(is_dark_active, status))
                             .on_input(Message::SshPassChanged)
                             .secure(true)
                             .width(Length::Fill),
@@ -6354,7 +6171,7 @@ impl NetrayApp {
             Some(
                 container(ssh_col.spacing(6).width(Length::Fill))
                     .padding(12)
-                    .style(form_card_style)
+                    .style(settings_ui::surface)
                     .width(Length::Fill)
             )
         } else {
@@ -6367,20 +6184,20 @@ impl NetrayApp {
             settings_col = settings_col.push(
                 container(
                     row![
-                        icons::lucide_icon(icons::LOCK, 16, WARNING_AMBER),
+                        icons::lucide_icon(icons::LOCK, 16, warning),
                         Space::with_width(8),
                         column![
-                            text("Settings Locked: Tunnel is Active").size(13).color(WARNING_AMBER),
-                            text("Network routing and tunneling parameters cannot be altered while the tunnel is connected. Disconnect first to change these settings.")
+                            text("Tunnel settings are locked").size(13).color(warning),
+                            text("Disconnect to change network, security, or routing options.")
                                 .size(11)
-                                .color(TEXT_MUTED),
+                                .color(muted),
                         ]
                         .spacing(2)
                     ]
                     .align_y(Alignment::Center)
                 )
                 .padding(12)
-                .style(form_card_style)
+                .style(settings_ui::surface)
                 .width(Length::Fill)
             );
             settings_col = settings_col.push(Space::with_height(12));
@@ -6392,19 +6209,23 @@ impl NetrayApp {
             .filter(|record| self.usage_date_filter == "All dates" || record.date == self.usage_date_filter)
             .fold((0u64, 0u64), |(up, down), record| (up.saturating_add(record.uploaded), down.saturating_add(record.downloaded)));
         let usage_card = container(column![
-            row![text("Data Usage").size(15).color(self.text_primary()), Space::with_width(Length::Fill), container(modern_pick_list(usage_dates, Some(self.usage_date_filter.clone()), Message::UsageDateChanged, self.is_dark())).width(Length::Fixed(150.0))].align_y(Alignment::Center),
-            row![text("Uploaded").size(12).color(TEXT_MUTED), Space::with_width(Length::Fill), text(storage::format_bytes(uploaded)).size(13).color(self.text_primary())],
-            row![text("Downloaded").size(12).color(TEXT_MUTED), Space::with_width(Length::Fill), text(storage::format_bytes(downloaded)).size(13).color(self.text_primary())],
-            text("Netray tunnel traffic").size(10).color(TEXT_MUTED),
-        ].spacing(8)).padding(12).style(form_card_style).width(Length::Fill);
+            row![text("Data usage").size(16).color(self.text_primary()), Space::with_width(Length::Fill), container(modern_pick_list(usage_dates, Some(self.usage_date_filter.clone()), Message::UsageDateChanged, self.is_dark())).width(Length::Fixed(150.0))].align_y(Alignment::Center),
+            row![text("Uploaded").size(12).color(muted), Space::with_width(Length::Fill), text(storage::format_bytes(uploaded)).size(13).color(self.text_primary())],
+            row![text("Downloaded").size(12).color(muted), Space::with_width(Length::Fill), text(storage::format_bytes(downloaded)).size(13).color(self.text_primary())],
+            text("Netray tunnel traffic").size(12).color(muted),
+        ].spacing(8)).padding(20).style(settings_ui::surface).width(Length::Fill);
 
-        settings_col = settings_col.push(usage_card);
-        settings_col = settings_col.push(Space::with_height(12));
         settings_col = settings_col.push(theme_card);
         settings_col = settings_col.push(Space::with_height(12));
         settings_col = settings_col.push(startup_card);
         settings_col = settings_col.push(Space::with_height(12));
+        settings_col = settings_col.push(network_card);
+        settings_col = settings_col.push(Space::with_height(12));
+        settings_col = settings_col.push(activity_card);
+        settings_col = settings_col.push(Space::with_height(12));
         settings_col = settings_col.push(update_card);
+        settings_col = settings_col.push(Space::with_height(12));
+        settings_col = settings_col.push(usage_card);
         settings_col = settings_col.push(Space::with_height(12));
         settings_col = settings_col.push(ip_card);
         settings_col = settings_col.push(Space::with_height(12));
@@ -6412,10 +6233,10 @@ impl NetrayApp {
         settings_col = settings_col.push(Space::with_height(14));
         settings_col = settings_col.push(
             row![
-                text("Tunneling Mode:").size(14).color(TEXT_MUTED),
+                text("Tunnel mode").size(14).color(muted),
                 Space::with_width(Length::Fill),
                 if locked {
-                    text("Disconnect to switch mode").size(11).color(WARNING_AMBER)
+                    text("Disconnect to switch mode").size(11).color(warning)
                 } else {
                     text("")
                 },
@@ -6431,7 +6252,7 @@ impl NetrayApp {
 
         let content = scrollable(
             settings_col
-                .spacing(6)
+                .spacing(0)
                 .width(Length::Fill)
                 .padding(iced::Padding {
                     top: 0.0,
@@ -6449,7 +6270,7 @@ impl NetrayApp {
             content,
             text(format!("Version {APP_VERSION}"))
                 .size(11)
-                .color(TEXT_MUTED)
+                .color(muted)
                 .width(Length::Fill)
                 .align_x(Alignment::Center),
         ]
