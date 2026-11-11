@@ -3344,27 +3344,28 @@ impl NetrayApp {
         };
 
         if self.close_confirmation.is_some() {
-            let dialog = container(
-                column![
-                    text("Stop Netray and exit?").size(20),
-                    text("The active tunnel will be stopped before the app closes.")
-                        .size(14)
-                        .color(TEXT_MUTED),
-                    row![
-                        button("Cancel").on_press(Message::CancelExit),
-                        button("Stop and Exit").on_press(Message::ConfirmExit),
-                    ]
-                    .spacing(10)
-                    .align_y(Alignment::Center),
-                ]
-                .spacing(16)
-                .padding(20),
-            )
-            .style(form_card_style)
-            .width(Length::Fixed(340.0));
+            let is_dark = self.is_dark();
+            let dialog = container(column![
+                text("Stop Netray and exit?").size(20).color(self.text_primary()),
+                text("The active tunnel will be stopped before the app closes.")
+                    .size(14).color(settings_ui::secondary(is_dark)),
+                row![
+                    Space::with_width(Length::Fill),
+                    button(text("Cancel").size(14).color(self.text_primary())).padding([10, 16])
+                        .style(rounded_icon_btn_style(is_dark, true)).on_press(Message::CancelExit),
+                    button(text("Stop and exit").size(14).color(Color::WHITE)).padding([10, 16])
+                        .style(|_, status| button::Style {
+                            background: Some(if matches!(status, button::Status::Hovered) { Color::from_rgb8(179, 59, 77) } else { Color::from_rgb8(164, 45, 62) }.into()),
+                            text_color: Color::WHITE,
+                            border: iced::Border { radius: 999.0.into(), ..Default::default() },
+                            ..Default::default()
+                        }).on_press(Message::ConfirmExit),
+                ].spacing(8).align_y(Alignment::Center),
+            ].spacing(20)).padding(24).width(Length::Fill).max_width(360).style(settings_ui::menu_surface);
             iced::widget::stack![
                 base_content,
                 container(dialog)
+                    .padding(16)
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .center_x(Length::Fill)
