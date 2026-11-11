@@ -3142,98 +3142,72 @@ impl NetrayApp {
 
     fn view_clipboard_import_modal(&self) -> Element<'_, Message> {
         let candidate = self.clipboard_import_candidate.as_deref().unwrap_or("");
-        let uri_box = container(
+        let is_dark = self.is_dark();
+        let muted = settings_ui::secondary(is_dark);
+        let preview = container(
             column![
-                text("URI/Link Config").size(12).color(TEXT_MUTED),
+                text("Configuration")
+                    .size(13)
+                    .color(settings_ui::accent(is_dark)),
                 scrollable(
-                    text(candidate).size(13).color(Color::WHITE)
+                    text(candidate)
+                        .size(13)
+                        .color(self.text_primary())
+                        .width(Length::Fill)
                 )
-                .height(Length::Fixed(60.0)),
+                .height(140),
             ]
-            .spacing(6),
+            .spacing(10),
         )
-        .padding(12)
+        .padding(16)
         .width(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.10, 0.11, 0.14).into()),
+        .style(move |_| container::Style {
+            background: Some(
+                if is_dark {
+                    Color::from_rgb8(25, 31, 41)
+                } else {
+                    Color::from_rgb8(248, 250, 254)
+                }
+                .into(),
+            ),
             border: iced::Border {
-                radius: 8.0.into(),
-                width: 1.0,
-                color: Color::from_rgb(0.20, 0.22, 0.28),
+                radius: 16.0.into(),
+                ..Default::default()
             },
             ..Default::default()
         });
-
-        let cancel_btn = button(text("CANCEL").size(13).color(CORAL_ACCENT))
-            .padding([8, 14])
-            .style(|_, status| button::Style {
-                background: match status {
-                    button::Status::Hovered | button::Status::Pressed => {
-                        Some(Color::from_rgba(0.98, 0.52, 0.48, 0.12).into())
-                    }
-                    _ => None,
-                },
-                border: iced::Border {
-                    radius: 6.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .on_press(Message::CancelClipboardImport);
-
-        let import_btn = button(text("IMPORT").size(13).color(CORAL_ACCENT))
-            .padding([8, 14])
-            .style(|_, status| button::Style {
-                background: match status {
-                    button::Status::Hovered | button::Status::Pressed => {
-                        Some(Color::from_rgba(0.98, 0.52, 0.48, 0.18).into())
-                    }
-                    _ => None,
-                },
-                border: iced::Border {
-                    radius: 6.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .on_press(Message::ConfirmClipboardImport);
-
-        let action_row = row![
+        let actions = row![
             Space::with_width(Length::Fill),
-            cancel_btn,
-            import_btn,
+            button(text("Cancel").size(14).color(self.text_primary()))
+                .padding([10, 16])
+                .style(rounded_icon_btn_style(is_dark, true))
+                .on_press(Message::CancelClipboardImport),
+            button(text("Import").size(14))
+                .padding([10, 20])
+                .style(primary_action_btn)
+                .on_press(Message::ConfirmClipboardImport),
         ]
-        .spacing(12)
+        .spacing(8)
         .align_y(Alignment::Center);
-
         let dialog = container(
             column![
-                text("Import from clipboard").size(19),
-                toggler(self.instant_import)
-                    .label("Instant import")
-                    .size(18)
-                    .spacing(12)
-                    .on_toggle(Message::ToggleInstantImport),
-                uri_box,
-                action_row,
+                text("Import from clipboard")
+                    .size(20)
+                    .color(self.text_primary()),
+                text("Review the configuration before adding it.")
+                    .size(13)
+                    .color(muted),
+                preview,
+                actions,
             ]
-            .spacing(16)
-            .padding(22),
+            .spacing(16),
         )
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.14, 0.16, 0.20).into()),
-            border: iced::Border {
-                radius: 16.0.into(),
-                width: 1.0,
-                color: Color::from_rgb(0.24, 0.27, 0.35),
-            },
-            ..Default::default()
-        })
-        .width(Length::Fixed(400.0));
-
+        .padding(24)
+        .width(Length::Fill)
+        .max_width(400)
+        .style(settings_ui::menu_surface);
         container(dialog)
-            .width(Length::Fill)
-            .height(Length::Fill)
+            .padding(16)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .style(|_| container::Style {
@@ -3242,6 +3216,7 @@ impl NetrayApp {
             })
             .into()
     }
+
 
     fn view_share_modal(&self) -> Element<'_, Message> {
         let Some(modal) = &self.share_modal else {
