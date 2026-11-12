@@ -619,7 +619,7 @@ fn generate_package_install_script(package: &Path) -> String {
     let install = if package.ends_with(".rpm") { format!("dnf install -y '{package}'") }
         else if package.ends_with(".deb") { format!("apt-get install -y '{package}'") }
         else { format!("pacman -U --noconfirm '{package}'") };
-    format!("#!/bin/sh\\nset -e\\n{install}\\n")
+    format!("#!/bin/sh\nset -e\n{install}\n")
 }
 
 /// Generates the root script that executes with elevated privileges to copy binaries.
