@@ -3036,7 +3036,7 @@ impl NetrayApp {
                     {
                         notes = notes.push(
                             row![
-                                text("•").color(ACCENT_BLUE),
+                                text("·").color(ACCENT_BLUE),
                                 Space::with_width(6),
                                 text(updater::clean_markdown_inline(bullet)).size(12),
                             ]

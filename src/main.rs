@@ -3888,7 +3888,7 @@ impl NetrayApp {
                 let bullet_text = &trimmed[2..];
                 notes_column = notes_column.push(
                     row![
-                        text("•").size(12).color(ACCENT_BLUE),
+                        text("·").size(12).color(ACCENT_BLUE),
                         Space::with_width(6),
                         text(updater::clean_markdown_inline(bullet_text)).size(12).color(Color::from_rgb(0.9, 0.9, 0.9)),
                     ]
