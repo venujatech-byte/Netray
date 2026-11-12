@@ -3319,13 +3319,13 @@ impl NetrayApp {
         let dialog = container(
             column![
                 row![
-                    icons::lucide_icon(icons::ACTIVITY, 22, ACCENT_BLUE_LIGHT),
+                    icons::lucide_icon(icons::ACTIVITY, 20, ACCENT_BLUE_LIGHT),
                     Space::with_width(8),
                     text("Connect to V2Ray").size(18).color(Color::WHITE),
                 ]
                 .align_y(Alignment::Center),
                 Space::with_height(6),
-                text("Do you want to connect to v2ray?")
+                text("Connect to this V2Ray node?")
                     .size(15)
                     .color(Color::WHITE),
                 Space::with_height(2),
@@ -3369,10 +3369,11 @@ impl NetrayApp {
                 .align_y(Alignment::Center),
             ]
             .spacing(4)
-            .padding(20)
-            .width(360),
+            .padding(24)
+            .width(Length::Fill)
+            .max_width(400),
         )
-        .style(form_card_style);
+        .style(settings_ui::menu_surface);
 
         container(dialog)
             .width(Length::Fill)
