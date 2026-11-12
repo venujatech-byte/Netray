@@ -5113,6 +5113,7 @@ impl NetrayApp {
             preset(LogsFilterPreset::Bypass, "Bypass"),
             preset(LogsFilterPreset::Apps, "Apps"),
             preset(LogsFilterPreset::Errors, "Errors"),
+            Space::with_width(Length::Fill),
             text(format!("{} / {} entries", filtered_logs.len(), self.logs.len())).size(12).color(muted),
         ]
         .spacing(2);
