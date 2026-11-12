@@ -3059,7 +3059,7 @@ impl NetrayApp {
                         text("Here’s what changed in this release:")
                             .size(11)
                             .color(TEXT_MUTED),
-                        container(scrollable(notes.padding(10)).height(Length::Fixed(220.0)))
+                        container(scrollable(notes.padding(14)).height(Length::Fixed(260.0)))
                             .style(form_card_style)
                             .width(Length::Fill),
                         row![
@@ -3371,7 +3371,7 @@ impl NetrayApp {
             .spacing(4)
             .padding(24)
             .width(Length::Fill)
-            .max_width(400),
+            .max_width(340),
         )
         .style(settings_ui::menu_surface);
 

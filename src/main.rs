@@ -3522,7 +3522,7 @@ impl NetrayApp {
             .spacing(4)
             .padding(24)
             .width(Length::Fill)
-            .max_width(400),
+            .max_width(340),
         )
         .style(settings_ui::menu_surface);
 
@@ -3902,8 +3902,8 @@ impl NetrayApp {
         }
 
         let notes_box = container(
-            scrollable(notes_column.padding(10))
-                .height(Length::Fixed(220.0))
+            scrollable(notes_column.padding(14))
+                .height(Length::Fixed(260.0))
                 .width(Length::Fill)
         )
         .style(|_| container::Style {
@@ -3936,19 +3936,12 @@ impl NetrayApp {
                 Space::with_height(4),
                 bottom_row,
             ]
-            .spacing(12)
-            .padding(18),
+            .spacing(16)
+            .padding(22),
         )
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.14, 0.16, 0.20).into()),
-            border: iced::Border {
-                radius: 16.0.into(),
-                width: 1.0,
-                color: Color::from_rgb(0.24, 0.27, 0.35),
-            },
-            ..Default::default()
-        })
-        .width(Length::Fixed(440.0));
+        .style(settings_ui::menu_surface)
+        .width(Length::Fill)
+        .max_width(440);
 
         container(dialog)
             .width(Length::Fill)
