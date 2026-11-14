@@ -5137,7 +5137,7 @@ impl NetrayApp {
 
         let is_ssh_mode = matches!(self.tunnel_mode, TunnelMode::SshPayload | TunnelMode::SshSslSni);
 
-        let mode_selector: Element<'_, Message> = if locked {
+        let _mode_selector: Element<'_, Message> = if locked {
             container(
                 row![
                     icons::lucide_icon(icons::LOCK, 14, warning),
@@ -5352,20 +5352,6 @@ impl NetrayApp {
         settings_col = settings_col.push(ip_card);
         settings_col = settings_col.push(Space::with_height(12));
         settings_col = settings_col.push(whitelist_card);
-        settings_col = settings_col.push(Space::with_height(14));
-        settings_col = settings_col.push(
-            row![
-                text("Tunnel mode").size(14).color(muted),
-                Space::with_width(Length::Fill),
-                if locked {
-                    text("Disconnect to switch mode").size(11).color(warning)
-                } else {
-                    text("")
-                },
-            ]
-            .align_y(Alignment::Center)
-        );
-        settings_col = settings_col.push(mode_selector);
 
         if let Some(card) = ssh_card {
             settings_col = settings_col.push(Space::with_height(14));
