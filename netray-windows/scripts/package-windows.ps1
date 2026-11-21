@@ -25,7 +25,7 @@ $iconPath = Join-Path $PSScriptRoot "..\resources\netray.ico"
 # Microsoft Store Identity defaults / overrides
 $finalStoreIdentity = if ($StoreIdentityName) { $StoreIdentityName } elseif ($env:MS_STORE_IDENTITY_NAME) { $env:MS_STORE_IDENTITY_NAME } else { "Netray" }
 $finalStorePub = if ($StorePublisher) { $StorePublisher } elseif ($env:MS_STORE_PUBLISHER) { $env:MS_STORE_PUBLISHER } else { "CN=Netray" }
-$finalStorePubDisplay = if ($StorePublisherDisplayName) { $StorePublisherDisplayName } elseif ($env:MS_STORE_PUBLISHER_DISPLAY_NAME) { $env:MS_STORE_PUBLISHER_DISPLAY_NAME } else { "Netray" }
+$finalStorePubDisplay = if ($StorePublisherDisplayName) { $StorePublisherDisplayName } elseif ($env:MS_STORE_PUBLISHER_DISPLAY_NAME) { $env:MS_STORE_PUBLISHER_DISPLAY_NAME } else { "VTechDev" }
 
 function Find-WixBin {
     if (Get-Command candle.exe -ErrorAction SilentlyContinue) {

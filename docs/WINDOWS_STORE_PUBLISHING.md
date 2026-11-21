@@ -26,7 +26,7 @@ When packaging the MSIX container, Netray dynamically injects these values into 
 |---|---|---|---|
 | `MS_STORE_IDENTITY_NAME` | `-StoreIdentityName` | `Netray` | Identity Name from Partner Center |
 | `MS_STORE_PUBLISHER` | `-StorePublisher` | `CN=Netray` | Publisher ID string from Partner Center |
-| `MS_STORE_PUBLISHER_DISPLAY_NAME` | `-StorePublisherDisplayName` | `Netray` | Publisher display name |
+| `MS_STORE_PUBLISHER_DISPLAY_NAME` | `-StorePublisherDisplayName` | `VTechDev` | Publisher display name |
 
 In GitHub Actions, you can configure these secrets under **Settings > Secrets and variables > Actions**.
 

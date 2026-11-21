@@ -96,6 +96,10 @@ jobs:
       - name: Build Windows package
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          MS_STORE_IDENTITY_NAME: ${{ vars.MS_STORE_IDENTITY_NAME || secrets.MS_STORE_IDENTITY_NAME || '' }}
+          MS_STORE_PUBLISHER: ${{ vars.MS_STORE_PUBLISHER || secrets.MS_STORE_PUBLISHER || '' }}
+          MS_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MS_STORE_PUBLISHER_DISPLAY_NAME || secrets.MS_STORE_PUBLISHER_DISPLAY_NAME || 'VTechDev' }}
         run: |
           cargo build --manifest-path netray-windows/Cargo.toml --release
           ./netray-windows/scripts/package-windows.ps1 -Version $env:NETRAY_VERSION
