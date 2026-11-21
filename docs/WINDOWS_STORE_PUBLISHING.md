@@ -39,7 +39,8 @@ In GitHub Actions, you can configure these secrets under **Settings > Secrets an
    - **`allowElevation`**: Permits UAC privilege elevation, required for configuring the WinTun virtual network adapter and modifying Windows Internet proxy settings (`InternetSetOptionW`).
    - When prompted for submission notes regarding elevated capabilities, explain:
      > *"Netray is a network tunneling client. It requires full trust and elevation to install and initialize the WinTun virtual network adapter and configure Windows system proxy routes."*
-5. Fill out store listing details (icons from `packaging/windows/assets` are already formatted to store specifications), privacy policy, and pricing.
+5. Fill out store listing details (icons from `packaging/windows/assets` are already formatted to store specifications), pricing, and Privacy Policy URL:
+   - **Privacy Policy URL**: `https://github.com/venujatech-byte/Netray/blob/main/PRIVACY.md`
 6. Submit for certification! Partner Center automatically signs the package with Microsoft's trusted Store certificate during publishing.
 
 ---
