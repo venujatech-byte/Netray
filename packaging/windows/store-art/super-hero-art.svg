@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3840 2160" width="3840" height="2160" shape-rendering="geometricPrecision">
+  <defs>
+    
+    <!-- Background Plate Gradient -->
+    <linearGradient id="mainBgGrad" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#1C1C1E"/>
+      <stop offset="50%" stop-color="#121214"/>
+      <stop offset="100%" stop-color="#080809"/>
+    </linearGradient>
+
+    <!-- Pillar Gradients -->
+    <linearGradient id="leftPlaneGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#A1A1AA"/>
+    </linearGradient>
+
+    <linearGradient id="rightPlaneGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A1A1AA"/>
+      <stop offset="100%" stop-color="#52525B"/>
+    </linearGradient>
+
+    <!-- Diagonal Ray Gradient -->
+    <linearGradient id="diagonalBeamGrad" x1="15%" y1="15%" x2="85%" y2="85%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="48%" stop-color="#E4E4E7"/>
+      <stop offset="100%" stop-color="#52525B"/>
+    </linearGradient>
+
+    <!-- Refraction Tint Gradient -->
+    <linearGradient id="refractGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="50%" stop-color="#E4E4E7" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#52525B" stop-opacity="0.0"/>
+    </linearGradient>
+
+    <!-- Subtle Rim Gradient -->
+    <linearGradient id="rimSheenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.25"/>
+      <stop offset="50%" stop-color="#E4E4E7" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.5"/>
+    </linearGradient>
+
+    <!-- Title Silver Gradient -->
+    <linearGradient id="textSilverGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="60%" stop-color="#F4F4F5"/>
+      <stop offset="100%" stop-color="#A1A1AA"/>
+    </linearGradient>
+
+    <!-- Cyan Accent Gradient -->
+    <linearGradient id="cyanAccentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.0"/>
+      <stop offset="50%" stop-color="#38BDF8" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#818CF8" stop-opacity="0.0"/>
+    </linearGradient>
+
+    <!-- Modern Apple Squircle Clip -->
+    <clipPath id="squircleBoundary">
+      <path d="
+      M 1024, 512
+      C 1024, 794.67 794.67, 1024 512, 1024
+      C 229.33, 1024 0, 794.67 0, 512
+      C 0, 229.33 229.33, 0 512, 0
+      C 794.67, 0 1024, 229.33 1024, 512 Z
+    " />
+    </clipPath>
+
+
+    <!-- Super Hero Radial Gradient -->
+    <radialGradient id="superHeroBg" cx="50%" cy="50%" r="65%">
+      <stop offset="0%" stop-color="#191B24"/>
+      <stop offset="40%" stop-color="#0E0F14"/>
+      <stop offset="85%" stop-color="#070709"/>
+      <stop offset="100%" stop-color="#030304"/>
+    </radialGradient>
+
+    <!-- Large Cyan Aura -->
+    <radialGradient id="cyanAura" cx="45%" cy="45%" r="50%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.18"/>
+      <stop offset="50%" stop-color="#38BDF8" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Electric Violet Aura -->
+    <radialGradient id="violetAura" cx="55%" cy="55%" r="50%">
+      <stop offset="0%" stop-color="#818CF8" stop-opacity="0.16"/>
+      <stop offset="50%" stop-color="#818CF8" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Drop Shadow under Icon -->
+    <radialGradient id="heroShadow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.85"/>
+      <stop offset="60%" stop-color="#000000" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Solid Canvas Background -->
+  <rect width="3840" height="2160" fill="url(#superHeroBg)"/>
+
+  <!-- Celestial Network Precision Grid & Constellation -->
+  <g opacity="0.04" stroke="#FFFFFF" stroke-width="2.5">
+    <!-- Concentric radar circles -->
+    <circle cx="1920" cy="1080" r="700" fill="none" stroke-dasharray="12 18"/>
+    <circle cx="1920" cy="1080" r="1100" fill="none" stroke-dasharray="8 20"/>
+    <circle cx="1920" cy="1080" r="1500" fill="none" stroke-dasharray="6 24"/>
+    <circle cx="1920" cy="1080" r="1900" fill="none" stroke-dasharray="4 28"/>
+
+    <!-- Crosshair axes -->
+    <line x1="1920" y1="80" x2="1920" y2="2080" stroke-dasharray="10 20"/>
+    <line x1="80" y1="1080" x2="3760" y2="1080" stroke-dasharray="10 20"/>
+
+    <!-- Diagonal telemetry rays -->
+    <line x1="200" y1="80" x2="3640" y2="2080" stroke-dasharray="6 24" opacity="0.4"/>
+    <line x1="3640" y1="80" x2="200" y2="2080" stroke-dasharray="6 24" opacity="0.4"/>
+  </g>
+
+  <!-- High-Tech Ambient Aura Flares -->
+  <circle cx="1620" cy="980" r="1200" fill="url(#cyanAura)"/>
+  <circle cx="2220" cy="1180" r="1200" fill="url(#violetAura)"/>
+
+  <!-- Global Mesh Constellation Nodes -->
+  <g opacity="0.35">
+    <circle cx="700" cy="520" r="6" fill="#38BDF8"/>
+    <circle cx="3140" cy="520" r="6" fill="#818CF8"/>
+    <circle cx="480" cy="1080" r="8" fill="#38BDF8"/>
+    <circle cx="3360" cy="1080" r="8" fill="#818CF8"/>
+    <circle cx="800" cy="1640" r="6" fill="#38BDF8"/>
+    <circle cx="3040" cy="1640" r="6" fill="#818CF8"/>
+
+    <!-- Linking network lines -->
+    <line x1="700" y1="520" x2="480" y2="1080" stroke="#38BDF8" stroke-width="2" opacity="0.25"/>
+    <line x1="480" y1="1080" x2="800" y2="1640" stroke="#38BDF8" stroke-width="2" opacity="0.25"/>
+    <line x1="3140" y1="520" x2="3360" y2="1080" stroke="#818CF8" stroke-width="2" opacity="0.25"/>
+    <line x1="3360" y1="1080" x2="3040" y2="1640" stroke="#818CF8" stroke-width="2" opacity="0.25"/>
+
+    <!-- Subtle horizontal data beam accents -->
+    <line x1="200" y1="740" x2="1100" y2="740" stroke="#38BDF8" stroke-width="1.5" stroke-dasharray="16 32" opacity="0.3"/>
+    <line x1="2740" y1="1420" x2="3640" y2="1420" stroke="#818CF8" stroke-width="1.5" stroke-dasharray="16 32" opacity="0.3"/>
+  </g>
+
+  <!-- Hero Icon Soft Drop Shadow -->
+  <ellipse cx="1920" cy="1660" rx="580" ry="110" fill="url(#heroShadow)"/>
+
+  <!-- Centered Hero Netray Icon (1080x1080) - NO TEXT -->
+  <g transform="translate(1380, 540) scale(1.0546875)">
+    
+  <!-- Squircle Base Layer -->
+  <g clip-path="url(#squircleBoundary)">
+    <!-- Base Chassis -->
+    <rect width="1024" height="1024" fill="url(#mainBgGrad)"/>
+
+    <!-- Micro Structural Precision Grid -->
+    <g opacity="0.035" stroke="#FFFFFF" stroke-width="1.5">
+      <line x1="256" y1="0" x2="256" y2="1024"/>
+      <line x1="512" y1="0" x2="512" y2="1024"/>
+      <line x1="768" y1="0" x2="768" y2="1024"/>
+      <line x1="0" y1="256" x2="1024" y2="256"/>
+      <line x1="0" y1="512" x2="1024" y2="512"/>
+      <line x1="0" y1="768" x2="1024" y2="768"/>
+      <circle cx="512" cy="512" r="384" fill="none" stroke-dasharray="4 8"/>
+    </g>
+
+    <!-- Dynamic Architectural Glyph Centerpiece -->
+    <g id="prism-archetype">
+      <!-- Background refraction facet -->
+      <polygon points="308,716 463.04,479.36 560.96,544.64 716,308"
+               fill="url(#refractGradient)"
+               opacity="0.22" />
+
+      <!-- Left Pillar Plane -->
+      <polygon points="308,716 308,308 356,327.2 356,716"
+               fill="url(#leftPlaneGrad)" />
+
+      <!-- Right Pillar Plane -->
+      <polygon points="668,716 668,336.8 716,308 716,716"
+               fill="url(#rightPlaneGrad)" />
+
+      <!-- Diagonal Refracting Beam -->
+      <polygon points="308,308 360.8,308 716,716 663.2,716"
+               fill="url(#diagonalBeamGrad)" />
+
+      <!-- Razor-sharp Crisp Facet Seam -->
+      <line x1="308" y1="308" x2="716" y2="716"
+             stroke="#FFFFFF"
+             stroke-width="2.4"
+             stroke-linecap="round"
+             opacity="0.85"/>
+
+      <!-- Central Light Portal Vertex -->
+      <circle cx="512" cy="512" r="10.56" fill="#FFFFFF" />
+    </g>
+
+    <!-- Inner Chamfer & Specular Perimeter Edge -->
+    <path d="
+      M 1024, 512
+      C 1024, 794.67 794.67, 1024 512, 1024
+      C 229.33, 1024 0, 794.67 0, 512
+      C 0, 229.33 229.33, 0 512, 0
+      C 794.67, 0 1024, 229.33 1024, 512 Z
+    "
+          fill="none"
+          stroke="url(#rimSheenGrad)"
+          stroke-width="14"
+          opacity="0.9" />
+  </g>
+
+  <!-- Crisp Outer Geometric Boundary Line -->
+  <path d="
+      M 1024, 512
+      C 1024, 794.67 794.67, 1024 512, 1024
+      C 229.33, 1024 0, 794.67 0, 512
+      C 0, 229.33 229.33, 0 512, 0
+      C 794.67, 0 1024, 229.33 1024, 512 Z
+    "
+        fill="none"
+        stroke="rgba(255,255,255,0.12)"
+        stroke-width="2.5" />
+
+  </g>
+</svg>
