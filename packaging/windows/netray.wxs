@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="Netray"
+    Language="1033"
+    Version="$(var.Version)"
+    Manufacturer="Netray"
+    UpgradeCode="{9B561498-8422-491C-B7D4-4860D4D32A15}">
+
+    <Package
+      InstallerVersion="500"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Platform="x64"
+      Description="Netray Windows Network Tunnel Client"
+      Comments="Netray Windows Installer" />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Netray is already installed."
+      AllowSameVersionUpgrades="yes" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="NetrayIco" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="NetrayIco" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/venujas/Netray" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/venujas/Netray" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Netray" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Netray" />
+      </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcuts" Guid="{B1194E1B-9436-4762-BC81-C5AA8E571F19}">
+        <Shortcut
+          Id="ApplicationStartMenuShortcut"
+          Name="Netray"
+          Description="Netray Windows Network Tunnel Client"
+          Target="[#File_netray_windows_exe]"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="NetrayIco" />
+        <Shortcut
+          Id="ApplicationDesktopShortcut"
+          Directory="DesktopFolder"
+          Name="Netray"
+          Description="Netray Windows Network Tunnel Client"
+          Target="[#File_netray_windows_exe]"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="NetrayIco" />
+        <RemoveFolder Id="CleanUpApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\Netray" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainApplication" Title="Netray" Level="1">
+      <ComponentGroupRef Id="NetrayAppFiles" />
+      <ComponentRef Id="ApplicationShortcuts" />
+    </Feature>
+
+    <UIRef Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+  </Product>
+</Wix>

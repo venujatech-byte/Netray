@@ -56,10 +56,11 @@ cd netray-windows
 .\scripts\run.ps1
 ```
 
-Or build manually:
+Or build release packages (MSI, Microsoft Store MSIX, and portable ZIP):
 ```bat
 scripts\build.bat
 ```
+See [docs/WINDOWS_STORE_PUBLISHING.md](docs/WINDOWS_STORE_PUBLISHING.md) for full Windows installer and Microsoft Store publishing details.
 
 ## Privileged TUN Capability on Linux (Optional)
 

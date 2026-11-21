@@ -39,9 +39,19 @@ Or run via Cargo:
 cargo run --release
 ```
 
-### Building Release Package
+### Building Release Packages
 
 ```bat
 scripts\build.bat
 ```
-This builds `dist\netray-windows-0.1.0.zip`, a portable package containing Netray and a Netray-patched Xray-core build. Packaging verifies the official asset checksum, builds the pinned core with the TLS compatibility patch, and includes its modified source. Python 3 and Go 1.27.3 are required. GitHub Actions publishes a versioned package on each push to `main` or `master`.
+Or with PowerShell:
+```powershell
+.\scripts\package-windows.ps1 -Version 1.0.0
+```
+This builds three release distribution packages into `dist\`:
+1. `netray-windows-<version>.msi`: Native Windows Installer with wizard, Start Menu/Desktop shortcuts, and upgrade/uninstall management.
+2. `netray-windows-<version>.msix`: Modern packaged application ready for Microsoft Store submission and Windows 10/11 sideloading.
+3. `netray-windows-<version>.zip`: Portable package bundled with Xray core and WinTun driver.
+4. `netray-windows-<version>.cer`: Test certificate for local sideloading of the MSIX package.
+
+See [docs/WINDOWS_STORE_PUBLISHING.md](../docs/WINDOWS_STORE_PUBLISHING.md) for full Microsoft Store submission instructions.
