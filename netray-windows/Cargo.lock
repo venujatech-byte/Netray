@@ -2624,6 +2624,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-rustls",
  "tray-icon",

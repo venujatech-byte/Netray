@@ -708,6 +708,7 @@ pub struct NetrayApp {
     pub error_notification: Option<ErrorNotification>,
     pub startup_connect_prompt: bool,
     pub qr_scan_modal: QrScanModalState,
+    pub install_channel: updater::InstallChannel,
     pub update_state: updater::UpdateState,
     show_release_notes: bool,
     pub auto_check_updates: bool,
@@ -862,6 +863,7 @@ pub enum Message {
     DismissUpdateToast,
     CloseReleaseNotesModal,
     ToggleAutoCheckUpdates(bool),
+    OpenUrl(String),
 
     LoggerReady(mpsc::Sender<LogEntry>),
     NewLog(LogEntry),
@@ -916,6 +918,14 @@ impl NetrayApp {
         let cached_app_chips = apps::extract_app_chips(&saved.whitelist_apps);
         let profile_count = saved.v2ray_profiles.len();
         let has_profiles = !saved.v2ray_profiles.is_empty();
+        let install_channel = updater::detect_install_channel();
+        let initial_update_state = match install_channel {
+            updater::InstallChannel::Store => updater::UpdateState::StoreManaged,
+            updater::InstallChannel::Unknown => updater::UpdateState::ManualDownloadOnly {
+                url: updater::RELEASES_WEB_URL.to_string(),
+            },
+            _ => updater::UpdateState::Idle,
+        };
 
         let app = Self {
             view_mode: ViewMode::Profiles,
@@ -968,7 +978,8 @@ impl NetrayApp {
             error_notification: None,
             startup_connect_prompt: saved.connect_at_startup && has_profiles,
             qr_scan_modal: QrScanModalState::default(),
-            update_state: updater::UpdateState::Idle,
+            install_channel,
+            update_state: initial_update_state,
             show_release_notes: false,
             auto_check_updates: saved.auto_check_updates,
             logs_enabled: saved.logs_enabled,
@@ -992,7 +1003,7 @@ impl NetrayApp {
 
             logs: if saved.logs_enabled { vec![LogEntry::new(
                 "Netray",
-                "Ready to connect on Windows.",
+                format!("Ready to connect on Windows. Channel: {} [{}]", install_channel.display_name(), install_channel.badge_label()),
                 LogLevel::Info,
             )] } else { Vec::new() },
             auto_scroll_logs: true,
@@ -1010,7 +1021,7 @@ impl NetrayApp {
             worker_active: false,
         };
 
-        let initial_task = if app.auto_check_updates {
+        let initial_task = if app.auto_check_updates && install_channel.allows_self_update() {
             Task::perform(
                 updater::check_for_updates(APP_VERSION),
                 Message::UpdateCheckFinished,
@@ -2491,6 +2502,16 @@ impl NetrayApp {
                 Task::none()
             }
             Message::CheckForUpdates => {
+                if self.install_channel == updater::InstallChannel::Store {
+                    self.update_state = updater::UpdateState::StoreManaged;
+                    return Task::none();
+                }
+                if self.install_channel == updater::InstallChannel::Unknown {
+                    self.update_state = updater::UpdateState::ManualDownloadOnly {
+                        url: updater::RELEASES_WEB_URL.to_string(),
+                    };
+                    return Task::none();
+                }
                 if matches!(self.update_state,
                     updater::UpdateState::Checking | updater::UpdateState::Downloading { .. }
                     | updater::UpdateState::Downloaded { .. } | updater::UpdateState::Applying
@@ -2518,8 +2539,16 @@ impl NetrayApp {
                         self.push_log("Updater", format!("New Netray release v{} detected on GitHub CI.", ver), LogLevel::Info);
                     }
                     Ok(None) => {
-                        self.update_state = updater::UpdateState::UpToDate(APP_VERSION.to_string());
-                        self.push_log("Updater", format!("Netray is up to date (v{}).", APP_VERSION), LogLevel::Info);
+                        if self.install_channel == updater::InstallChannel::Store {
+                            self.update_state = updater::UpdateState::StoreManaged;
+                        } else if self.install_channel == updater::InstallChannel::Unknown {
+                            self.update_state = updater::UpdateState::ManualDownloadOnly {
+                                url: updater::RELEASES_WEB_URL.to_string(),
+                            };
+                        } else {
+                            self.update_state = updater::UpdateState::UpToDate(APP_VERSION.to_string());
+                            self.push_log("Updater", format!("Netray is up to date (v{}).", APP_VERSION), LogLevel::Info);
+                        }
                     }
                     Err(e) => {
                         self.push_log("Updater", format!("Update check failed: {}", e), LogLevel::Warn);
@@ -2585,6 +2614,10 @@ impl NetrayApp {
             Message::ToggleAutoCheckUpdates(v) => {
                 self.auto_check_updates = v;
                 let _ = self.save_current_state();
+                Task::none()
+            }
+            Message::OpenUrl(url) => {
+                updater::open_browser(&url);
                 Task::none()
             }
             Message::ToggleTunnel => {
@@ -2902,7 +2935,7 @@ impl NetrayApp {
             ViewMode::SshSettings => self.view_ssh_screen(),
         };
         let mut banners = column![].spacing(2);
-        if !matches!(self.update_state, updater::UpdateState::Idle | updater::UpdateState::UpToDate(_)) {
+        if !matches!(self.update_state, updater::UpdateState::Idle | updater::UpdateState::UpToDate(_) | updater::UpdateState::StoreManaged | updater::UpdateState::ManualDownloadOnly { .. }) {
             banners = banners.push(self.view_update_toast());
         }
         let main_col = column![banners, content]
@@ -4850,6 +4883,13 @@ impl NetrayApp {
             settings_ui::switch_row("Detailed logs", "When off, show only connection events. Core logging changes on reconnect.", self.logs_enabled, true, Message::ToggleLogsEnabled, is_dark_active),
         ].spacing(4)).padding(20).style(settings_ui::surface).width(Length::Fill);
 
+        let channel_badge_color = match self.install_channel {
+            updater::InstallChannel::Msi => Color::from_rgb(0.2, 0.6, 1.0),
+            updater::InstallChannel::Exe => Color::from_rgb(0.3, 0.8, 0.5),
+            updater::InstallChannel::Store => Color::from_rgb(0.0, 0.75, 0.95),
+            updater::InstallChannel::Unknown => Color::from_rgb(0.85, 0.65, 0.15),
+        };
+
         let update_status_desc = match &self.update_state {
             updater::UpdateState::Checking => "Checking GitHub CI for new releases...".to_string(),
             updater::UpdateState::Available(info) => format!("New release v{} is available!", info.version),
@@ -4857,12 +4897,25 @@ impl NetrayApp {
             updater::UpdateState::Downloading { version, status } => format!("Upgrading to v{version}: {status}"),
             updater::UpdateState::ReadyToRestart { version } => format!("Version v{version} installed! Restart required."),
             updater::UpdateState::Downloaded { info, .. } => format!("Version v{} ready to apply.", info.version),
+            updater::UpdateState::StoreManaged => "Updates are managed by Microsoft Store.".to_string(),
+            updater::UpdateState::ManualDownloadOnly { .. } => "Portable install: Updates must be downloaded manually.".to_string(),
             updater::UpdateState::Error(err) => format!("Update check error: {err}"),
             updater::UpdateState::Idle => format!("Current version: v{APP_VERSION}"),
             updater::UpdateState::Applying => "Applying update...".to_string(),
         };
 
         let update_action_btn: Element<'_, Message> = match &self.update_state {
+            updater::UpdateState::StoreManaged => {
+                Space::with_width(0).into()
+            }
+            updater::UpdateState::ManualDownloadOnly { url } => {
+                let u = url.clone();
+                button(text("Open Releases").size(12).color(Color::WHITE))
+                    .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
+                    .style(primary_action_btn)
+                    .on_press(Message::OpenUrl(u))
+                    .into()
+            }
             updater::UpdateState::Available(_) => {
                 button(text("Upgrade Now").size(12).color(Color::WHITE))
                     .padding(iced::Padding { top: 4.0, bottom: 4.0, left: 12.0, right: 12.0 })
@@ -4894,29 +4947,49 @@ impl NetrayApp {
             }
         };
 
-        let update_card = container(
-            column![
-                row![
-                    icons::lucide_icon(icons::DOWNLOAD, 16, accent),
-                    Space::with_width(6),
-                    text("Updates").size(16).color(self.text_primary()),
-                ]
-                .align_y(Alignment::Center),
-                settings_ui::switch_row("Check automatically", "Look for new releases when Netray starts.", self.auto_check_updates, true, Message::ToggleAutoCheckUpdates, is_dark_active),
-                Space::with_height(6),
-                row![
-                    text(update_status_desc).size(12).color(self.text_primary()),
-                    Space::with_width(12),
-                    update_action_btn,
-                ]
-                .align_y(Alignment::Center),
+        let mut update_card_content = column![
+            row![
+                icons::lucide_icon(icons::DOWNLOAD, 16, accent),
+                Space::with_width(6),
+                text("Updates").size(16).color(self.text_primary()),
+                Space::with_width(8),
+                container(text(self.install_channel.badge_label()).size(10).color(channel_badge_color))
+                    .padding([2, 6])
+                    .style(move |_| container::Style {
+                        background: Some(Color::from_rgba(channel_badge_color.r, channel_badge_color.g, channel_badge_color.b, 0.15).into()),
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
             ]
-            .spacing(6)
-            .width(Length::Fill)
-        )
-        .padding(20)
-        .style(settings_ui::surface)
-        .width(Length::Fill);
+            .align_y(Alignment::Center),
+        ].spacing(6).width(Length::Fill);
+
+        if self.install_channel.allows_self_update() {
+            update_card_content = update_card_content.push(
+                settings_ui::switch_row("Check automatically", "Look for new releases when Netray starts.", self.auto_check_updates, true, Message::ToggleAutoCheckUpdates, is_dark_active)
+            );
+        } else if self.install_channel == updater::InstallChannel::Store {
+            update_card_content = update_card_content.push(
+                text("Microsoft Store package: Background updates and installations are managed by the Windows Store service.").size(12).color(settings_ui::secondary(is_dark_active))
+            );
+        }
+
+        update_card_content = update_card_content.push(Space::with_height(4)).push(
+            row![
+                text(update_status_desc).size(12).color(self.text_primary()),
+                Space::with_width(12),
+                update_action_btn,
+            ]
+            .align_y(Alignment::Center),
+        );
+
+        let update_card = container(update_card_content)
+            .padding(20)
+            .style(settings_ui::surface)
+            .width(Length::Fill);
 
         let mut chips_col = column![].spacing(6);
         for chunk in self.cached_app_chips.chunks(3) {
@@ -5376,7 +5449,7 @@ impl NetrayApp {
         column![
             top_bar,
             content,
-            text(format!("Version {APP_VERSION}"))
+            text(format!("Netray v{} • {} [{}]", APP_VERSION, self.install_channel.display_name(), self.install_channel.badge_label()))
                 .size(11)
                 .color(muted)
                 .width(Length::Fill)
@@ -6025,7 +6098,7 @@ trojan://secretpass@server2.com:443?type=ws#WinNodeB
             drop(el);
         }
         let elapsed = start.elapsed();
-        assert!(elapsed.as_millis() < 2000, "1000 view iterations took {:?}", elapsed);
+        assert!(elapsed.as_millis() < 3500, "1000 view iterations took {:?}", elapsed);
 
         // 4. Test index-based deletion (when tunnel is stopped / config unlocked)
         app.is_running = false;

@@ -211,6 +211,69 @@ jobs:
           - Built on GitHub CI from commit \`${GITHUB_SHA}\`.
           EOF
 
+      - name: Generate update manifest latest.json
+        run: |
+          python3 -c "
+          import json, os, hashlib, datetime
+
+          version = os.environ.get('VERSION', '2.0.0')
+          repo = os.environ.get('GITHUB_REPOSITORY', 'venujatech-byte/Netray')
+          tag = f'v{version}'
+          now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+          platforms = {}
+
+          # Windows MSI Installer
+          msi_file = None
+          for f in sorted(os.listdir('dist')):
+              if f.endswith('.msi') and f.startswith('netray-windows-'):
+                  msi_file = os.path.join('dist', f)
+                  break
+
+          if msi_file and os.path.exists(msi_file):
+              with open(msi_file, 'rb') as fp:
+                  data = fp.read()
+                  h = hashlib.sha256(data).hexdigest()
+                  sz = len(data)
+                  fname = os.path.basename(msi_file)
+                  platforms['windows-x64-msi'] = {
+                      'url': f'https://github.com/{repo}/releases/download/{tag}/{fname}',
+                      'sha256': h,
+                      'size': sz
+                  }
+
+          # Windows Setup EXE (if present)
+          exe_file = None
+          for f in sorted(os.listdir('dist')):
+              if f.endswith('.exe') and 'setup' in f.lower():
+                  exe_file = os.path.join('dist', f)
+                  break
+
+          if exe_file and os.path.exists(exe_file):
+              with open(exe_file, 'rb') as fp:
+                  data = fp.read()
+                  h = hashlib.sha256(data).hexdigest()
+                  sz = len(data)
+                  fname = os.path.basename(exe_file)
+                  platforms['windows-x64-exe'] = {
+                      'url': f'https://github.com/{repo}/releases/download/{tag}/{fname}',
+                      'sha256': h,
+                      'size': sz
+                  }
+
+          manifest = {
+              'version': version,
+              'release_date': now,
+              'notes': f'Netray {tag} official release',
+              'platforms': platforms
+          }
+
+          with open('dist/latest.json', 'w') as out:
+              json.dump(manifest, out, indent=2)
+          print('Successfully generated dist/latest.json:')
+          print(json.dumps(manifest, indent=2))
+          "
+
       - name: Create or update versioned release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -218,7 +281,7 @@ jobs:
         run: |
           tag="v$VERSION"
           files=()
-          for f in dist/*.zip dist/*.msi dist/*.msix dist/*.cer dist/*.rpm dist/*.deb dist/*.pkg.tar.zst dist/*.tar.gz; do
+          for f in dist/*.zip dist/*.msi dist/*.msix dist/*.cer dist/*.rpm dist/*.deb dist/*.pkg.tar.zst dist/*.tar.gz dist/latest.json; do
             [ -f "$f" ] && files+=("$f")
           done
           if gh release view "$tag" >/dev/null 2>&1; then

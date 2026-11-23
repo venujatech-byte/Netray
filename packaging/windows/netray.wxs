@@ -59,9 +59,18 @@
       </Component>
     </DirectoryRef>
 
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="InstallChannelMarker" Guid="{8F7E6D5C-4B3A-2109-8765-43210FEDCBA9}" Win64="yes">
+        <RegistryValue Root="HKLM" Key="Software\Netray" Name="InstallChannel" Type="string" Value="msi" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Netray" Name="InstalledVersion" Type="string" Value="$(var.Version)" />
+        <RegistryValue Root="HKLM" Key="Software\Netray" Name="InstallScope" Type="string" Value="perMachine" />
+      </Component>
+    </DirectoryRef>
+
     <Feature Id="MainApplication" Title="Netray" Level="1">
       <ComponentGroupRef Id="NetrayAppFiles" />
       <ComponentRef Id="ApplicationShortcuts" />
+      <ComponentRef Id="InstallChannelMarker" />
     </Feature>
 
     <UIRef Id="WixUI_Minimal" />
