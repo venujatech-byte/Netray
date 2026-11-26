@@ -14,7 +14,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
     runs-on: ${{ matrix.os }}
     steps:
       - name: Calculate release version
@@ -53,9 +53,13 @@ jobs:
             ~/.cargo/git
             target
             netray-windows/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'netray-windows/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.os }}-x86-64-baseline-cargo-${{ hashFiles('Cargo.lock', 'netray-windows/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-${{ matrix.os }}-x86-64-baseline-cargo-
+
+      - name: Set Linux x86-64 baseline
+        if: runner.os == 'Linux'
+        run: echo 'CFLAGS=-march=x86-64 -mtune=generic' >> "$GITHUB_ENV"
 
       - name: Run Linux tests
         if: runner.os == 'Linux'
