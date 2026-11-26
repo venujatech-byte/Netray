@@ -668,6 +668,10 @@ pub struct NetrayApp {
     usage_query_pending: bool,
     pub is_running: bool,
     connection_error: bool,
+    recovery_generation: u64,
+    recovery_pending: bool,
+    recovery_task: Option<iced::task::Handle>,
+    recovery_exhausted: bool,
     pub connected_at: Option<Instant>,
     pub ping_ms: Option<u128>,
     pub tunnel_mode: TunnelMode,
@@ -764,6 +768,7 @@ pub enum Message {
     PingProfile(String),
     PingProfileIndex(usize),
     PingFinished(String, Result<u128, String>),
+    RecoveryChecked(u64, Result<u128, String>),
     EditProfile(String),
     EditProfileIndex(usize),
     DeleteProfile(String),
@@ -938,6 +943,10 @@ impl NetrayApp {
             usage_query_pending: false,
             is_running: false,
             connection_error: false,
+            recovery_generation: 0,
+            recovery_pending: false,
+            recovery_task: None,
+            recovery_exhausted: false,
             connected_at: None,
             ping_ms: None,
             tunnel_mode,
@@ -1034,6 +1043,10 @@ impl NetrayApp {
     }
 
     pub fn refresh_status_badge(&mut self) {
+        if self.recovery_pending && !self.user_stopped {
+            self.status_badge_text = "CONNECTING · CHECKING SERVER".into();
+            return;
+        }
         if self.connection_error && !self.user_stopped {
             self.status_badge_text = "CONNECTING · CONNECTION ERROR".into();
             return;
@@ -1241,17 +1254,46 @@ impl NetrayApp {
         let previous_error = self.connection_error;
         let previous_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
         let tray_opened = matches!(message, Message::WindowOpened(_));
-        let task = self.update_message(message);
+        let mut task = self.update_message(message);
+        if self.connection_error && !self.user_stopped
+            && self.tunnel_mode == TunnelMode::V2RayXray
+            && !self.recovery_exhausted
+        {
+            self.connection_error = false;
+            if !self.recovery_pending {
+                self.recovery_pending = true;
+                self.refresh_status_badge();
+                let generation = self.recovery_generation;
+                let port = self.local_socks_port.parse::<u16>().unwrap_or(10808).saturating_add(1);
+                self.push_log("Connection", "Verifying server connection before reporting a connection error.", LogLevel::Warn);
+                let (recovery, handle) = Task::perform(async move {
+                    let mut result = v2ray::ping_local_http_proxy(port).await;
+                    for _ in 0..5 {
+                        if result.is_ok() { break; }
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        // A fresh proxy request makes Xray reconnect its server outbound.
+                        result = v2ray::ping_local_http_proxy(port).await;
+                    }
+                    result
+                }, move |result| Message::RecoveryChecked(generation, result)).abortable();
+                self.recovery_task = Some(handle.abort_on_drop());
+                task = Task::batch([task, recovery]);
+            }
+        }
         log_activity::set_detailed(!self.hidden_to_tray && self.view_mode == ViewMode::Logs);
         if self.connection_error && !previous_error && !self.user_stopped {
             if self.notify_connection_drops {
                 notifications::send_desktop_notification(
                     "Netray connection issue",
-                    "A tunnel connection failed. Check the Logs page for details.",
+                    if self.tunnel_mode == TunnelMode::V2RayXray {
+                        "Server recovery failed after five retries. Check the Logs page for details."
+                    } else {
+                        "A tunnel connection failed. Check the Logs page for details."
+                    },
                     notifications::NotificationUrgency::Normal,
                 );
             }
-            self.push_log("Connection", "Connection check or core request failed; keeping the tunnel running. Use Ping to verify recovery.", LogLevel::Error);
+            self.push_log("Connection", "Server connection could not be verified. Use Ping to check recovery.", LogLevel::Error);
         }
         let current_tray = tray_status::Status::for_connection(self.is_running, self.connection_error, self.user_stopped);
         if tray_opened || previous_tray != current_tray {
@@ -1498,6 +1540,32 @@ impl NetrayApp {
                     Task::none()
                 }
             }
+            Message::RecoveryChecked(generation, result) => {
+                if generation != self.recovery_generation || !self.recovery_pending || self.user_stopped {
+                    return Task::none();
+                }
+                self.recovery_pending = false;
+                self.recovery_task = None;
+                match result {
+                    Ok(ms) => {
+                        self.connection_error = false;
+                        self.recovery_exhausted = false;
+                        self.is_running = self.worker_active;
+                        if self.is_running {
+                            self.connected_at.get_or_insert_with(Instant::now);
+                        }
+                        self.ping_ms = Some(ms);
+                        self.push_log("Connection", format!("Server connection verified in {ms} ms."), LogLevel::Success);
+                    }
+                    Err(error) => {
+                        self.recovery_exhausted = true;
+                        self.connection_error = true;
+                        self.push_log("Connection", format!("Server recovery failed after five retries: {error}"), LogLevel::Error);
+                    }
+                }
+                self.refresh_status_badge();
+                Task::none()
+            }
             Message::PingFinished(id, result) => {
                 if self.ping_in_progress.as_deref() == Some(&id) {
                     self.ping_in_progress = None;
@@ -1538,6 +1606,12 @@ impl NetrayApp {
                         });
                     if active && self.is_running {
                         self.connection_error = ping_latency.is_none();
+                        if ping_latency.is_some() {
+                            self.recovery_generation = self.recovery_generation.wrapping_add(1);
+                            self.recovery_pending = false;
+                            self.recovery_task = None;
+                            self.recovery_exhausted = false;
+                        }
                         self.ping_ms = ping_latency;
                     }
                     self.ping_results.insert(id, display);
@@ -2084,13 +2158,6 @@ impl NetrayApp {
                 {
                     self.connection_error = true;
                 }
-                if self.worker_active && !self.user_stopped && self.connection_error
-                    && entry.source == "Xray"
-                    && entry.message.contains("proxy/vless/outbound: tunneling request to")
-                {
-                    self.connection_error = false;
-                    self.refresh_status_badge();
-                }
                 let ready_ping = (entry.source == "Supervisor")
                     .then(|| {
                         entry
@@ -2105,6 +2172,10 @@ impl NetrayApp {
                 if (ready_ping.is_some() || ssh_ready) && self.worker_active && !self.user_stopped {
                     self.is_running = true;
                     self.connection_error = false;
+                    self.recovery_generation = self.recovery_generation.wrapping_add(1);
+                    self.recovery_pending = false;
+                    self.recovery_task = None;
+                    self.recovery_exhausted = false;
                     self.connected_at = Some(Instant::now());
                     self.ping_ms = ready_ping;
                     self.reconnect_attempts = 0;
@@ -2621,6 +2692,10 @@ impl NetrayApp {
                 Task::none()
             }
             Message::ToggleTunnel => {
+                self.recovery_generation = self.recovery_generation.wrapping_add(1);
+                self.recovery_pending = false;
+                self.recovery_task = None;
+                self.recovery_exhausted = false;
                 self.delete_confirmation = None;
                 self.connection_error = false;
                 if self.is_running && self.tunnel_mode == TunnelMode::V2RayXray {
@@ -5467,6 +5542,38 @@ mod performance_tests {
     use super::*;
 
     #[test]
+    fn server_recovery_defers_errors_and_ignores_stale_results() {
+        let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
+        app.tunnel_mode = TunnelMode::V2RayXray;
+        app.worker_active = true;
+        app.is_running = true;
+        let _ = app.update(Message::NewLog(LogEntry::new("Xray", "connection reset", LogLevel::Error)));
+        assert!(app.recovery_pending);
+        assert!(!app.connection_error);
+        assert_eq!(app.status_badge_text, "CONNECTING · CHECKING SERVER");
+        let generation = app.recovery_generation;
+        let _ = app.update_message(Message::RecoveryChecked(generation.wrapping_add(1), Err("stale".into())));
+        assert!(app.recovery_pending);
+        let _ = app.update_message(Message::RecoveryChecked(generation, Err("unavailable".into())));
+        assert!(app.connection_error);
+        assert!(app.recovery_exhausted);
+        assert!(app.worker_active, "Recovery must not stop the tunnel");
+
+        app.recovery_pending = true;
+        let _ = app.update_message(Message::RecoveryChecked(generation, Ok(42)));
+        assert!(!app.connection_error);
+        assert!(app.is_running);
+        assert_eq!(app.ping_ms, Some(42));
+        assert!(!app.recovery_exhausted);
+        assert!(app.recovery_task.is_none());
+
+        app.recovery_pending = true;
+        app.user_stopped = true;
+        let _ = app.update_message(Message::RecoveryChecked(generation, Err("late".into())));
+        assert!(!app.connection_error, "Late failure must not undo Disconnect");
+    }
+
+    #[test]
     fn xray_connecting_state_waits_for_the_successful_remote_ping() {
         let (mut app, _) = NetrayApp::from_saved(storage::AppData::default());
         app.worker_active = true;
@@ -5876,7 +5983,10 @@ mod performance_tests {
             "proxy/vless/outbound: tunneling request to tcp:api.github.com:443 via server:443",
             LogLevel::Info,
         )));
-        assert!(!app.connection_error, "Successful outbound traffic clears the error state");
+        assert!(app.connection_error, "An outbound request is not proof of a remote response");
+        app.recovery_pending = true;
+        let _ = app.update_message(Message::RecoveryChecked(app.recovery_generation, Ok(64)));
+        assert!(!app.connection_error);
         app.refresh_status_badge();
         assert!(app.status_badge_text.starts_with("CONNECTED"));
         let _ = app.update_message(Message::NewLog(LogEntry::new("Supervisor", "Tunnel is offline.", LogLevel::Warn)));
